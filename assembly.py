@@ -20,7 +20,7 @@ def strategy_catalog(directory=None):
 
 def platform_catalog(directory=None):
     return _catalog(directory or ROOT / "platforms/plugins", "platforms",
-                    {"historical_data", "snapshot_data", "broker", "account_reader"})
+                    {"historical_data", "snapshot_data", "broker", "account_reader", "market_reader"})
 
 
 def _catalog(directory, namespace, kinds):
@@ -84,6 +84,11 @@ def inspect_broker(name, config_dir, *, connect=False):
         raise ValueError('This platform does not expose account diagnostics')
     reader = _build_platform({"type": name}, kind, config_dir=config_dir)
     return reader.inspect(connect=connect)
+
+
+def inspect_market_data(name, config_dir, *, connect=False, symbol='AAPL', claim_device=False):
+    reader = _build_platform({'type': name}, 'market_reader', config_dir=config_dir)
+    return reader.inspect(connect=connect, symbol=symbol, claim_device=claim_device)
 
 
 def _build_platform(config, kind, **inputs):

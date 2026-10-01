@@ -100,6 +100,16 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 
 2026-10-02 已验证 Tiger 模拟账户查询，以及 1 股 AAPL、限价 1 美元的模拟测试单：已接受 → 已撤销，成交 0，剩余挂单 0。这是连接验证，不是策略表现验证；部分成交与断线恢复另有离线测试。
 
+### Tiger 行情检查
+
+新增独立 `tiger_market` 数据检查模块，可复查权限、读取单只股票的日线、报价和营业利润，并保存结果：
+
+```text
+.venv\Scripts\python.exe bot.py market-status --connect --out runs/market-check-001
+```
+
+默认不会抢占其他 API 设备的行情访问权。诊断结果不是完整股票池，不能直接交给 `broker-paper`。完整接入所需的数据、权限和命令见 [行情接入说明](platforms/data/README.md)。
+
 ## v0.3 已有基础
 
 - 运行入口不再直接构造特定数据源和券商，统一注入 PortfolioRunner。

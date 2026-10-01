@@ -8,6 +8,7 @@
 |---|---|---|
 | `data/snapshot.py` | snapshot_file | 读取标准股票快照，返回 MarketSnapshot |
 | `data/csv.py` | csv | 读取单标的总回报数据，供 research.py 使用 |
+| `data/tiger_market.py` | tiger_market / market_reader | Tiger 权限、单只股票报价/历史/基本面检查，保存诊断；不产生可交易快照 |
 | `brokers/paper.py` | paper | 专用本地报价回放账户，立即全额模拟成交 |
 | `brokers/tiger_paper.py` | tiger_paper / broker | Tiger 模拟账户、USD 整股限价单、查询/撤销/恢复；拒绝实盘 |
 | `brokers/tiger_readonly.py` | tiger_readonly / account_reader | Tiger 配置检查与账户、持仓、未完成订单只读查询 |
@@ -20,6 +21,8 @@ Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认�
 数据模块实现 `load() -> MarketSnapshot`，返回股票快照、执行时点和买卖报价。供当前策略使用的格式为 `us_technology_daily_v1`。文件示例可用 `bot.py demo` 生成。
 
 历史输入应为当时可知的科技股股票池和完整交易日序列。要求 `universe_complete=true` 是提供者声明；程序不能凭此证明没有幸存者偏差。基本面时间、退市、停牌、复权口径和真实行情权限仍由数据提供者校验。
+
+联网数据检查使用 `market-status --connect --out runs/market-check-001`，与券商连接单独选择。Tiger 请求受数据权限与额度限制；见 [行情接入说明](data/README.md)。
 
 ## 券商接口
 

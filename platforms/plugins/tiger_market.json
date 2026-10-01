@@ -1,0 +1,7 @@
+{
+  "type": "tiger_market",
+  "kind": "market_reader",
+  "version": "1.0.0",
+  "entrypoint": "platforms.data.tiger_market:TigerMarketData",
+  "description": "Bounded Tiger quote, history and fundamentals diagnostics; not an executable universe snapshot"
+}

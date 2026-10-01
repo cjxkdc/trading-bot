@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from assembly import (inspect_broker, open_paper_session, open_broker_paper_session, platform_catalog, prepare_portfolio,
+from assembly import (inspect_broker, inspect_market_data, open_paper_session, open_broker_paper_session, platform_catalog, prepare_portfolio,
                       strategy_catalog, write_demo_snapshot)
 from framework.configuration import load_config, normalize_config
 from framework.journal import packed
@@ -85,6 +85,14 @@ def main():
     broker.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
     broker.add_argument("--config-dir", type=Path)
     broker.add_argument("--connect", action="store_true")
+    market = sub.add_parser('market-status', help='Data-access diagnostic; never produces or executes orders')
+    market.add_argument('--provider', default='tiger_market')
+    market.add_argument('--config-dir', type=Path, default=ROOT / 'secrets/tiger_paper')
+    market.add_argument('--symbol', default='AAPL', help='Probe only this symbol to limit history-quota usage')
+    market.add_argument('--connect', action='store_true')
+    market.add_argument('--claim-device', action='store_true',
+                        help='Explicitly claim quote access; may disconnect another API device')
+    market.add_argument('--out', type=Path, help='New report directory; required with --connect')
     args = parser.parse_args()
     if args.command in {"strategies", "platforms"}:
         catalog = strategy_catalog() if args.command == "strategies" else platform_catalog()
@@ -125,6 +133,32 @@ def main():
         result = inspect_broker(name, config_dir, connect=args.connect)
         print(json.dumps(result, indent=2))
         if result.get("issues"):
+            parser.exit(2)
+    elif args.command == 'market-status':
+        from platforms.data.tiger_market import TigerMarketError
+        if args.claim_device and not args.connect:
+            parser.error('--claim-device requires --connect')
+        if args.connect and args.out is None:
+            parser.error('--connect requires a new --out directory to preserve the diagnostic')
+        if args.out is not None:
+            args.out.mkdir(parents=True, exist_ok=False)
+        try:
+            result = inspect_market_data(args.provider, args.config_dir, connect=args.connect,
+                                         symbol=args.symbol, claim_device=args.claim_device)
+        except TigerMarketError as exc:
+            result = {'status': 'failed', 'reason': str(exc), 'strategy_ready': False}
+        if args.out is not None:
+            report_path = args.out / 'market-status.json'
+            report_path.write_text(json.dumps(result, indent=2, allow_nan=False), encoding='utf-8')
+            # Keep full history in the report, not the terminal.
+            display = {k: v for k, v in result.items() if k != 'checks'}
+            display['report'] = str(report_path)
+            display['checks'] = {k: {'status': v['status'], 'rows': len(v.get('data', []))}
+                                 for k, v in result.get('checks', {}).items()}
+        else:
+            display = result
+        print(json.dumps(display, indent=2))
+        if result.get('issues') or result.get('status') == 'failed':
             parser.exit(2)
     elif args.command == 'broker-paper':
         from framework.execution import ExecutionBlocked
