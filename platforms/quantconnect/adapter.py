@@ -4,7 +4,7 @@ from AlgorithmImports import *
 from datetime import datetime, timedelta
 import json
 from math import isfinite
-from framework.portfolio import StockSnapshot, PortfolioEngine
+from framework.portfolio import StockSnapshot, PortfolioEngine, PortfolioContext
 from framework.decisions import decide, digest
 from assembly import build_portfolio_strategy, portfolio_spec, default_portfolio_config
 
@@ -19,7 +19,7 @@ INITIAL_CASH = float(_RUN_CONFIG["initial_cash"])
 SLIPPAGE_BPS = float(_RUN_CONFIG["backtest"]["slippage_bps"])
 FEE_PER_ORDER = float(_RUN_CONFIG["fees"]["per_order"])
 MODE = "configured"  # Legacy momentum/profit/full overrides remain explicit opt-ins.
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 STRATEGY_TYPE = _RUN_CONFIG["strategy"]["type"]
 STRATEGY_PARAMETERS = {k: v for k, v in _RUN_CONFIG["strategy"].items() if k not in {"type", "id"}}
 
@@ -33,8 +33,8 @@ def strategy_configuration():
     return {"type": STRATEGY_TYPE, **params}
 
 
-def make_decision(engine, candidates, execution_day):
-    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()))
+def make_decision(engine, candidates, execution_day, context=None):
+    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()), context=context)
 
 
 class TechProfitMomentumAlgorithm(QCAlgorithm):
@@ -124,7 +124,11 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
             return Universe.UNCHANGED
         snapshot_at, prior_facts = self._facts_for_signal(signal_day)
         candidates = self._load_candidates(prior_facts, signal_day, snapshot_at.date())
-        decision = make_decision(self._engine, candidates, execution_day)
+        context = None
+        if getattr(self._engine.strategy, "requires_context", False) is True:
+            context = PortfolioContext(self.time.date(), tuple(
+                str(kv.key.id) for kv in self.portfolio if kv.value.invested))
+        decision = make_decision(self._engine, candidates, execution_day, context)
         targets = decision.targets
         by_id = {stock.asset_id: stock for stock in candidates}
         symbols = {sid: facts[0] for sid, facts in prior_facts.items()}
@@ -277,7 +281,11 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
 
     def on_end_of_algorithm(self):
         self.set_runtime_statistic("Version", VERSION)
-        self.set_runtime_statistic("Config SHA256", digest(_RUN_CONFIG))
+        # Encoded hex values can be omitted from QC runtime statistics. Keep
+        # the fingerprint in logs and human-readable run settings in the banner.
+        self.log("RESEARCH_CONFIG " + json.dumps({"sha256": digest(_RUN_CONFIG), "configuration": _RUN_CONFIG}))
+        self.set_runtime_statistic("Research start", datetime(*START).date().isoformat())
+        self.set_runtime_statistic("Research end", datetime(*END).date().isoformat())
         self.set_runtime_statistic("Monthly rebalances", str(self._completed))
         self.set_runtime_statistic("Strategy mode", MODE)
         self.set_runtime_statistic("Costs", f"${FEE_PER_ORDER}/order + {SLIPPAGE_BPS}bps slippage")

@@ -1,6 +1,6 @@
 # Paste this ENTIRE file into a new QuantConnect Python project's main.py.
 # Generated file: edit the original modules, then rebuild.
-# Source SHA256: 94f71d9fc2e18420d24f5a6aecc91627b02b61ccab3e2e5eabbdf17e96bbde59
+# Source SHA256: 95ff4d58c0ab4eb7d6ac23f28e521c6f28390cd690e455cd538ee8f285d4e4d4
 
 # ===== framework/portfolio.py =====
 """Platform-independent contract for cross-sectional, long-only portfolios."""
@@ -40,11 +40,42 @@ class StockTarget:
     score: float
 
 
+@dataclass(frozen=True)
+class PortfolioContext:
+    """Observed membership, frozen before selection; no broker handles or orders.
+
+    This first contract supports retention/rank buffers. It does not provide
+    valuation or quantities for no-top-up sizing policies.
+    """
+    as_of: date
+    held_asset_ids: tuple[str, ...]
+
+    def __post_init__(self):
+        if type(self.as_of) is not date or type(self.held_asset_ids) is not tuple:
+            raise ValueError("Context requires a date and an immutable tuple of held IDs")
+        if any(not isinstance(s, str) or not s for s in self.held_asset_ids):
+            raise ValueError("Invalid held asset identifier")
+        if len(set(self.held_asset_ids)) != len(self.held_asset_ids):
+            raise ValueError("Duplicate held asset identifiers")
+        object.__setattr__(self, "held_asset_ids", tuple(sorted(self.held_asset_ids)))
+
+
 class PortfolioStrategy(Protocol):
     @property
     def history_requirements(self) -> HistoryRequirements: ...
 
     def select(self, stocks: Sequence[StockSnapshot]) -> tuple[StockTarget, ...]: ...
+
+
+class ContextPortfolioStrategy(Protocol):
+    """Opt in with requires_context = True; stateless plug-ins stay compatible."""
+    requires_context: bool
+
+    @property
+    def history_requirements(self) -> HistoryRequirements: ...
+
+    def select_with_context(self, stocks: Sequence[StockSnapshot],
+                            context: PortfolioContext) -> tuple[StockTarget, ...]: ...
 
 
 class PortfolioEngine:
@@ -56,7 +87,7 @@ class PortfolioEngine:
         self.strategy = strategy
         self.max_gross, self.max_weight = max_gross, max_weight
 
-    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date):
+    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None):
         stocks = tuple(stocks)
         ids = {stock.asset_id for stock in stocks}
         if len(ids) != len(stocks):
@@ -64,7 +95,17 @@ class PortfolioEngine:
         for stock in stocks:
             if not stock.known_on <= stock.price_as_of < execution_day:
                 raise ValueError("Information must precede the execution session")
-        targets = tuple(self.strategy.select(stocks))
+        if context is not None:
+            if not isinstance(context, PortfolioContext) or context.as_of > execution_day:
+                raise ValueError("Invalid or future portfolio context")
+            if stocks and context.as_of < max(stock.price_as_of for stock in stocks):
+                raise ValueError("Portfolio context predates the signal session")
+        if getattr(self.strategy, "requires_context", False) is True:
+            if context is None:
+                raise ValueError("This strategy requires portfolio context; missing is not an empty account")
+            targets = tuple(self.strategy.select_with_context(stocks, context))
+        else:
+            targets = tuple(self.strategy.select(stocks))
         if len({target.asset_id for target in targets}) != len(targets):
             raise ValueError("Duplicate target identifiers")
         for target in targets:
@@ -110,11 +151,11 @@ class Decision:
 
 
 def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
-           *, input_schema="us_technology_daily_v1"):
+           *, input_schema="us_technology_daily_v1", context=None):
     stocks = tuple(sorted(stocks, key=lambda s: s.asset_id))
     if len({s.price_as_of for s in stocks}) > 1:
         raise ValueError("All candidates must share the same completed signal session")
-    targets = engine.plan(stocks, execution_day)
+    targets = engine.plan(stocks, execution_day, context)
     record = {
         "schema": 1, "input_schema": input_schema,
         "execution_day": execution_day.isoformat(),
@@ -123,6 +164,8 @@ def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
         "data_sha256": digest([asdict(s) for s in stocks]),
         "targets": [asdict(t) for t in targets],
     }
+    if context is not None:
+        record["portfolio_context"] = canonical(asdict(context))
     return Decision(digest(record), targets, record)
 
 # ===== strategies/equal_weight.py =====
@@ -211,7 +254,7 @@ class TechProfitMomentum:
 # Frozen plug-in registry generated from local manifests.
 _RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'tech_profit_momentum', 'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}, 'initial_cash': '100000', 'limits': {'max_gross': '0.95', 'max_weight': '0.19', 'max_order_value': '100000', 'max_quote_age_seconds': 120}, 'fees': {'per_order': '1', 'bps': '0'}, 'backtest': {'backend': 'quantconnect', 'start': '2020-01-01', 'end': '2020-12-31', 'slippage_bps': 10}}
 _PLUGIN_CLASSES = {'equal_weight': EqualWeight, 'tech_profit_momentum': TechProfitMomentum}
-_PLUGIN_SPECS = {'equal_weight': {'type': 'equal_weight', 'version': '1.0', 'source_sha256': '6819b56af61c6f67660a0c6ba8d52b05789e063e2b32f3fff70917eb8c03bcdb', 'engine_sha256': '5842dbde161dac9865a0017358727e750fdbe3fd3424552f281ea345b3a125a5', 'parameters': {'count': 5, 'weight': 0.19}}, 'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '5842dbde161dac9865a0017358727e750fdbe3fd3424552f281ea345b3a125a5', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
+_PLUGIN_SPECS = {'equal_weight': {'type': 'equal_weight', 'version': '1.0', 'source_sha256': '6819b56af61c6f67660a0c6ba8d52b05789e063e2b32f3fff70917eb8c03bcdb', 'engine_sha256': '1f68c9664caffe512ecc3e73ca8e24135d33b4a87a96a97131a71018541b1fdc', 'parameters': {'count': 5, 'weight': 0.19}}, 'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '1f68c9664caffe512ecc3e73ca8e24135d33b4a87a96a97131a71018541b1fdc', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
 def build_portfolio_strategy(config):
     return _PLUGIN_CLASSES[config['type']](**{k:v for k,v in config.items() if k not in {'type','id'}})
 def portfolio_spec(config):
@@ -239,7 +282,7 @@ INITIAL_CASH = float(_RUN_CONFIG["initial_cash"])
 SLIPPAGE_BPS = float(_RUN_CONFIG["backtest"]["slippage_bps"])
 FEE_PER_ORDER = float(_RUN_CONFIG["fees"]["per_order"])
 MODE = "configured"  # Legacy momentum/profit/full overrides remain explicit opt-ins.
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 STRATEGY_TYPE = _RUN_CONFIG["strategy"]["type"]
 STRATEGY_PARAMETERS = {k: v for k, v in _RUN_CONFIG["strategy"].items() if k not in {"type", "id"}}
 
@@ -253,8 +296,8 @@ def strategy_configuration():
     return {"type": STRATEGY_TYPE, **params}
 
 
-def make_decision(engine, candidates, execution_day):
-    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()))
+def make_decision(engine, candidates, execution_day, context=None):
+    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()), context=context)
 
 
 class TechProfitMomentumAlgorithm(QCAlgorithm):
@@ -344,7 +387,11 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
             return Universe.UNCHANGED
         snapshot_at, prior_facts = self._facts_for_signal(signal_day)
         candidates = self._load_candidates(prior_facts, signal_day, snapshot_at.date())
-        decision = make_decision(self._engine, candidates, execution_day)
+        context = None
+        if getattr(self._engine.strategy, "requires_context", False) is True:
+            context = PortfolioContext(self.time.date(), tuple(
+                str(kv.key.id) for kv in self.portfolio if kv.value.invested))
+        decision = make_decision(self._engine, candidates, execution_day, context)
         targets = decision.targets
         by_id = {stock.asset_id: stock for stock in candidates}
         symbols = {sid: facts[0] for sid, facts in prior_facts.items()}
@@ -497,7 +544,11 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
 
     def on_end_of_algorithm(self):
         self.set_runtime_statistic("Version", VERSION)
-        self.set_runtime_statistic("Config SHA256", digest(_RUN_CONFIG))
+        # Encoded hex values can be omitted from QC runtime statistics. Keep
+        # the fingerprint in logs and human-readable run settings in the banner.
+        self.log("RESEARCH_CONFIG " + json.dumps({"sha256": digest(_RUN_CONFIG), "configuration": _RUN_CONFIG}))
+        self.set_runtime_statistic("Research start", datetime(*START).date().isoformat())
+        self.set_runtime_statistic("Research end", datetime(*END).date().isoformat())
         self.set_runtime_statistic("Monthly rebalances", str(self._completed))
         self.set_runtime_statistic("Strategy mode", MODE)
         self.set_runtime_statistic("Costs", f"${FEE_PER_ORDER}/order + {SLIPPAGE_BPS}bps slippage")

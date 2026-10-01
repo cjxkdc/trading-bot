@@ -5,7 +5,7 @@ from typing import Mapping, Protocol
 from zoneinfo import ZoneInfo
 from framework.decisions import decide
 from framework.execution import Executor
-from framework.portfolio import StockSnapshot
+from framework.portfolio import PortfolioContext, StockSnapshot
 from framework.trading import Quote
 
 
@@ -15,6 +15,7 @@ class MarketSnapshot:
     stocks: tuple[StockSnapshot, ...]
     quotes: Mapping[str, Quote]
     execution_time: datetime
+    portfolio_context: PortfolioContext | None = None
 
 
 class SnapshotProvider(Protocol):
@@ -42,7 +43,7 @@ class PortfolioRunner:
             raise ValueError("Execution timestamp must include timezone")
         execution_day = snapshot.execution_time.astimezone(ZoneInfo("America/New_York")).date()
         return decide(self.engine, snapshot.stocks, execution_day, self.strategy_spec,
-                      input_schema=self.input_schema)
+                      input_schema=self.input_schema, context=snapshot.portfolio_context)
 
     def execute(self, decision, snapshot, broker, journal):
         # Recompute before execution so a preview cannot be paired with other data.

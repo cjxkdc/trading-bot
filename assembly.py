@@ -20,7 +20,7 @@ def strategy_catalog(directory=None):
 
 def platform_catalog(directory=None):
     return _catalog(directory or ROOT / "platforms/plugins", "platforms",
-                    {"historical_data", "snapshot_data", "broker"})
+                    {"historical_data", "snapshot_data", "broker", "account_reader"})
 
 
 def _catalog(directory, namespace, kinds):
@@ -75,6 +75,11 @@ def portfolio_spec(config):
 
 def build_data_provider(name, path):
     return _build_platform({"type": name}, "historical_data", path=path)
+
+
+def inspect_broker(name, config_dir, *, connect=False):
+    reader = _build_platform({"type": name}, "account_reader", config_dir=config_dir)
+    return reader.inspect(connect=connect)
 
 
 def _build_platform(config, kind, **inputs):

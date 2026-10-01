@@ -60,6 +60,10 @@ class Executor:
         if frozen is None:
             if self.broker.open_orders():
                 raise ExecutionBlocked("Broker has unresolved orders")
+            context = decision.record.get("portfolio_context")
+            if context is not None and set(context["held_asset_ids"]) != {
+                    symbol for symbol, quantity in account.positions if quantity != 0}:
+                raise ExecutionBlocked("Frozen portfolio context differs from the account holdings")
             orders = plan_orders(decision, account, quotes, now, self.policy, self.fees)
             self.journal.freeze(cycle, fingerprint, orders)
         orders = tuple(unpack_order(packed(o)) for o in self.journal.batch(cycle)[1])

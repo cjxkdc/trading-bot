@@ -1,6 +1,6 @@
-# Trading bot — 模块化交易研究 v0.3
+# Trading bot — 模块化交易研究 v0.4
 
-策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出、单标的 CSV 研究和可恢复的本地模拟执行。
+策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行和 Tiger 只读账户查询。
 
 ## 三块各自做什么
 
@@ -75,7 +75,17 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 
 数据为 `date,total_return_index`，必须核对总回报序列的分红/拆股口径并提供预热历史。`config.json` 定义开发、验证和最终测试区间；阶段之间冻结数据、配置、源码。该模型按连续比例敞口和收盘总回报估计，不能用于科技股多股票组合或冒充真实券商撮合。
 
-## v0.3 完成了什么
+## v0.4 新增
+
+- `import-qc`：导入 QC JSON，保存原始报告、配置、代码副本和校验值；总收益与年化分开。
+- `compare-qc`：生成 Markdown/JSON 对比，显示不同年份、成本及完成状态；不自动选“最佳策略”。
+- `export-qc --start --end --slippage-bps --note`：独立导出不同区间和成本假设，先记录研究问题。
+- `broker-status`：默认离线检查 Tiger 配置；加 `--connect` 只查询账户、持仓及未完成订单。
+- `PortfolioContext`：策略可以选择接收冻结的持仓名单，为排名缓冲留出接口；当前策略未增加新规则。
+
+具体用法见 [回测流程](backtests/README.md)、[Tiger 接入](platforms/brokers/README.md) 和 [策略接口](strategies/README.md)。
+
+## v0.3 已有基础
 
 - 运行入口不再直接构造特定数据源和券商，统一注入 PortfolioRunner。
 - 数据和券商连接器也按登记文件加载，分别选择。
@@ -90,9 +100,9 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 | 路径 | 已完成 | 尚待完成 |
 |---|---|---|
 | 策略研究 | 规则实现、可替换配置、独立对照 | 多年份及独立验证，证明改动有效 |
-| QC 回测 | 从三层源码和配置生成单文件 | v0.3 云端实际运行与报告核对 |
+| QC 回测 | 导出、报告存档与对比 | v0.4 云端实际运行与报告核对 |
 | 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
-| 实际券商 | 通用订单/账户接口与连接器位置 | Tiger/Futu SDK 接入和模拟账户验证 |
+| 实际券商 | Tiger SDK 只读适配及离线契约检查 | 有凭证的连接验证、券商模拟盘下单与恢复 |
 
 本地执行器目前只接受 paper 模式。真实券商常有异步成交，需要进一步完善查询、恢复与公司行动处理。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
 
@@ -105,7 +115,7 @@ python -m unittest discover -s tests
 
 完整历史表适配检查还需 pandas；QC 环境自带。本地没有 pandas 时相关检查会显式跳过，其余检查使用标准库。
 
-开发时运行 `python -m pip install -r requirements-dev.txt` 可安装完整测试依赖。GitHub Actions 会在 Linux 和 Windows 上执行测试，并检查已提交的 QC 单文件是否与源码一致；这些检查不会连接券商或提交云端回测。
+开发时运行 `python -m pip install -r requirements-dev.txt -r requirements-tiger.txt` 可安装完整测试依赖。Tiger 是可选安装；未安装时只跳过实际 SDK 契约检查。GitHub Actions 在 Linux 和 Windows 上安装两份依赖、执行全部检查，并核对已提交的 QC 单文件是否与源码一致；这些检查不会连接券商或提交云端回测。
 
 Git 仅管理代码、示例配置和文档。`runs/`、本地账户 SQLite、`.env`、密钥和虚拟环境均忽略。上传到 GitHub 不会启动程序；运行和后续服务器部署需单独配置。
 

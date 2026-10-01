@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
-from framework.portfolio import StockSnapshot
+from framework.portfolio import PortfolioContext, StockSnapshot
 from framework.runtime import MarketSnapshot
 from framework.trading import Quote, amount
 
@@ -15,12 +15,23 @@ class SnapshotFile:
         self.path = Path(path)
 
     def load(self):
-        stocks, quotes, now = load_snapshot(self.path)
-        return MarketSnapshot(SCHEMA, stocks, quotes, now)
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        stocks, quotes, now = _parse_snapshot(data)
+        raw = data.get("portfolio_context")
+        if raw is not None and (not isinstance(raw, dict) or set(raw) != {"as_of", "held_asset_ids"}
+                                or not isinstance(raw["held_asset_ids"], list)):
+            raise ValueError("Invalid portfolio context in snapshot")
+        context = None if raw is None else PortfolioContext(
+            date.fromisoformat(raw["as_of"]), tuple(raw["held_asset_ids"]))
+        return MarketSnapshot(SCHEMA, stocks, quotes, now, context)
 
 
 def load_snapshot(path):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return _parse_snapshot(data)
+
+
+def _parse_snapshot(data):
     if data["input_schema"] != SCHEMA or data.get("universe_complete") is not True:
         raise ValueError("Unsupported snapshot schema")
     now = datetime.fromisoformat(data["execution_time"])

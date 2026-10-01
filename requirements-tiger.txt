@@ -1,0 +1,2 @@
+-r requirements.txt
+tigeropen==3.8.0

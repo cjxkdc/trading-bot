@@ -19,6 +19,8 @@ runs/
 !.env.example
 secrets/
 credentials/
+tiger_openapi_config.properties
+tiger_openapi_token.properties
 *.pem
 *.key
 

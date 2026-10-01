@@ -9,9 +9,10 @@
 | `data/snapshot.py` | snapshot_file | 读取标准股票快照，返回 MarketSnapshot |
 | `data/csv.py` | csv | 读取单标的总回报数据，供 research.py 使用 |
 | `brokers/paper.py` | paper | 专用本地报价回放账户，立即全额模拟成交 |
+| `brokers/tiger_readonly.py` | tiger_readonly / account_reader | Tiger 配置检查与账户、持仓、未完成订单只读查询 |
 | `quantconnect/adapter.py` | 通过 export-qc 选择 | QC 历史数据、日历、LEAN 撮合和日志 |
 
-**Tiger、Futu、Moomoo 的实际账户连接尚未实现。** 目前 paper 是本地文件报价回放，不是券商模拟盘。
+Tiger 只读适配已实现并做离线检查，尚未用真实凭证验连；实际下单、Futu/Moomoo 接入未实现。目前 paper 是本地文件报价回放，不是券商模拟盘。见 [Tiger 只读接入说明](brokers/README.md)。
 
 ## 数据接口
 

@@ -1,0 +1,7 @@
+{
+  "type": "tiger_readonly",
+  "kind": "account_reader",
+  "version": "0.4.0",
+  "entrypoint": "platforms.brokers.tiger_readonly:TigerReadOnly",
+  "description": "Explicit-file configuration check and Tiger read-only account queries; no trading"
+}
