@@ -40,7 +40,7 @@ class OrderState:
 
 
 class Broker(Protocol):
-    """Order boundary, currently exercised by the local paper adapter.
+    """Order boundary shared by local replay and broker-hosted simulation.
 
     Unknown submission must be reconciled before retry. Cancel acknowledgement
     does not prove no further fills. Strategies never receive a Broker instance.

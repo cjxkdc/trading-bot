@@ -2,19 +2,26 @@
 import argparse
 import json
 from pathlib import Path
-from assembly import (inspect_broker, open_paper_session, platform_catalog, prepare_portfolio,
+from assembly import (inspect_broker, open_paper_session, open_broker_paper_session, platform_catalog, prepare_portfolio,
                       strategy_catalog, write_demo_snapshot)
 from framework.configuration import load_config, normalize_config
 from framework.journal import packed
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "portfolio_config.json"
+TIGER_PAPER_CONFIG = ROOT / 'tiger_paper_config.json'
 
 
 def run_paper(snapshot_path, config_path, state_dir):
     cfg, runner, snapshot, decision = prepare_portfolio(config_path, snapshot_path)
     with open_paper_session(cfg, snapshot, state_dir, runner.fees) as (broker, journal):
         return dict(runner.execute(decision, snapshot, broker, journal), mode="local_paper_replay")
+
+
+def run_broker_paper(snapshot_path, config_path=TIGER_PAPER_CONFIG, state_dir=None):
+    cfg, runner, snapshot, decision = prepare_portfolio(config_path, snapshot_path)
+    with open_broker_paper_session(cfg, snapshot, state_dir, runner.fees) as (broker, journal):
+        return dict(runner.execute(decision, snapshot, broker, journal), mode='broker_paper')
 
 
 def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None, note=""):
@@ -55,6 +62,10 @@ def main():
     paper.add_argument("--snapshot", type=Path, required=True)
     paper.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     paper.add_argument("--state", type=Path, required=True)
+    trade = sub.add_parser('broker-paper', help='One simulation execution pass; pending orders pause the batch')
+    trade.add_argument('--snapshot', type=Path, required=True, help='Current real-market snapshot; never synthetic demo data')
+    trade.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
+    trade.add_argument('--state', type=Path, help='Must match the broker configuration state_dir')
     export = sub.add_parser("export-qc", help="Export code to paste into QuantConnect; does not run it")
     export.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     export.add_argument("--out", type=Path, required=True, help="New directory for this experiment")
@@ -70,8 +81,9 @@ def main():
     compare.add_argument("--results", type=Path, nargs="+", required=True)
     compare.add_argument("--out", type=Path, required=True)
     broker = sub.add_parser("broker-status", help="Offline check by default; --connect sends read-only queries")
-    broker.add_argument("--broker", default="tiger_readonly")
-    broker.add_argument("--config-dir", type=Path, required=True)
+    broker.add_argument("--broker", help='Default: broker from tiger_paper_config.json')
+    broker.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
+    broker.add_argument("--config-dir", type=Path)
     broker.add_argument("--connect", action="store_true")
     args = parser.parse_args()
     if args.command in {"strategies", "platforms"}:
@@ -103,9 +115,24 @@ def main():
         print(json.dumps({"report": str(args.out / "comparison.md"),
                           "comparison_differences": report["comparison_differences"]}))
     elif args.command == "broker-status":
-        result = inspect_broker(args.broker, args.config_dir, connect=args.connect)
+        cfg = normalize_config(load_config(args.config))
+        name = args.broker or cfg['broker']['type']
+        config_dir = args.config_dir
+        if config_dir is None:
+            if name != cfg['broker']['type']:
+                parser.error('An explicit --config-dir is required when overriding --broker')
+            config_dir = ROOT / cfg['broker']['config_dir']
+        result = inspect_broker(name, config_dir, connect=args.connect)
         print(json.dumps(result, indent=2))
         if result.get("issues"):
+            parser.exit(2)
+    elif args.command == 'broker-paper':
+        from framework.execution import ExecutionBlocked
+        from platforms.brokers.tiger_paper import TigerPaperError
+        try:
+            print(packed(run_broker_paper(args.snapshot, args.config, args.state)))
+        except (ExecutionBlocked, TigerPaperError) as exc:
+            print(json.dumps({'status': 'paused', 'reason': str(exc), 'automatic_retry': False}))
             parser.exit(2)
     else:
         print(packed(run_paper(args.snapshot, args.config, args.state)))

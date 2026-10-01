@@ -9,10 +9,11 @@
 | `data/snapshot.py` | snapshot_file | 读取标准股票快照，返回 MarketSnapshot |
 | `data/csv.py` | csv | 读取单标的总回报数据，供 research.py 使用 |
 | `brokers/paper.py` | paper | 专用本地报价回放账户，立即全额模拟成交 |
+| `brokers/tiger_paper.py` | tiger_paper / broker | Tiger 模拟账户、USD 整股限价单、查询/撤销/恢复；拒绝实盘 |
 | `brokers/tiger_readonly.py` | tiger_readonly / account_reader | Tiger 配置检查与账户、持仓、未完成订单只读查询 |
 | `quantconnect/adapter.py` | 通过 export-qc 选择 | QC 历史数据、日历、LEAN 撮合和日志 |
 
-Tiger 只读适配已实现并做离线检查，尚未用真实凭证验连；实际下单、Futu/Moomoo 接入未实现。目前 paper 是本地文件报价回放，不是券商模拟盘。见 [Tiger 只读接入说明](brokers/README.md)。
+Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认券商操作选择 tiger_paper。paper 仍是独立本地回放。实盘下单、Futu/Moomoo 接入未实现。见 [券商接入说明](brokers/README.md)。
 
 ## 数据接口
 
@@ -31,7 +32,7 @@ Tiger 只读适配已实现并做离线检查，尚未用真实凭证验连；�
 - `cancel(broker_id)`：请求撤单；撤单确认不等于不会再成交。
 - `close()`：释放连接。
 
-连接器负责生命周期，实现 `mode`、`state_files`、`initialize()`、`connect()`；参考 `brokers/paper.py` 的 PaperConnector。框架中的策略永远不接收 SDK 客户端或账户凭据。
+连接器负责生命周期，实现 `mode`、`state_files`、`initialize()`、`connect()`；参考 `brokers/paper.py` 的 PaperConnector。broker_paper 模式另外提供 `execution_time()` 取得当前时间，不能把快照的历史时间当作发送订单的现在。框架中的策略永远不接收 SDK 客户端或账户凭据。
 
 新增实现后，在 `plugins/` 登记入口，再修改配置的 `broker.type`。新券商适配需验证账户归属、权限、USD 现金、费用、整股、订单历史与成交状态。当前执行器的纸面执行限制不能通过把真实连接伪装为 paper 绕过。
 

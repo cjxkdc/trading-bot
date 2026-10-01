@@ -1,37 +1,65 @@
-# Tiger 只读连接
+# 券商模块
 
-`tiger_readonly` 是独立的 `account_reader` 插件，未实现交易券商接口。保留 `portfolio_config.json` 中的 `broker.type=paper`；不要改成这个只读插件来运行 paper。
+| 插件 | 用途 | 资金与撮合 |
+|---|---|---|
+| `paper` | 本地文件报价回放 | 程序本地创建虚拟资金，立即模拟全额成交 |
+| `tiger_paper` | Tiger 官方模拟账户 | Tiger 返回虚拟资金、持仓及模拟订单状态 |
+| `tiger_readonly` | 显式选择账户的只读检查 | 只能查询；不属于可下单的 broker |
 
-## 准备与检查
+当前券商操作默认选择 `tiger_paper`，使用 `tiger_paper_config.json`。该文件继承主策略，只替换 broker 块；更换策略不用修改 Tiger SDK 代码。
 
-1. 安装可选依赖：`python -m pip install -r requirements-tiger.txt`。
-2. 在 Tiger OpenAPI 后台申请权限，使用官方导出的签名认证配置。
-3. 本地建立 `secrets/tiger/`，把 `tiger_openapi_config.properties` 放进去。它包含私钥，不上传 GitHub、不粘贴进聊天。
+## 配置与查询
 
-```text
-python bot.py broker-status --config-dir secrets/tiger
-```
-
-默认只检查 SDK 版本、文件、必要字段及配置冲突，不构造 SDK 客户端或发送网络请求。`configuration_present_not_authenticated` 表示配置存在，不代表私钥有效或账户已连接。未就绪时退出码为 2。
-
-明确要查询自己账户时运行：
+使用 Python 3.11+，安装 `requirements-tiger.txt`（SDK 固定为 `tigeropen==3.8.0`）。在 Tiger 开发者中心选择“模拟账户”，导出配置并保存到：
 
 ```text
-python bot.py broker-status --config-dir secrets/tiger --connect
+secrets/tiger_paper/tiger_openapi_config.properties
 ```
 
-只发送账户、资产、持仓和未完成订单查询；账户编号显示末四位，响应只输出允许的字段。输出包含真实资金和持仓信息，如需保存请放 `runs/`。买入力度字段是券商返回的购买力，不能当作现金使用。
+凭据路径相对项目根目录；可以显式传绝对路径。私钥、账本、运行报告都被 Git 忽略。模拟与实盘均用 PROD 网关，模拟账户不是 SDK 的旧 SANDBOX 环境；账号类型决定虚拟资金账户。
 
-## 限制
+```text
+python bot.py broker-status
+python bot.py broker-status --connect
+```
 
-- 对接并核验的 SDK 版本为 `tigeropen==3.8.0`。支持导出的 Tiger ID/私钥签名认证，尚不支持 OAuth2。
-- SDK 会优先读取 `TIGEROPEN_*` 环境变量；这个适配器要求先清除覆盖值，避免查询到另一个账户。不要把密钥放在命令行参数里。
-- 真实账户和 Tiger 模拟账户均按官方配置使用 PROD 网关，账户本身决定类型；SDK 的旧 SANDBOX 开关不用于这里。
-- 使用 SDK 默认官方公共网关，不接受自定义地址；关闭动态域名请求和自动 token 刷新。部分账户若需要其他授权/区域配置，应按官方说明继续核对。
-- 查询是依次进行的，不是原子快照。缺失响应报错；未完成订单的分页完整性未作为执行依据核验。这个输出不能直接驱动真实交易。
-- SDK 请求边界只允许四个查询方法；下单、改单、撤单、转账均在本地拦截。不会启动交易程序、定时任务或服务器。
-- 已有离线 SDK 对象、请求白名单和错误脱敏测试；没有使用真实凭证验证网络连接。行情权限、完整科技股股票池与历史基本面不包含在此次账户接入中。
+第一个命令只检查配置，不联网。第二个命令验证服务端 `account_type=PAPER`，查询 USD 可用现金、持仓及挂单数。`configuration_present_not_authenticated` 只表示配置完整；`connected` 才表示接口验证成功。不会因为查询而下单。
 
-已有的 `paper.py` 是独立本地模拟账户；不等于 Tiger 模拟盘。下一步需要用户自己的配置文件完成只读验连，再开发和验证券商模拟盘的订单生命周期。
+模块在构造 SDK 前拒绝实盘账号；服务端确认 PAPER 后才允许资产和订单请求；请求边界要求每次调用都属于同一个模拟账号。SDK 日志关闭，异常文本脱敏，不在命令行或结果中输出私钥。暂不支持 OAuth2、自定义网关或 `TIGEROPEN_*` 环境覆盖。
 
-官方依据：[接入准备](https://docs.itigerup.com/docs/prepare)、[账户接口](https://docs.itigerup.com/docs/accounts)、[Python SDK](https://github.com/tigerfintech/openapi-python-sdk)。
+## 执行一轮模拟调仓
+
+```text
+python bot.py plan --config tiger_paper_config.json --snapshot runs/current-market.json
+python bot.py broker-paper --snapshot runs/current-market.json
+```
+
+快照需要当时可知的股票池、历史基本面与当日真实买卖报价。`demo` 的合成数据不可用于 Tiger。策略和框架继续使用标准输入，broker 不负责产生选股数据。当前未自动获取这些实时输入，也没有启动定时任务。
+
+平台从快照的 `asset_id` 与 `ticker` 建立映射，把框架的稳定股票编号转换成 Tiger 代码；持仓再反向转换。快照必须包含全部已持仓股票的映射。每个订单单独保存提交时的 ticker，恢复时不依赖重新推断标的。
+
+固定使用配置指定的 `runs/tiger-paper/` 状态目录，保存账户绑定、订单意图、Tiger 订单号及框架 journal。不要复制、清空状态目录或用新目录重试同一账户。初始化只创建本地记录，绝不重置 Tiger 的虚拟资金；`initial_cash` 只供本地模拟和历史回测使用。
+
+支持 USD 股票、整股、仅做多、DAY 限价单、正常交易时段。使用 USD 现金和可交易现金的较小值，不把港币折算金额或保证金购买力当现金。维持单笔 100,000 美元上限；较大的虚拟账户调仓可能触发上限并暂停，不会自动加大限额或拆单。
+
+未成交或部分成交会让批次暂停；再次运行同一决策时先查询原订单，不再提交一份。网络超时后若找不到对应订单，状态仍为 unknown，不能当作提交失败重发。历史订单逐页读取；分页不完整或未知状态会阻断执行。
+
+订单查询和撤销使用 broker 标准方法 `query(client_id)`、`cancel(broker_id)`。撤销只能针对本地账本记录的订单，撤单应答后继续查询最终状态；拒单、撤单或未解决订单会阻止后续组合批次，需要人工核对和处置。当前没有自动放弃旧批次或跨日修复流程。
+
+## 已做的验证
+
+2026-10-02：Tiger 返回 PAPER 类型，USD 虚拟可用现金 1,000,000；连接测试提交了 1 股 AAPL、限价 1 美元的模拟单，随后撤单成功，成交 0、剩余挂单 0。结果保存在本地 `runs/tiger-paper/connection-smoke.json`。这是接口与订单生命周期验证，不是策略回测或连续模拟交易结果。
+
+离线检查覆盖：实盘拦截、账户隔离、SDK 状态映射、持仓与现金限制、部分成交、断线后按订单标记恢复、不重复发送、撤单应答、分页和过期行情。
+
+## 旧只读入口
+
+需要检查显式指定的其他配置时：
+
+```text
+python bot.py broker-status --broker tiger_readonly --config-dir <配置目录>
+```
+
+仍然只有显式增加 `--connect` 才联网；该模块不能作为执行 broker。当前默认配置不使用实盘凭据。
+
+官方依据：[接入准备](https://docs.itigerup.com/docs/prepare)、[账户接口](https://docs.itigerup.com/docs/accounts)、[订单查询](https://docs.itigerup.com/docs/orderinfo)、[下单接口](https://docs.itigerup.com/docs/place-order)、[Python SDK](https://github.com/tigerfintech/openapi-python-sdk)。

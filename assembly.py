@@ -78,7 +78,11 @@ def build_data_provider(name, path):
 
 
 def inspect_broker(name, config_dir, *, connect=False):
-    reader = _build_platform({"type": name}, "account_reader", config_dir=config_dir)
+    entry = platform_catalog()[name]
+    kind = entry['kind']
+    if kind != 'account_reader' and not (kind == 'broker' and entry.get('account_status') is True):
+        raise ValueError('This platform does not expose account diagnostics')
+    reader = _build_platform({"type": name}, kind, config_dir=config_dir)
     return reader.inspect(connect=connect)
 
 
@@ -125,6 +129,25 @@ def open_paper_session(cfg, snapshot, state_dir, fees):
     connector = _build_platform(cfg["broker"], "broker")
     if connector.mode != "paper":
         raise ValueError("This release supports paper connections only")
+    with _open_simulation_session(connector, cfg, snapshot, state_dir, fees) as session:
+        yield session
+
+
+@contextmanager
+def open_broker_paper_session(cfg, snapshot, state_dir, fees):
+    connector = _build_platform(cfg['broker'], 'broker')
+    if connector.mode != 'broker_paper':
+        raise ValueError('This command requires a broker-hosted paper account')
+    state_dir = Path(state_dir).resolve() if state_dir else connector.state_dir
+    # Validate the canonical location before creating directories or ledgers.
+    if state_dir != connector.state_dir:
+        raise ValueError('Use the configured broker paper state directory')
+    with _open_simulation_session(connector, cfg, snapshot, state_dir, fees) as session:
+        yield session
+
+
+@contextmanager
+def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
     state_dir = Path(state_dir)
     names = (*connector.state_files, "journal.sqlite")
     if len(set(names)) != len(names) or any(

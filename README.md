@@ -1,6 +1,6 @@
-# Trading bot — 模块化交易研究 v0.4
+# Trading bot — 模块化交易研究 v0.5
 
-策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行和 Tiger 只读账户查询。
+策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行、Tiger 模拟账户执行和只读账户查询。
 
 ## 三块各自做什么
 
@@ -85,6 +85,21 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 
 具体用法见 [回测流程](backtests/README.md)、[Tiger 接入](platforms/brokers/README.md) 和 [策略接口](strategies/README.md)。
 
+## v0.5：Tiger 模拟券商
+
+新增独立 `tiger_paper` broker；选股模块不变。券商操作默认使用 [tiger_paper_config.json](tiger_paper_config.json)，继承原策略，凭据位于 `secrets/tiger_paper/`。`portfolio_config.json` 和 `paper` 命令继续用于离线研究/本地回放。
+
+```text
+.venv\Scripts\python.exe bot.py broker-status
+.venv\Scripts\python.exe bot.py broker-status --connect
+```
+
+模拟账户仅接受 17 位模拟账号，并要求 Tiger 返回 `account_type=PAPER`。所有 API 请求都检查账户归属，真实账号在客户端初始化前即被拦截。没有实盘执行入口。
+
+`broker-paper --snapshot <当日真实行情快照>` 可执行一轮模拟调仓。订单尚未成交时暂停，保留订单账本，下次核对已有订单，不重复发送。同一框架负责策略计算和风控，Tiger 平台模块负责实际的模拟订单。当前还没有自动行情订阅、完整实时股票池或持续运行的调度器。
+
+2026-10-02 已验证 Tiger 模拟账户查询，以及 1 股 AAPL、限价 1 美元的模拟测试单：已接受 → 已撤销，成交 0，剩余挂单 0。这是连接验证，不是策略表现验证；部分成交与断线恢复另有离线测试。
+
 ## v0.3 已有基础
 
 - 运行入口不再直接构造特定数据源和券商，统一注入 PortfolioRunner。
@@ -102,9 +117,9 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 | 策略研究 | 规则实现、可替换配置、独立对照 | 多年份及独立验证，证明改动有效 |
 | QC 回测 | 导出、报告存档与对比 | v0.4 云端实际运行与报告核对 |
 | 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
-| 实际券商 | Tiger SDK 只读适配及离线契约检查 | 有凭证的连接验证、券商模拟盘下单与恢复 |
+| Tiger 模拟券商 | 账户查询、限价下单/查询/撤单、持久化订单、防重复、实盘拦截；已联网验证提交与撤单 | 连续行情、完整策略运行、公司行动、取消批次后的人工处置流程 |
 
-本地执行器目前只接受 paper 模式。真实券商常有异步成交，需要进一步完善查询、恢复与公司行动处理。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
+执行器接受本地 paper 和 broker_paper 两种模拟模式，拒绝 live。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
 
 运行检查：
 
