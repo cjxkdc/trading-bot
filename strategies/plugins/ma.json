@@ -1,0 +1,1 @@
+{"type":"ma","kind":"single","version":"1.0","entrypoint":"strategies.moving_average:MovingAverage","description":"双均线单标的研究"}

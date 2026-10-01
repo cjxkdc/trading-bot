@@ -1,0 +1,1 @@
+{"type":"equal_weight","kind":"portfolio","version":"1.0","entrypoint":"strategies.equal_weight:EqualWeight","input_schema":"us_technology_daily_v1","description":"按稳定标识选取的等权对照插件，仅用于框架验证"}

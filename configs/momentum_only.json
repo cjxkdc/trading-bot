@@ -1,0 +1,13 @@
+{
+  "extends": "../portfolio_config.json",
+  "strategy": {
+    "type": "tech_profit_momentum",
+    "count": 5,
+    "weight": 0.19,
+    "lookback": 252,
+    "skip": 21,
+    "min_dollar_volume": 10000000,
+    "require_profit": false,
+    "industry_limit": 5
+  }
+}

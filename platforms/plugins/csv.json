@@ -1,0 +1,1 @@
+{"type":"csv","kind":"historical_data","version":"1.0","entrypoint":"platforms.data.csv:CsvData","description":"单标的总回报序列；用于原有 research.py"}

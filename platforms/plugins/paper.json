@@ -1,0 +1,1 @@
+{"type":"paper","kind":"broker","version":"1.0","entrypoint":"platforms.brokers.paper:PaperConnector","description":"本地报价回放账户；无券商连接"}

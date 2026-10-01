@@ -1,0 +1,4 @@
+{
+  "extends": "../portfolio_config.json",
+  "strategy": {"type": "equal_weight", "count": 5, "weight": 0.19}
+}

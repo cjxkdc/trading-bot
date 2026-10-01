@@ -1,0 +1,20 @@
+{
+  "symbol": "SPY",
+  "data_provider": "csv",
+  "initial_capital": 10000,
+  "cost_bps_one_way": 10,
+  "max_weight": 0.9,
+  "minimum_sessions": 200,
+  "periods": {
+    "development": ["2011-01-01", "2018-12-31"],
+    "validation": ["2019-01-01", "2022-12-31"],
+    "holdout": ["2023-01-01", "2025-12-31"]
+  },
+  "candidates": [
+    {"id": "ma20_60", "type": "ma", "fast": 20, "slow": 60},
+    {"id": "ma50_200", "type": "ma", "fast": 50, "slow": 200},
+    {"id": "momentum252_21", "type": "momentum", "lookback": 252, "skip": 21}
+  ],
+  "shortlist_size": 2,
+  "gates": {"min_cagr": 0, "max_drawdown": 0.25, "min_excess_cagr": 0}
+}

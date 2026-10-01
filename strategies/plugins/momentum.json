@@ -1,0 +1,1 @@
+{"type":"momentum","kind":"single","version":"1.0","entrypoint":"strategies.momentum:Momentum","description":"单标的动量研究"}

@@ -1,0 +1,1 @@
+{"type":"tech_profit_momentum","kind":"portfolio","version":"0.1","entrypoint":"strategies.tech_profit_momentum:TechProfitMomentum","input_schema":"us_technology_daily_v1","description":"科技股盈利动量；规则保持 v0.1"}

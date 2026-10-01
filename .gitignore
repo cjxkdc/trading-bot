@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local experiments and account state
+runs/
+*.sqlite
+*.sqlite-*
+*.sqlite.lock
+*.log
+
+# Local credentials and connection settings
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+
+.DS_Store
+Thumbs.db

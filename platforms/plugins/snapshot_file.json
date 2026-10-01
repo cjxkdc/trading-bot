@@ -1,0 +1,1 @@
+{"type":"snapshot_file","kind":"snapshot_data","version":"1.0","entrypoint":"platforms.data.snapshot:SnapshotFile","input_schema":"us_technology_daily_v1","description":"标准股票快照文件；本地回放输入"}

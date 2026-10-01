@@ -1,0 +1,1 @@
+{"type":"hold","kind":"single","version":"1.0","entrypoint":"strategies.hold:Hold","description":"买入持有基准"}
