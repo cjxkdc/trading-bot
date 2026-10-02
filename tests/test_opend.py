@@ -19,7 +19,7 @@ from platforms.opend import (ROOT, SDK_VERSION, OpenDError, BoundedConnection, c
     configuration_check, connection, load_sdk, select_account, settings, trade_context_class)
 from platforms.brokers.futu_paper import FutuPaperConnector
 from platforms.brokers.moomoo_paper import MoomooPaperConnector
-from platforms.brokers.opend_paper import OpenDPaperBroker, _account
+from platforms.brokers.opend_broker import OpenDBroker as OpenDPaperBroker, _account
 from platforms.data.opend_market import collect
 
 NOW = datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc)
@@ -98,7 +98,7 @@ class RegistrationTests(unittest.TestCase):
 
     def test_different_state_directory_fails_before_network(self):
         cfg = normalize_config(load_config(ROOT / 'futu_paper_config.json'))
-        with tempfile.TemporaryDirectory() as folder, patch('platforms.brokers.opend_paper.connection') as connect:
+        with tempfile.TemporaryDirectory() as folder, patch('platforms.brokers.opend_broker.connection') as connect:
             with self.assertRaisesRegex(ValueError, 'state directory'):
                 with open_broker_paper_session(cfg, None, Path(folder) / 'other', None):
                     self.fail('opened foreign ledger')
@@ -116,7 +116,7 @@ class RegistrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'
             cfg['broker']['state_dir'] = str(state)
-            with patch('platforms.brokers.opend_paper.connection', side_effect=OpenDError('not logged in')):
+            with patch('platforms.brokers.opend_broker.connection', side_effect=OpenDError('not logged in')):
                 with self.assertRaises(OpenDError):
                     with open_broker_paper_session(cfg, None, None, None):
                         self.fail('opened unauthenticated account')
@@ -144,7 +144,8 @@ class BrokerCases:
         self.folder = Path(temp.name)
         self.profile = {'provider': self.provider, 'user_id': '111', 'account_id': '123', 'reported_firm': 'N/A'}
         self.client = Mock()
-        self.client._paper_account, self.client._allow_orders = '123', True
+        self.client._verified_account, self.client._allow_orders = '123', True
+        self.client._trading_environment = 'SIMULATE'
         self.client.accinfo_query.return_value = (0, Table([{'us_cash': 10000, 'usd_net_cash_power': 9000,
                                                           'cash': 9999999, 'power': 9999999}]))
         self.client.position_list_query.return_value = (0, Table([]))
@@ -159,7 +160,7 @@ class BrokerCases:
         @contextmanager
         def fake_connection(*args, **kwargs):
             yield SDK, self.client, self.profile
-        with patch('platforms.brokers.opend_paper.connection', fake_connection):
+        with patch('platforms.brokers.opend_broker.connection', fake_connection):
             self.connector.initialize(self.folder, 99999999)
         self.path = self.folder / self.connector.state_files[0]
         self.broker = self.make_broker()
@@ -272,7 +273,7 @@ class BrokerCases:
         for key, value in (('provider', 'futu' if self.provider == 'moomoo' else 'moomoo'),
                            ('user_id', '222'), ('account_id', '456')):
             changed = dict(self.profile, **{key: value})
-            self.client._paper_account = changed['account_id']
+            self.client._verified_account = changed['account_id']
             with self.subTest(key=key), self.assertRaisesRegex(OpenDError, 'mismatched'):
                 OpenDPaperBroker(SDK, self.client, changed, self.path)
 
@@ -361,7 +362,7 @@ class RealSDKContracts(unittest.TestCase):
         with patch.object(base, '__init__', return_value=None):
             ctx = cls(filter_trdmarket=sdk.TrdMarket.US, security_firm=getattr(sdk.SecurityFirm,
                 'FUTUSECURITIES' if provider == 'futu' else 'FUTUAU'))
-        ctx._paper_account, ctx._allow_orders = '123', True
+        ctx._verified_account, ctx._allow_orders = '123', True
         ctx.get_sync_conn_id = lambda: 0
         ctx._check_acc_id_and_acc_index = lambda env, acc, index: (0, '', acc, ['US'])
         ctx._check_acc_id = lambda env, acc: (0, '', acc)

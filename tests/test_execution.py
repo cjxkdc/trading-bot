@@ -150,7 +150,7 @@ class PaperExecutionTests(unittest.TestCase):
             self.executor(proxy).run(decision(), self.quotes, NOW)
         proxy.submit.assert_not_called()
 
-    def test_only_paper_mode_is_supported(self):
+    def test_live_execution_requires_explicit_activation(self):
         proxy = Mock(mode='live')
         with self.assertRaisesRegex(ValueError, 'paper'):
             self.executor(proxy)

@@ -58,11 +58,11 @@ QC 的生成文件由框架契约、策略源码和平台适配器自动合成�
 
 数据层明确标记缺失数据，不能把故障转换为空选股清仓。一个账户只使用一个状态目录；缺失账本不得自动重建。运行同一交易日时修改策略或参数会被识别为另一批决策，不能覆盖旧批次。
 
-未来真实券商需要实现和核验异步订单、结算、公司行动与恢复。目前没有 live 入口；这属于执行系统后续建设，不影响保持策略源码独立。
+Futu/moomoo 已提供独立 live 入口，要求明确账户和执行激活；模拟与实盘共享订单接口、风控和恢复逻辑。实盘的联网验收、结算、公司行动及持续运行仍待完善，策略源码保持独立。
 
 Tiger 模拟执行是一轮一轮运行的：未完成订单暂停后续交易，恢复查询不重复发送。没有常驻轮询服务、行情订阅或已取消批次的自动处置。凭据和账户状态分别固定在 `secrets/tiger_paper/`、`runs/tiger-paper/`，不会被打包进 QC 或提交 Git。
 
-Futu 与 moomoo 各有独立平台入口，共用 `platforms/opend.py` 和 `platforms/brokers/opend_paper.py` 的协议转换与模拟订单恢复逻辑。两者分别持有连接配置、端口和 SQLite 账本；绑定包含平台、登录用户和模拟账号。策略源码与 `framework/` 没有引入这些 SDK。行情检查登记为 `market_reader`，不能冒充策略要求的完整 `snapshot_data`。详见 [OpenD 接入](platforms/opend.md)。
+Futu 与 moomoo 各有 paper/live 平台入口，共用 `platforms/opend.py` 和 `platforms/brokers/opend_broker.py` 的协议转换与订单恢复逻辑。连接配置和 SQLite 账本按平台与环境隔离；绑定包含平台、环境、登录用户和账号，旧 paper 指纹兼容保留。策略源码与 `framework/` 没有引入这些 SDK。行情检查登记为 `market_reader`，不能冒充策略要求的完整 `snapshot_data`。详见 [OpenD 接入](platforms/opend.md)。
 
 ## 参数与版本
 

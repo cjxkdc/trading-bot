@@ -1,0 +1,8 @@
+{
+  "extends": "portfolio_config.json",
+  "broker": {
+    "type": "moomoo_live",
+    "config_dir": "secrets/moomoo_live",
+    "state_dir": "runs/moomoo-live"
+  }
+}

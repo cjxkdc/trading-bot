@@ -1,0 +1,8 @@
+{
+  "extends": "portfolio_config.json",
+  "broker": {
+    "type": "futu_live",
+    "config_dir": "secrets/futu_live",
+    "state_dir": "runs/futu-live"
+  }
+}

@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
+from hashlib import md5
 import json
 from pathlib import Path
 import socket
@@ -26,12 +27,14 @@ class Settings:
     port: int
     account_id: str | None
     login_user_id: str | None
+    environment: str = 'SIMULATE'
 
 
-def settings(provider, config_dir=None):
-    if provider not in PROFILES:
-        raise OpenDError('Unknown OpenD provider')
-    folder = ROOT / (config_dir or ('secrets/' + provider))
+def settings(provider, config_dir=None, *, environment='SIMULATE'):
+    if provider not in PROFILES or environment not in {'SIMULATE', 'REAL'}:
+        raise OpenDError('Unknown OpenD provider or trading environment')
+    suffix = '_live' if environment == 'REAL' else ''
+    folder = ROOT / (config_dir or ('secrets/' + provider + suffix))
     path = folder / 'connection.json'
     value = {}
     if path.exists():
@@ -51,20 +54,22 @@ def settings(provider, config_dir=None):
                                  or not item.isdigit() or int(item) <= 0):
             raise OpenDError('Account and login IDs must be positive integer strings or null')
         ids.append(item)
-    return Settings(provider, host, port, *ids)
+    return Settings(provider, host, port, *ids, environment)
 
 
-def configuration_check(provider, config_dir=None):
-    cfg = settings(provider, config_dir)
+def configuration_check(provider, config_dir=None, *, environment='SIMULATE'):
+    cfg = settings(provider, config_dir, environment=environment)
     try:
         sdk = version(PROFILES[provider]['package'])
     except PackageNotFoundError:
         sdk = None
     issues = [] if sdk == SDK_VERSION else ['Install requirements-' + provider + '.txt']
+    if environment == 'REAL' and (cfg.account_id is None or cfg.login_user_id is None):
+        issues.append('Live connections require explicit account_id and login_user_id in connection.json')
     return {'provider': provider, 'mode': 'offline_check', 'status': 'not_ready' if issues else 'configuration_ready_not_authenticated',
             'network_requested': False, 'host': cfg.host, 'port': cfg.port,
             'configured_firm': PROFILES[provider]['firm'], 'sdk_version': sdk,
-            'account_selected': cfg.account_id is not None, 'issues': issues}
+            'account_selected': cfg.account_id is not None, 'account_environment': environment, 'issues': issues}
 
 
 def load_sdk(provider):
@@ -118,36 +123,60 @@ class BoundedConnection:
         return 0, ''
 
 
-def trade_context_class(sdk):
+def trade_context_class(sdk, environment='SIMULATE'):
+    if environment not in {'SIMULATE', 'REAL'}:
+        raise OpenDError('Unknown trading environment')
     queries = import_module(sdk.__name__ + '.trade.trade_query')
     readers = {queries.AccInfoQuery.pack_req, queries.PositionListQuery.pack_req,
                queries.OrderListQuery.pack_req, queries.HistoryOrderListQuery.pack_req}
     writers = {queries.PlaceOrder.pack_req, queries.ModifyOrder.pack_req}
 
-    class SimulatedContext(BoundedConnection, sdk.OpenSecTradeContext):
-        _paper_account = None
+    class ScopedContext(BoundedConnection, sdk.OpenSecTradeContext):
+        _verified_account = None
+        _trading_environment = environment
+        _verified_firm = None
         _allow_orders = False
 
         def _check_trd_env(self, trd_env):
-            if trd_env != sdk.TrdEnv.SIMULATE:
-                raise OpenDError('Only SIMULATE requests are allowed')
+            if trd_env != environment:
+                raise OpenDError('Request environment does not match this adapter: ' + environment)
             return super()._check_trd_env(trd_env)
 
         def _check_acc_id_and_acc_index(self, trd_env, acc_id, acc_index):
-            if not self._paper_account or str(acc_id) != self._paper_account:
-                raise OpenDError('An explicit verified simulation account ID is required')
+            if not self._verified_account or str(acc_id) != self._verified_account:
+                raise OpenDError('An explicit verified account ID is required')
             return super()._check_acc_id_and_acc_index(trd_env, acc_id, acc_index)
 
+        def unlock_trade(self, password=None, password_md5=None, is_unlock=True):
+            if (environment != 'REAL' or not self._allow_orders or not self._verified_account
+                    or not self._verified_firm or not isinstance(password, str) or not password
+                    or password_md5 is not None or is_unlock is not True):
+                raise OpenDError('Explicit live execution and an in-memory trade password are required to unlock')
+            # OpenD requires MD5 on the wire. Do not use the SDK helper: it retains the
+            # password for reconnects and subscribes every account after unlocking.
+            processor = self._get_sync_query_processor(queries.UnlockTrade.pack_req, queries.UnlockTrade.unpack_rsp)
+            ret, _, _ = processor(is_unlock=True, password_md5=md5(password.encode('utf-8')).hexdigest(),
+                                  conn_id=self.get_sync_conn_id(), security_firm=self._verified_firm)
+            return (0, None) if ret == 0 else (ret, 'Trade unlock failed')
+
         def _get_sync_query_processor(self, pack_func, unpack_func):
-            if pack_func != queries.GetAccountList.pack_req and pack_func not in readers | writers:
+            unlock = pack_func == queries.UnlockTrade.pack_req
+            if unlock and environment != 'REAL':
+                raise OpenDError('Simulation connections cannot unlock real trading')
+            if pack_func != queries.GetAccountList.pack_req and pack_func not in readers | writers and not unlock:
                 raise OpenDError('OpenD trade operation is not allowlisted')
             processor = super()._get_sync_query_processor(pack_func, unpack_func)
 
             def guarded(**kwargs):
-                if pack_func != queries.GetAccountList.pack_req:
-                    if (kwargs.get('trd_env') != sdk.TrdEnv.SIMULATE or not self._paper_account
-                            or str(kwargs.get('acc_id')) != self._paper_account):
-                        raise OpenDError('Request is outside the verified simulation account')
+                if unlock:
+                    if (not self._allow_orders or not self._verified_account or not self._verified_firm
+                            or kwargs.get('is_unlock') is not True
+                            or kwargs.get('security_firm') != self._verified_firm):
+                        raise OpenDError('Trade unlock is outside the explicitly enabled live connection')
+                elif pack_func != queries.GetAccountList.pack_req:
+                    if (kwargs.get('trd_env') != environment or not self._verified_account
+                            or str(kwargs.get('acc_id')) != self._verified_account):
+                        raise OpenDError('Request is outside the verified account and trading environment')
                     if pack_func in writers and not self._allow_orders:
                         raise OpenDError('Read-only diagnostics cannot place or cancel orders')
                     if pack_func == queries.ModifyOrder.pack_req and kwargs.get('modify_order_op') != sdk.ModifyOrderOp.CANCEL:
@@ -161,7 +190,7 @@ def trade_context_class(sdk):
                         raise OpenDError('Only regular-session US DAY limit orders are supported')
                 return processor(**kwargs)
             return guarded
-    return SimulatedContext
+    return ScopedContext
 
 
 def _check_identity(context, cfg):
@@ -174,6 +203,19 @@ def _check_identity(context, cfg):
 
 
 def select_account(rows, cfg, sdk):
+    if cfg.environment == 'REAL':
+        if cfg.account_id is None or cfg.login_user_id is None:
+            raise OpenDError('Live connections require explicit account and login IDs')
+        eligible = [r for r in rows if str(r.get('acc_id')) == cfg.account_id
+                    and r.get('trd_env') == sdk.TrdEnv.REAL
+                    and r.get('acc_status') == sdk.TrdAccStatus.ACTIVE
+                    and r.get('acc_type') in {sdk.TrdAccType.CASH, sdk.TrdAccType.MARGIN}
+                    and r.get('acc_role') == sdk.TrdAccRole.NORMAL
+                    and r.get('security_firm') == PROFILES[cfg.provider]['firm']
+                    and sdk.TrdMarket.US in (r.get('trdmarket_auth') or [])]
+        if len(eligible) != 1:
+            raise OpenDError('Selected live account is not an active US-enabled normal account at the configured regional broker')
+        return cfg.account_id, eligible[0]['security_firm']
     eligible = [r for r in rows if r.get('trd_env') == sdk.TrdEnv.SIMULATE
                 and r.get('sim_acc_type') == sdk.SimAccType.STOCK
                 and r.get('acc_status') == sdk.TrdAccStatus.ACTIVE
@@ -193,13 +235,20 @@ def select_account(rows, cfg, sdk):
 
 
 @contextmanager
-def connection(cfg, *, trade=False, allow_orders=False):
+def connection(cfg, *, trade=False, allow_orders=False, enable_live=False):
+    if cfg.environment not in {'SIMULATE', 'REAL'}:
+        raise OpenDError('Unknown trading environment')
+    if cfg.environment == 'REAL':
+        if cfg.account_id is None or cfg.login_user_id is None:
+            raise OpenDError('Live connections require explicit account and login IDs before connecting')
+        if allow_orders and enable_live is not True:
+            raise OpenDError('Live order transmission must be explicitly enabled')
     sdk, context = load_sdk(cfg.provider), None
     try:
         with socket.create_connection((cfg.host, cfg.port), timeout=2):
             pass
         if trade:
-            cls = trade_context_class(sdk)
+            cls = trade_context_class(sdk, cfg.environment)
             context = cls(filter_trdmarket=sdk.TrdMarket.US, host=cfg.host, port=cfg.port,
                           security_firm=getattr(sdk.SecurityFirm, PROFILES[cfg.provider]['firm']))
         else:
@@ -208,10 +257,11 @@ def connection(cfg, *, trade=False, allow_orders=False):
             context = QuoteContext(host=cfg.host, port=cfg.port,
                                    security_firm=getattr(sdk.SecurityFirm, PROFILES[cfg.provider]['firm']))
         user_id = _check_identity(context, cfg)
-        profile = {'user_id': user_id, 'provider': cfg.provider}
+        profile = {'user_id': user_id, 'provider': cfg.provider, 'environment': cfg.environment}
         if trade:
             account, firm = select_account(records(call(context, 'get_acc_list')), cfg, sdk)
-            context._paper_account, context._allow_orders = account, allow_orders
+            context._verified_account, context._allow_orders = account, allow_orders
+            context._verified_firm = PROFILES[cfg.provider]['firm']
             profile.update(account_id=account, reported_firm=firm)
         yield sdk, context, profile
     except OpenDError:

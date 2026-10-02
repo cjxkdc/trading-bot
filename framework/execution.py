@@ -1,4 +1,4 @@
-"""Recoverable simulation execution; unknown/partial outcomes never cause resubmits."""
+"""Recoverable execution; live brokers require explicit activation."""
 from dataclasses import asdict
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -13,8 +13,10 @@ class ExecutionBlocked(RuntimeError):
 
 class Executor:
     def __init__(self, broker, journal, policy, fees):
-        if broker.mode not in {"paper", "broker_paper"}:
-            raise ValueError("This release supports paper execution only")
+        if broker.mode not in {"paper", "broker_paper", "live"}:
+            raise ValueError("Unsupported execution mode")
+        if broker.mode == 'live' and getattr(broker, 'live_enabled', False) is not True:
+            raise ValueError('Live execution must be explicitly enabled; paper remains the default')
         self.broker, self.journal, self.policy, self.fees = broker, journal, policy, fees
 
     def _reconcile(self, order, result):
@@ -42,7 +44,7 @@ class Executor:
             return self._run(decision, quotes, now)
 
     def _run(self, decision, quotes, now):
-        if self.broker.mode == 'broker_paper':
+        if self.broker.mode in {'broker_paper', 'live'}:
             now = self.broker.execution_time()
         if (digest(decision.record) != decision.decision_id
                 or decision.record["targets"] != [asdict(t) for t in decision.targets]):
@@ -50,7 +52,7 @@ class Executor:
         if now.tzinfo is None or now.astimezone(ZoneInfo("America/New_York")).date().isoformat() != decision.record["execution_day"]:
             raise ExecutionBlocked("Decision belongs to another execution session")
         account = self.broker.account()
-        if self.broker.mode == 'broker_paper':
+        if self.broker.mode in {'broker_paper', 'live'}:
             now = self.broker.execution_time()
         cycle = account.account_id + ":" + decision.record["execution_day"]
         if self.journal.has_later_cycle(cycle):
@@ -81,7 +83,7 @@ class Executor:
             if self.broker.open_orders():
                 raise ExecutionBlocked("Broker has unresolved orders")
             current_account = self.broker.account()
-            if self.broker.mode == 'broker_paper':
+            if self.broker.mode in {'broker_paper', 'live'}:
                 now = self.broker.execution_time()
                 if now.astimezone(ZoneInfo('America/New_York')).date().isoformat() != decision.record['execution_day']:
                     raise ExecutionBlocked('Trading session changed; no further orders submitted')

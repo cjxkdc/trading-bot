@@ -1,6 +1,6 @@
 """Futu HK simulation profile."""
-from platforms.brokers.opend_paper import OpenDPaperConnector
+from platforms.brokers.opend_broker import OpenDConnector
 
 
-class FutuPaperConnector(OpenDPaperConnector):
+class FutuPaperConnector(OpenDConnector):
     provider = 'futu'

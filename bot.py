@@ -2,7 +2,7 @@
 import argparse
 import json
 from pathlib import Path
-from assembly import (inspect_broker, inspect_market_data, open_paper_session, open_broker_paper_session, platform_catalog, prepare_portfolio,
+from assembly import (inspect_broker, inspect_market_data, open_paper_session, open_broker_paper_session, open_live_session, platform_catalog, prepare_portfolio,
                       strategy_catalog, write_demo_snapshot)
 from framework.configuration import load_config, normalize_config
 from framework.journal import packed
@@ -23,6 +23,27 @@ def run_broker_paper(snapshot_path, config_path=TIGER_PAPER_CONFIG, state_dir=No
     cfg, runner, snapshot, decision = prepare_portfolio(config_path, snapshot_path)
     with open_broker_paper_session(cfg, snapshot, state_dir, runner.fees) as (broker, journal):
         return dict(runner.execute(decision, snapshot, broker, journal), mode='broker_paper')
+
+
+def run_live(snapshot_path, config_path, state_dir=None, *, enable_live=False, unlock=False):
+    if enable_live is not True:
+        raise ValueError('Live execution requires --enable-live')
+    cfg, runner, snapshot, decision = prepare_portfolio(config_path, snapshot_path)
+    with open_live_session(cfg, snapshot, state_dir, runner.fees, enable_live=True) as (broker, journal):
+        if unlock:
+            import getpass
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', getpass.GetPassWarning)
+                try:
+                    password = getpass.getpass('OpenD trade password (not stored): ')
+                except (getpass.GetPassWarning, EOFError):
+                    raise OpenDError('Secure password input is unavailable; use an interactive terminal or unlock in OpenD GUI') from None
+            try:
+                broker.unlock(password)
+            finally:
+                del password
+        return dict(runner.execute(decision, snapshot, broker, journal), mode='live')
 
 
 def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None, note=""):
@@ -67,6 +88,12 @@ def main():
     trade.add_argument('--snapshot', type=Path, required=True, help='Current real-market snapshot; never synthetic demo data')
     trade.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
     trade.add_argument('--state', type=Path, help='Must match the broker configuration state_dir')
+    live = sub.add_parser('broker-live', help='Real-account execution; explicit configuration and activation required')
+    live.add_argument('--snapshot', type=Path, required=True)
+    live.add_argument('--config', type=Path, required=True, help='A *_live_config.json; no live default')
+    live.add_argument('--state', type=Path, help='Must match the configured live state directory')
+    live.add_argument('--enable-live', action='store_true', help='Explicitly enable real order transmission for this invocation')
+    live.add_argument('--unlock', action='store_true', help='Command-line OpenD only: prompt for trade password; GUI users unlock in OpenD')
     export = sub.add_parser("export-qc", help="Export code to paste into QuantConnect; does not run it")
     export.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     export.add_argument("--out", type=Path, required=True, help="New directory for this experiment")
@@ -164,12 +191,18 @@ def main():
         print(json.dumps(display, indent=2))
         if result.get('issues') or result.get('status') == 'failed':
             parser.exit(2)
-    elif args.command == 'broker-paper':
+    elif args.command in {'broker-paper', 'broker-live'}:
         from framework.execution import ExecutionBlocked
         from platforms.brokers.tiger_paper import TigerPaperError
         try:
-            print(packed(run_broker_paper(args.snapshot, args.config, args.state)))
-        except (ExecutionBlocked, TigerPaperError, OpenDError) as exc:
+            if args.command == 'broker-live':
+                if not args.enable_live:
+                    parser.error('broker-live requires --enable-live; no connection or order was attempted')
+                result = run_live(args.snapshot, args.config, args.state, enable_live=True, unlock=args.unlock)
+            else:
+                result = run_broker_paper(args.snapshot, args.config, args.state)
+            print(packed(result))
+        except (ExecutionBlocked, TigerPaperError, OpenDError, ValueError) as exc:
             print(json.dumps({'status': 'paused', 'reason': str(exc), 'automatic_retry': False}))
             parser.exit(2)
     else:

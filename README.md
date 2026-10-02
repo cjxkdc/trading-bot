@@ -1,6 +1,6 @@
-# Trading bot — 模块化交易研究 v0.6
+# Trading bot — 模块化交易研究 v0.7
 
-策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行，以及 Tiger、Futu 香港、moomoo AU 模拟券商模块。Futu/moomoo 完成离线测试，等待登录验证。
+策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行、Tiger 模拟券商，以及 Futu 香港/moomoo AU 的 paper 和实盘接口。Futu/moomoo 完成离线测试，等待登录验证；默认仍是模拟执行。
 
 ## 三块各自做什么
 
@@ -94,7 +94,7 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 .venv\Scripts\python.exe bot.py broker-status --connect
 ```
 
-模拟账户仅接受 17 位模拟账号，并要求 Tiger 返回 `account_type=PAPER`。所有 API 请求都检查账户归属，真实账号在客户端初始化前即被拦截。没有实盘执行入口。
+Tiger 模拟账户仅接受 17 位模拟账号，并要求 Tiger 返回 `account_type=PAPER`。该模块所有 API 请求都检查账户归属，真实账号在客户端初始化前即被拦截。Tiger 目前没有实盘模块。
 
 `broker-paper --snapshot <当日真实行情快照>` 可执行一轮模拟调仓。订单尚未成交时暂停，保留订单账本，下次核对已有订单，不重复发送。同一框架负责策略计算和风控，Tiger 平台模块负责实际的模拟订单。当前还没有自动行情订阅、完整实时股票池或持续运行的调度器。
 
@@ -119,7 +119,13 @@ python bot.py broker-status --config futu_paper_config.json
 python bot.py broker-status --config moomoo_paper_config.json
 ```
 
-以上默认离线。代码仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复；登录和联网验收尚未进行。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
+以上默认离线。paper 模块仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复；登录和联网验收尚未进行。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
+
+## v0.7：独立实盘接口
+
+新增 `futu_live` 和 `moomoo_live`，与各自 paper 模块共用订单实现和执行框架；四套配置继承同一策略，账本按平台和交易环境分开。实盘必须填写账户/登录 ID，由券商确认区域、账户类型和 US 权限，并验证所交易标的是股票/ETF。
+
+`broker-status --config futu_live_config.json` 默认只作离线检查；加 `--connect` 也只读。真正执行使用独立 `broker-live` 命令和 `--enable-live` 参数，没有实盘默认配置。只读检查不会解锁或交易。这次未登录、未发送实盘订单，使用步骤及 GUI/命令行 OpenD 的解锁区别见 [接入说明](platforms/opend.md)。
 
 ## v0.3 已有基础
 
@@ -140,8 +146,9 @@ python bot.py broker-status --config moomoo_paper_config.json
 | 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
 | Tiger 模拟券商 | 账户查询、限价下单/查询/撤单、持久化订单、防重复、实盘拦截；已联网验证提交与撤单 | 连续行情、完整策略运行、公司行动、取消批次后的人工处置流程 |
 | Futu / moomoo 模拟券商 | 独立配置与账本、SIMULATE 限价单/查询/撤单、离线 SDK 与恢复测试 | 本人登录与权限核验、模拟订单联网验收、完整科技股行情输入 |
+| Futu / moomoo 实盘接口 | 独立 REAL 账户、只读查询、显式启用后的限价单/查询/撤单/解锁、标的类型验证；离线测试 | 本人登录、实盘接口与费用/结算验收、完整数据源与持续运行 |
 
-执行器接受本地 paper 和 broker_paper 两种模拟模式，拒绝 live。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
+执行器接受本地 paper、broker_paper，以及明确启用的 live 模式。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
 
 运行检查：
 

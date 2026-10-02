@@ -1,21 +1,25 @@
-# 富途香港与 moomoo AU：模拟账户接入
+# 富途香港与 moomoo AU：paper 与实盘接口
 
-代码和离线测试已完成，尚未登录 OpenD 验证本人的账户、行情权限或模拟订单。此版本只接受 `SIMULATE`，不提供实盘入口。
+两家平台均提供模拟盘与实盘接口，代码和离线测试已完成。尚未登录 OpenD 验证本人的账户、权限和订单，也未解锁交易或发送实盘订单。默认仍为模拟盘；实盘使用独立模块、配置和启动参数。
 
 ## 如何切换
 
 | 选择 | 富途香港 | moomoo AU |
 |---|---|---|
 | 模拟券商模块 | `futu_paper` | `moomoo_paper` |
+| 实盘券商模块 | `futu_live` | `moomoo_live` |
 | 行情检查模块 | `futu_market` | `moomoo_market` |
 | 策略运行配置 | `futu_paper_config.json` | `moomoo_paper_config.json` |
+| 实盘运行配置 | `futu_live_config.json` | `moomoo_live_config.json` |
 | 本地设置目录 | `secrets/futu/` | `secrets/moomoo/` |
 | 默认账本目录 | `runs/futu-paper/` | `runs/moomoo-paper/` |
+| 实盘设置目录 | `secrets/futu_live/` | `secrets/moomoo_live/` |
+| 实盘账本目录 | `runs/futu-live/` | `runs/moomoo-live/` |
 | 本项目约定端口 | `127.0.0.1:11111` | `127.0.0.1:11112` |
 | 官方 Python SDK | `futu-api` | `moomoo-api` |
 | 配置的券商区域 | `FUTUSECURITIES` | `FUTUAU` |
 
-两个配置继承同一个科技股盈利动量策略；切换配置不用改策略或执行框架。底层协议代码在 `opend.py`、`brokers/opend_paper.py`、`data/opend_market.py`，各平台保留独立入口和设置。
+四个配置继承同一个科技股盈利动量策略，复用同一执行框架。底层协议代码在 `opend.py`、`brokers/opend_broker.py`、`data/opend_market.py`；`brokers/opend_paper.py` 保留旧导入名兼容。paper 固定使用 SIMULATE，live 固定使用 REAL；不能在连接 JSON 中随意覆盖环境。旧 paper 账户指纹、订单备注和账本格式保持兼容。
 
 **11112 是我们为避免端口冲突作的约定，不是 moomoo 的出厂默认值。** 同时开两个 OpenD 时，应在 moomoo OpenD 中改为 11112；也可以在本地 JSON 指定实际端口。
 
@@ -32,6 +36,8 @@ python bot.py market-status --provider moomoo_market
 ```
 
 默认不会联网。`configuration_ready_not_authenticated` 只说明离线设置和 SDK 版本通过检查，不代表账户接通。
+
+也可以对实盘配置执行 `broker-status --config futu_live_config.json` 或 `--config moomoo_live_config.json`。未填写实盘账户与登录 ID 时会返回 `not_ready`，不会尝试连接或自动选择第一个账户。
 
 ## 之后登录时
 
@@ -73,6 +79,38 @@ python bot.py broker-paper --config moomoo_paper_config.json --snapshot <当日�
 
 ## 验证与来源
 
-测试覆盖两套固定版本 SDK 的真实方法签名和调用参数、实盘拦截、账户绑定、防重复发送、超时恢复、部分成交、撤单确认与行情失败。网络通信全部使用测试替身；联网验收留到本人登录之后。CI 同时安装 Tiger/Futu/moomoo SDK，在 Linux 和 Windows 回归。
+测试覆盖两套固定版本 SDK 的真实方法签名和调用参数、paper/live 隔离、账户绑定、防重复发送、超时恢复、部分成交、撤单确认与行情失败。实盘测试也完全使用模拟通信；通过离线测试不代表已完成实盘验收。CI 同时安装 Tiger/Futu/moomoo SDK，在 Linux 和 Windows 回归。
 
 官方资料：[接入架构](https://openapi.futunn.com/futu-api-doc/intro/intro.html)、[模拟下单](https://openapi.futunn.com/futu-api-doc/trade/place-order.html)、[资金字段](https://openapi.futunn.com/futu-api-doc/trade/get-funds.html)、[财务报表](https://openapi.futunn.com/futu-api-doc/quote/get-financials-statements.html)。
+
+## 实盘配置与使用
+
+将 `configs/futu_live_connection.example.json` 或 `configs/moomoo_live_connection.example.json` 复制为对应实盘设置目录内的 `connection.json`。必须填入本人真实 `account_id` 和 `login_user_id`，两者均为数字字符串；端口仍对应同一平台的 OpenD。禁止填写交易密码，凭据和账本均被 Git 忽略。
+
+实盘连接要求账户列表明确返回：REAL、有效状态、普通账户角色、US 交易权限，以及配置对应的香港/澳洲券商。可连接现金或保证金账户，但当前代码只支持现金覆盖的买入，不使用借贷购买力。选择 paper 账户、错误券商或无法验证的账户都会停止。
+
+先做只读检查：
+
+```text
+python bot.py broker-status --config futu_live_config.json --connect
+python bot.py broker-status --config moomoo_live_config.json --connect
+```
+
+该检查不会解锁、下单或撤单。正式执行入口是 `broker-live`；普通 `paper` 和 `broker-paper` 命令会拒绝实盘配置。实盘和模拟盘不共用状态目录，也不能复制账本互换环境。
+
+后续完成登录、权限和数据验收，并明确决定发送实盘订单时，才运行：
+
+```text
+python bot.py broker-live --config futu_live_config.json --snapshot <当日真实快照.json> --enable-live
+python bot.py broker-live --config moomoo_live_config.json --snapshot <当日真实快照.json> --enable-live
+```
+
+`--enable-live` 只为这次程序调用开启实盘发送；没有此参数会在读取快照和连接账户之前停止。`initial_cash` 不会改变真实资金，账户余额由券商查询取得。限价、整股、USD 现金、报价时效、仓位上限与订单恢复沿用同一框架。
+
+实盘还会通过 OpenD 标的基本信息核验持仓和拟交易股票，只允许未退市的美股股票/ETF，拒绝期权、其他衍生品或类型无法确认的代码。已持有的股票必须包含在快照的稳定资产 ID 映射内。
+
+**交易解锁**：GUI 版 OpenD 需要在界面中手动解锁，不使用 `--unlock`。命令行版 OpenD 可以给上述实盘命令加 `--unlock`，程序使用不回显输入读取密码，调用解锁接口；密码不写入配置、日志或账本，不为重连保留密码。官方解锁作用于 OpenD，同一个网关的其他连接也可能共享解锁状态；关闭本程序不会自动重新锁定 OpenD。见[官方解锁说明](https://openapi.futunn.com/futu-api-doc/trade/unlock.html)。
+
+平台解锁不等于本程序启用实盘：即使 OpenD 已解锁，也仍须选择 live 配置和 `--enable-live`。实盘账户的查询/下单/撤单方法与 paper 一致，额外提供 `broker.unlock(password)` 供明确启用的命令行 OpenD 连接使用。
+
+当前仍是单次执行/对账接口，尚无连续行情、全天调度器、公司行动同步或完整科技股数据输入。订单费用字段和数据准备限制与上面的模拟接口相同；实盘成交与账本须在联网验收中进一步核对。

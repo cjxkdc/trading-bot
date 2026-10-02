@@ -136,7 +136,7 @@ def open_paper_session(cfg, snapshot, state_dir, fees):
     connector = _build_platform(cfg["broker"], "broker")
     if connector.mode != "paper":
         raise ValueError("This release supports paper connections only")
-    with _open_simulation_session(connector, cfg, snapshot, state_dir, fees) as session:
+    with _open_execution_session(connector, cfg, snapshot, state_dir, fees) as session:
         yield session
 
 
@@ -149,12 +149,27 @@ def open_broker_paper_session(cfg, snapshot, state_dir, fees):
     # Validate the canonical location before creating directories or ledgers.
     if state_dir != connector.state_dir:
         raise ValueError('Use the configured broker paper state directory')
-    with _open_simulation_session(connector, cfg, snapshot, state_dir, fees) as session:
+    with _open_execution_session(connector, cfg, snapshot, state_dir, fees) as session:
         yield session
 
 
 @contextmanager
-def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
+def open_live_session(cfg, snapshot, state_dir, fees, *, enable_live=False):
+    if enable_live is not True:
+        raise ValueError('Live execution requires --enable-live')
+    connector = _build_platform(cfg['broker'], 'broker')
+    if connector.mode != 'live':
+        raise ValueError('The live command requires a live broker configuration')
+    state_dir = Path(state_dir).resolve() if state_dir else connector.state_dir
+    if state_dir != connector.state_dir:
+        raise ValueError('Use the configured live state directory')
+    with _open_execution_session(connector, cfg, snapshot, state_dir, fees,
+                                 connect_options={'enable_live': True}) as session:
+        yield session
+
+
+@contextmanager
+def _open_execution_session(connector, cfg, snapshot, state_dir, fees, *, connect_options=None):
     state_dir = Path(state_dir)
     names = (*connector.state_files, "journal.sqlite")
     if len(set(names)) != len(names) or any(
@@ -162,7 +177,7 @@ def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
         raise ValueError("Adapter state files must be unique plain file names")
     if state_dir.exists():
         if not all((state_dir / name).is_file() for name in names):
-            raise ValueError("Incomplete paper state; never recreate a missing ledger/account")
+            raise ValueError("Incomplete account state; never recreate a missing ledger/account")
     else:
         state_dir.mkdir(parents=True, exist_ok=False)
         try:
@@ -176,7 +191,7 @@ def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
                 pass
             raise
         Journal(state_dir / "journal.sqlite").close()
-    broker = connector.connect(state_dir, snapshot, fees)
+    broker = connector.connect(state_dir, snapshot, fees, **(connect_options or {}))
     try:
         journal = Journal(state_dir / "journal.sqlite")
         try:
@@ -185,6 +200,9 @@ def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
             journal.close()
     finally:
         broker.close()
+
+
+_open_simulation_session = _open_execution_session  # Compatibility for existing local integrations.
 
 
 def write_demo_snapshot(path):

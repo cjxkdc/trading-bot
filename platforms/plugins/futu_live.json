@@ -1,0 +1,8 @@
+{
+  "type": "futu_live",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "platforms.brokers.futu_live:FutuLiveConnector",
+  "account_status": true,
+  "description": "Futu HK real-account adapter; explicit account, live activation and separate durable ledger required"
+}

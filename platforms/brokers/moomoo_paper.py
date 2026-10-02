@@ -1,6 +1,6 @@
 """moomoo AU simulation profile."""
-from platforms.brokers.opend_paper import OpenDPaperConnector
+from platforms.brokers.opend_broker import OpenDConnector
 
 
-class MoomooPaperConnector(OpenDPaperConnector):
+class MoomooPaperConnector(OpenDConnector):
     provider = 'moomoo'
