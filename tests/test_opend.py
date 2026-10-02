@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 from assembly import _build_platform, inspect_broker, inspect_market_data, open_broker_paper_session
 from framework.configuration import load_config, normalize_config
 from framework.contracts import OrderIntent
-from platforms.opend import (ROOT, SDK_VERSION, OpenDError, BoundedConnection, call,
+from platforms.opend import (ROOT, PROFILES, SDK_VERSION, Settings, OpenDError, BoundedConnection, call,
     configuration_check, connection, load_sdk, select_account, settings, trade_context_class)
 from platforms.brokers.futu_paper import FutuPaperConnector
 from platforms.brokers.moomoo_paper import MoomooPaperConnector
@@ -26,7 +26,7 @@ NOW = datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc)
 SDK = NS(TrdEnv=NS(SIMULATE='SIMULATE', REAL='REAL'), TrdMarket=NS(US='US', NONE='N/A'),
          Currency=NS(USD='USD'), PositionSide=NS(LONG='LONG'), OrderType=NS(NORMAL='NORMAL'),
          TimeInForce=NS(DAY='DAY'), Session=NS(RTH='RTH'), ModifyOrderOp=NS(CANCEL='CANCEL'),
-         SimAccType=NS(STOCK='STOCK'), TrdAccStatus=NS(ACTIVE='ACTIVE'),
+         SimAccType=NS(STOCK='STOCK', STOCK_AND_OPTION='STOCK_AND_OPTION'), TrdAccStatus=NS(ACTIVE='ACTIVE'),
          KLType=NS(K_DAY='K_DAY'), AuType=NS(QFQ='QFQ'))
 
 
@@ -82,9 +82,10 @@ class RegistrationTests(unittest.TestCase):
             self.assertEqual(settings('futu', folder).account_id, '123')
 
     def test_account_selection_excludes_real_derivatives_disabled_and_wrong_region(self):
-        cfg = settings('futu')
+        cfg = Settings('futu', '127.0.0.1', 11111, None, None)
         self.assertEqual(select_account([account_row(trd_env='REAL', acc_id=9), account_row()], cfg, SDK)[0], '123')
-        for row in (account_row(trd_env='REAL'), account_row(sim_acc_type='STOCK_AND_OPTION'),
+        for row in (account_row(trd_env='REAL'), account_row(sim_acc_type='OPTION'),
+                    account_row(sim_acc_type='FUTURES'),
                     account_row(acc_status='DISABLED'), account_row(trdmarket_auth=['HK']),
                     account_row(security_firm='FUTUAU')):
             with self.subTest(row=row), self.assertRaises(OpenDError):
@@ -424,13 +425,13 @@ class RealSDKContracts(unittest.TestCase):
             client.get_acc_list.return_value = (0, Table([account_row()]))
             cls = Mock(return_value=client)
             with patch('platforms.opend.socket.create_connection') as socket, patch('platforms.opend.trade_context_class', return_value=cls):
-                cfg = replace(settings(provider), login_user_id='222')
+                cfg = Settings(provider, '127.0.0.1', PROFILES[provider]['port'], None, None)
                 with self.assertRaisesRegex(OpenDError, 'different platform user'):
-                    with connection(cfg, trade=True):
+                    with connection(replace(cfg, login_user_id='222'), trade=True):
                         self.fail('mismatched login accepted')
                 client.close.assert_called_once()
                 client.reset_mock()
-                with connection(settings(provider), trade=True) as (_, _, profile):
+                with connection(cfg, trade=True) as (_, _, profile):
                     self.assertEqual(profile['account_id'], '123')
                     self.assertFalse(client._allow_orders)
                 client.close.assert_called_once()

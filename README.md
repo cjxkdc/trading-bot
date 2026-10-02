@@ -119,13 +119,13 @@ python bot.py broker-status --config futu_paper_config.json
 python bot.py broker-status --config moomoo_paper_config.json
 ```
 
-以上默认离线。paper 模块仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复；登录和联网验收尚未进行。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
+以上默认离线。paper 模块仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复。Futu 已于 2026-10-02 完成模拟账户绑定、资金/持仓/挂单及 AAPL 元数据与快照的联网查询；支持当前美股股票/期权合并模拟账户，但仍只用现金交易股票/ETF。模拟订单生命周期及 moomoo 登录仍待联网验收。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
 
 ## v0.7：独立实盘接口
 
 新增 `futu_live` 和 `moomoo_live`，与各自 paper 模块共用订单实现和执行框架；四套配置继承同一策略，账本按平台和交易环境分开。实盘必须填写账户/登录 ID，由券商确认区域、账户类型和 US 权限，并验证所交易标的是股票/ETF。
 
-`broker-status --config futu_live_config.json` 默认只作离线检查；加 `--connect` 也只读。真正执行使用独立 `broker-live` 命令和 `--enable-live` 参数，没有实盘默认配置。只读检查不会解锁或交易。这次未登录、未发送实盘订单，使用步骤及 GUI/命令行 OpenD 的解锁区别见 [接入说明](platforms/opend.md)。
+`broker-status --config futu_live_config.json` 默认只作离线检查；加 `--connect` 也只读。真正执行使用独立 `broker-live` 命令和 `--enable-live` 参数，没有实盘默认配置。只读检查不会解锁或交易。实盘连接尚未验收，未发送实盘订单，使用步骤及 GUI/命令行 OpenD 的解锁区别见 [接入说明](platforms/opend.md)。
 
 ## v0.3 已有基础
 
@@ -145,7 +145,7 @@ python bot.py broker-status --config moomoo_paper_config.json
 | QC 回测 | 导出、报告存档与对比 | v0.4 云端实际运行与报告核对 |
 | 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
 | Tiger 模拟券商 | 账户查询、限价下单/查询/撤单、持久化订单、防重复、实盘拦截；已联网验证提交与撤单 | 连续行情、完整策略运行、公司行动、取消批次后的人工处置流程 |
-| Futu / moomoo 模拟券商 | 独立配置与账本、SIMULATE 限价单/查询/撤单、离线 SDK 与恢复测试 | 本人登录与权限核验、模拟订单联网验收、完整科技股行情输入 |
+| Futu / moomoo 模拟券商 | 独立配置与账本、SIMULATE 限价单/查询/撤单、离线 SDK 与恢复测试；Futu 账户及单股快照已联网读取 | moomoo 登录与权限核验、模拟订单联网验收、完整科技股行情输入 |
 | Futu / moomoo 实盘接口 | 独立 REAL 账户、只读查询、显式启用后的限价单/查询/撤单/解锁、标的类型验证；离线测试 | 本人登录、实盘接口与费用/结算验收、完整数据源与持续运行 |
 
 执行器接受本地 paper、broker_paper，以及明确启用的 live 模式。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。

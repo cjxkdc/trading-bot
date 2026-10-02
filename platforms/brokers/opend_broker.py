@@ -55,6 +55,22 @@ def _scope(sdk, profile):
     return {'trd_env': getattr(sdk.TrdEnv, environment), 'acc_id': int(profile['account_id'])}
 
 
+def _needs_instrument_validation(profile):
+    return profile.get('environment') == 'REAL' or profile.get('sim_acc_type') == 'STOCK_AND_OPTION'
+
+
+def _cash_balance(row, profile):
+    usd_cash = _number(row.get('us_cash'))
+    cash_power = row.get('usd_net_cash_power')
+    if (cash_power in (None, 'N/A') and profile.get('environment') == 'SIMULATE'
+            and profile.get('sim_acc_type') == 'STOCK_AND_OPTION'
+            and tuple(profile.get('trdmarket_auth') or ()) == ('US',)):
+        # US-only combined paper accounts omit per-currency cash buying power.
+        # Frozen funds are USD here. Never use the account's leveraged `power`.
+        return max(Decimal(0), usd_cash - _number(row.get('frozen_cash')))
+    return min(usd_cash, _number(cash_power))
+
+
 def _account(sdk, client, profile, clock, instrument_check=None):
     started = clock()
     scope = _scope(sdk, profile)
@@ -64,7 +80,7 @@ def _account(sdk, client, profile, clock, instrument_check=None):
     if len(assets) != 1:
         raise OpenDError('Expected exactly one account asset record')
     # Aggregated cash and margin buying power can include other currencies/credit.
-    cash = min(_number(assets[0].get('us_cash')), _number(assets[0].get('usd_net_cash_power')))
+    cash = _cash_balance(assets[0], profile)
     holdings, sellable = {}, {}
     for row in rows:
         code = row.get('code', '')
@@ -79,9 +95,9 @@ def _account(sdk, client, profile, clock, instrument_check=None):
         if qty:
             holdings[code[3:]] = qty
         sellable[code[3:]] = available
-    if profile.get('environment') == 'REAL':
-        if instrument_check is None:
-            raise OpenDError('Live positions require broker instrument validation')
+    if _needs_instrument_validation(profile):
+        if not callable(instrument_check):
+            raise OpenDError('Live and combined paper positions require broker instrument validation')
         instrument_check(tuple(holdings))
     suffix = 'live' if profile.get('environment') == 'REAL' else 'paper'
     value = Account(profile['provider'] + '-' + suffix + ':' + _identity(profile)[:20], 'USD', cash,
@@ -142,7 +158,7 @@ class OpenDConnector:
             sdk, client, profile = stack.enter_context(connection(self._settings(), trade=True,
                 allow_orders=allow_orders, enable_live=enable_live))
             validate = None
-            if self.environment == 'REAL':
+            if _needs_instrument_validation(profile):
                 _, quotes, quote_profile = stack.enter_context(connection(self._settings()))
                 if quote_profile['user_id'] != profile['user_id']:
                     raise OpenDError('Trade and instrument-data connections must use the same login')
@@ -213,6 +229,8 @@ class OpenDBroker:
             raise OpenDError('Verified account, matching environment and order permission required')
         if environment == 'REAL' and (enable_live is not True or not callable(instrument_check)):
             raise OpenDError('Live execution requires explicit activation and broker instrument validation')
+        if _needs_instrument_validation(profile) and not callable(instrument_check):
+            raise OpenDError('Combined paper accounts require broker instrument validation')
         self.live_enabled = environment == 'REAL' and enable_live is True
         self.mode = 'live' if self.live_enabled else 'broker_paper'
         self.instrument_check = instrument_check

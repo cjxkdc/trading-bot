@@ -1,6 +1,6 @@
 # 富途香港与 moomoo AU：paper 与实盘接口
 
-两家平台均提供模拟盘与实盘接口，代码和离线测试已完成。尚未登录 OpenD 验证本人的账户、权限和订单，也未解锁交易或发送实盘订单。默认仍为模拟盘；实盘使用独立模块、配置和启动参数。
+两家平台均提供模拟盘与实盘接口，代码和离线测试已完成。2026-10-02 已登录 Futu OpenD，联网核验美股模拟账户的资金、持仓、挂单以及 AAPL 标的信息和行情快照；本次未下单或撤单。moomoo 与实盘连接仍未联网验收。默认仍为模拟盘；实盘使用独立模块、配置和启动参数。
 
 ## 如何切换
 
@@ -60,9 +60,9 @@ python bot.py market-status --provider moomoo_market --connect --symbol AAPL --o
 
 模拟券商已实现账户/持仓读取、美股整股 DAY 限价单、订单查询和撤单。仅常规交易时段，拒绝做空、借贷买入、合成 DEMO 股票以及单笔超过 100,000 美元的订单。所有交易请求显式指定已核验的模拟账户；不使用 SDK 默认的真实交易环境或账户索引。
 
-当前只支持 `sim_acc_type=STOCK` 且有 US 权限的有效模拟账户。股票与期权混合账户、竞赛账户等会被拒绝。模拟账户可能返回 `security_firm=N/A`，因此区域是连接配置，不能把它当作澳洲或香港实盘账户归属的认证结果；账户绑定同时检查平台、登录用户和模拟账号。
+支持有 US 权限的有效 `STOCK` 模拟账户，以及仅有 US 权限的 `STOCK_AND_OPTION` 美股融资融券模拟账户。后者是富途当前的美股股票/期权合并模拟账户；连接后仍只允许现金覆盖的股票/ETF 交易，并额外核验所有持仓和拟交易标的，拒绝期权和其他衍生品。纯期权、期货、停用及类型不明的账户会被拒绝。模拟账户可能返回 `security_firm=N/A`，因此区域是连接配置，不能把它当作澳洲或香港实盘账户归属的认证结果；账户绑定同时检查平台、登录用户和模拟账号。见[官方账户类型说明](https://openapi.futunn.com/futu-api-doc/trade/get-acc-list.html)。
 
-可用现金取 USD 现金与 USD 现金购买力的较小值，不使用跨币种总资产或保证金购买力；缺少对应字段会停止。订单回包没有佣金字段，框架中 `OrderState.fees=0` 表示费用未取得，**不是零手续费**。买单预检仍扣留配置中的估算费用，账户现金以平台结果为准。
+可用现金通常取 USD 现金与 USD 现金购买力的较小值，不使用跨币种总资产或保证金购买力。已核验仅有 US 权限的合并模拟账户可能返回 `usd_net_cash_power=N/A`：此时取 `us_cash - frozen_cash`，最低为零；缺失冻结资金、错误金额、其他账户类型或实盘均不会使用此兼容路径。订单回包没有佣金字段，框架中 `OrderState.fees=0` 表示费用未取得，**不是零手续费**。买单预检仍扣留配置中的估算费用，账户现金以平台结果为准。
 
 订单意图先写入独立 SQLite 账本，再发送。超时或确认丢失会暂停，重启后按订单 ID/备注查询已有订单，不自动重发。撤单请求被接受后仍需确认最终状态；无法查到的旧订单、过大的订单列表或不一致的成交都会阻止继续。每个账户仅使用一个账本目录，不复制或清空账本来重新运行。
 
@@ -80,6 +80,8 @@ python bot.py broker-paper --config moomoo_paper_config.json --snapshot <当日�
 ## 验证与来源
 
 测试覆盖两套固定版本 SDK 的真实方法签名和调用参数、paper/live 隔离、账户绑定、防重复发送、超时恢复、部分成交、撤单确认与行情失败。实盘测试也完全使用模拟通信；通过离线测试不代表已完成实盘验收。CI 同时安装 Tiger/Futu/moomoo SDK，在 Linux 和 Windows 回归。
+
+Futu 本次联网检查确认 `SIMULATE / STOCK_AND_OPTION / US`，读取资金、持仓和挂单成功，模拟账户已绑定到本地 `secrets/futu/connection.json`。AAPL 标的元数据与快照查询成功；未验证模拟下单、撤单或成交，单只股票快照也不等于完整策略行情输入。账户 ID 和本地验证报告均不提交 Git。
 
 官方资料：[接入架构](https://openapi.futunn.com/futu-api-doc/intro/intro.html)、[模拟下单](https://openapi.futunn.com/futu-api-doc/trade/place-order.html)、[资金字段](https://openapi.futunn.com/futu-api-doc/trade/get-funds.html)、[财务报表](https://openapi.futunn.com/futu-api-doc/quote/get-financials-statements.html)。
 

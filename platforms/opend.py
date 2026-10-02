@@ -217,13 +217,16 @@ def select_account(rows, cfg, sdk):
             raise OpenDError('Selected live account is not an active US-enabled normal account at the configured regional broker')
         return cfg.account_id, eligible[0]['security_firm']
     eligible = [r for r in rows if r.get('trd_env') == sdk.TrdEnv.SIMULATE
-                and r.get('sim_acc_type') == sdk.SimAccType.STOCK
+                and r.get('sim_acc_type') in {sdk.SimAccType.STOCK, sdk.SimAccType.STOCK_AND_OPTION}
                 and r.get('acc_status') == sdk.TrdAccStatus.ACTIVE
-                and sdk.TrdMarket.US in r.get('trdmarket_auth', [])]
+                and sdk.TrdMarket.US in (r.get('trdmarket_auth') or [])
+                and (r.get('sim_acc_type') != sdk.SimAccType.STOCK_AND_OPTION
+                     or (r.get('acc_type') == 'MARGIN'
+                         and r.get('trdmarket_auth') == [sdk.TrdMarket.US]))]
     if cfg.account_id is not None:
         eligible = [r for r in eligible if str(r.get('acc_id')) == cfg.account_id]
     if len(eligible) != 1:
-        raise OpenDError('Select one active US STOCK simulation account in connection.json; real, option and competition accounts are excluded')
+        raise OpenDError('Select one active US stock-capable simulation account in connection.json; real, option-only and futures accounts are excluded')
     row = eligible[0]
     account = str(row['acc_id'])
     if not account.isdigit() or int(account) <= 0:
@@ -259,10 +262,15 @@ def connection(cfg, *, trade=False, allow_orders=False, enable_live=False):
         user_id = _check_identity(context, cfg)
         profile = {'user_id': user_id, 'provider': cfg.provider, 'environment': cfg.environment}
         if trade:
-            account, firm = select_account(records(call(context, 'get_acc_list')), cfg, sdk)
+            account_rows = records(call(context, 'get_acc_list'))
+            account, firm = select_account(account_rows, cfg, sdk)
             context._verified_account, context._allow_orders = account, allow_orders
             context._verified_firm = PROFILES[cfg.provider]['firm']
             profile.update(account_id=account, reported_firm=firm)
+            selected = next(row for row in account_rows if str(row['acc_id']) == account
+                            and row.get('trd_env') == cfg.environment)
+            profile.update(sim_acc_type=selected.get('sim_acc_type'),
+                           trdmarket_auth=tuple(selected.get('trdmarket_auth') or []))
         yield sdk, context, profile
     except OpenDError:
         raise

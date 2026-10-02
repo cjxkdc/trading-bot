@@ -17,7 +17,7 @@
 | `brokers/tiger_readonly.py` | tiger_readonly / account_reader | Tiger 配置检查与账户、持仓、未完成订单只读查询 |
 | `quantconnect/adapter.py` | 通过 export-qc 选择 | QC 历史数据、日历、LEAN 撮合和日志 |
 
-Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认券商操作选择 tiger_paper。paper 仍是独立本地回放。Futu/Moomoo 的模拟盘与实盘接口完成离线测试，等待本人登录验证；实盘仅能经显式配置和激活入口运行。见 [Tiger 接入说明](brokers/README.md)、[Futu/moomoo 接入说明](opend.md)。
+Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认券商操作选择 tiger_paper。paper 仍是独立本地回放。Futu 已完成模拟账户绑定、账户及单股行情查询；模拟下单/撤单尚未联网验收。moomoo 与实盘连接仍待联网验证；实盘仅能经显式配置和激活入口运行。见 [Tiger 接入说明](brokers/README.md)、[Futu/moomoo 接入说明](opend.md)。
 
 ## 数据接口
 
