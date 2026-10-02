@@ -4,9 +4,13 @@
 |---|---|---|
 | `paper` | 本地文件报价回放 | 程序本地创建虚拟资金，立即模拟全额成交 |
 | `tiger_paper` | Tiger 官方模拟账户 | Tiger 返回虚拟资金、持仓及模拟订单状态 |
+| `futu_paper` | 富途 OpenD 模拟账户 | Futu 返回模拟资金和订单；代码已离线验证，尚未登录验收 |
+| `moomoo_paper` | moomoo OpenD 模拟账户 | moomoo 返回模拟资金和订单；代码已离线验证，尚未登录验收 |
 | `tiger_readonly` | 显式选择账户的只读检查 | 只能查询；不属于可下单的 broker |
 
 当前券商操作默认选择 `tiger_paper`，使用 `tiger_paper_config.json`。该文件继承主策略，只替换 broker 块；更换策略不用修改 Tiger SDK 代码。
+
+Futu 香港与 moomoo AU 的独立配置、端口和后续登录步骤见 [OpenD 接入说明](../opend.md)。下文是 Tiger 专用说明。
 
 ## 配置与查询
 

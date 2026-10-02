@@ -1,0 +1,2 @@
+# Optional moomoo AU OpenD integration.
+moomoo-api==10.11.7108

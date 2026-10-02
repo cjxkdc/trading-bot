@@ -1,0 +1,8 @@
+{
+  "type": "moomoo_paper",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "platforms.brokers.moomoo_paper:MoomooPaperConnector",
+  "account_status": true,
+  "description": "moomoo AU OpenD profile; SIMULATE US whole-share DAY limit orders and durable reconciliation"
+}

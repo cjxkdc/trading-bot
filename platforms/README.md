@@ -9,12 +9,14 @@
 | `data/snapshot.py` | snapshot_file | 读取标准股票快照，返回 MarketSnapshot |
 | `data/csv.py` | csv | 读取单标的总回报数据，供 research.py 使用 |
 | `data/tiger_market.py` | tiger_market / market_reader | Tiger 权限、单只股票报价/历史/基本面检查，保存诊断；不产生可交易快照 |
+| `data/futu_market.py`、`data/moomoo_market.py` | futu_market、moomoo_market / market_reader | 对应 OpenD 的单股票快照、日线、财报检查；不产生可交易快照 |
 | `brokers/paper.py` | paper | 专用本地报价回放账户，立即全额模拟成交 |
 | `brokers/tiger_paper.py` | tiger_paper / broker | Tiger 模拟账户、USD 整股限价单、查询/撤销/恢复；拒绝实盘 |
+| `brokers/futu_paper.py`、`brokers/moomoo_paper.py` | futu_paper、moomoo_paper / broker | 各自 OpenD SIMULATE 账户、USD 整股限价单、查询/撤销/恢复；独立账本 |
 | `brokers/tiger_readonly.py` | tiger_readonly / account_reader | Tiger 配置检查与账户、持仓、未完成订单只读查询 |
 | `quantconnect/adapter.py` | 通过 export-qc 选择 | QC 历史数据、日历、LEAN 撮合和日志 |
 
-Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认券商操作选择 tiger_paper。paper 仍是独立本地回放。实盘下单、Futu/Moomoo 接入未实现。见 [券商接入说明](brokers/README.md)。
+Tiger 模拟账户已完成联网查询、提交与撤单验证；当前默认券商操作选择 tiger_paper。paper 仍是独立本地回放。Futu/Moomoo 接入代码和离线测试已完成，等待本人登录验证；仍无实盘入口。见 [Tiger 接入说明](brokers/README.md)、[Futu/moomoo 接入说明](opend.md)。
 
 ## 数据接口
 

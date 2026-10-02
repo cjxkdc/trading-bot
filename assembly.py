@@ -86,7 +86,9 @@ def inspect_broker(name, config_dir, *, connect=False):
     return reader.inspect(connect=connect)
 
 
-def inspect_market_data(name, config_dir, *, connect=False, symbol='AAPL', claim_device=False):
+def inspect_market_data(name, config_dir=None, *, connect=False, symbol='AAPL', claim_device=False):
+    if config_dir is None:
+        config_dir = ROOT / platform_catalog()[name]['default_config_dir']
     reader = _build_platform({'type': name}, 'market_reader', config_dir=config_dir)
     return reader.inspect(connect=connect, symbol=symbol, claim_device=claim_device)
 
@@ -163,7 +165,16 @@ def _open_simulation_session(connector, cfg, snapshot, state_dir, fees):
             raise ValueError("Incomplete paper state; never recreate a missing ledger/account")
     else:
         state_dir.mkdir(parents=True, exist_ok=False)
-        connector.initialize(state_dir, cfg["initial_cash"])
+        try:
+            connector.initialize(state_dir, cfg["initial_cash"])
+        except Exception:
+            # Failed login can precede any persisted state. Remove only our empty reservation;
+            # partial/existing ledgers must survive for inspection, never be reset automatically.
+            try:
+                state_dir.rmdir()
+            except OSError:
+                pass
+            raise
         Journal(state_dir / "journal.sqlite").close()
     broker = connector.connect(state_dir, snapshot, fees)
     try:

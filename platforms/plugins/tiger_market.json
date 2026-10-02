@@ -3,5 +3,6 @@
   "kind": "market_reader",
   "version": "1.0.0",
   "entrypoint": "platforms.data.tiger_market:TigerMarketData",
+  "default_config_dir": "secrets/tiger_paper",
   "description": "Bounded Tiger quote, history and fundamentals diagnostics; not an executable universe snapshot"
 }

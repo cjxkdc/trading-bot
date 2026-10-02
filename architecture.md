@@ -62,6 +62,8 @@ QC 的生成文件由框架契约、策略源码和平台适配器自动合成�
 
 Tiger 模拟执行是一轮一轮运行的：未完成订单暂停后续交易，恢复查询不重复发送。没有常驻轮询服务、行情订阅或已取消批次的自动处置。凭据和账户状态分别固定在 `secrets/tiger_paper/`、`runs/tiger-paper/`，不会被打包进 QC 或提交 Git。
 
+Futu 与 moomoo 各有独立平台入口，共用 `platforms/opend.py` 和 `platforms/brokers/opend_paper.py` 的协议转换与模拟订单恢复逻辑。两者分别持有连接配置、端口和 SQLite 账本；绑定包含平台、登录用户和模拟账号。策略源码与 `framework/` 没有引入这些 SDK。行情检查登记为 `market_reader`，不能冒充策略要求的完整 `snapshot_data`。详见 [OpenD 接入](platforms/opend.md)。
+
 ## 参数与版本
 
 主配置 `portfolio_config.json` 供组合模式和 QC 导出共用。研究日期、资金、成本、选股参数、目标限额可查看、冻结和比较。每次导出保存独立 manifest 和源码校验值，不覆盖旧实验。

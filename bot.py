@@ -6,6 +6,7 @@ from assembly import (inspect_broker, inspect_market_data, open_paper_session, o
                       strategy_catalog, write_demo_snapshot)
 from framework.configuration import load_config, normalize_config
 from framework.journal import packed
+from platforms.opend import OpenDError
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "portfolio_config.json"
@@ -87,7 +88,7 @@ def main():
     broker.add_argument("--connect", action="store_true")
     market = sub.add_parser('market-status', help='Data-access diagnostic; never produces or executes orders')
     market.add_argument('--provider', default='tiger_market')
-    market.add_argument('--config-dir', type=Path, default=ROOT / 'secrets/tiger_paper')
+    market.add_argument('--config-dir', type=Path, help='Default: selected provider configuration directory')
     market.add_argument('--symbol', default='AAPL', help='Probe only this symbol to limit history-quota usage')
     market.add_argument('--connect', action='store_true')
     market.add_argument('--claim-device', action='store_true',
@@ -130,7 +131,10 @@ def main():
             if name != cfg['broker']['type']:
                 parser.error('An explicit --config-dir is required when overriding --broker')
             config_dir = ROOT / cfg['broker']['config_dir']
-        result = inspect_broker(name, config_dir, connect=args.connect)
+        try:
+            result = inspect_broker(name, config_dir, connect=args.connect)
+        except OpenDError as exc:
+            result = {'status': 'failed', 'issues': [str(exc)], 'network_requested': args.connect}
         print(json.dumps(result, indent=2))
         if result.get("issues"):
             parser.exit(2)
@@ -145,7 +149,7 @@ def main():
         try:
             result = inspect_market_data(args.provider, args.config_dir, connect=args.connect,
                                          symbol=args.symbol, claim_device=args.claim_device)
-        except TigerMarketError as exc:
+        except (TigerMarketError, OpenDError) as exc:
             result = {'status': 'failed', 'reason': str(exc), 'strategy_ready': False}
         if args.out is not None:
             report_path = args.out / 'market-status.json'
@@ -165,7 +169,7 @@ def main():
         from platforms.brokers.tiger_paper import TigerPaperError
         try:
             print(packed(run_broker_paper(args.snapshot, args.config, args.state)))
-        except (ExecutionBlocked, TigerPaperError) as exc:
+        except (ExecutionBlocked, TigerPaperError, OpenDError) as exc:
             print(json.dumps({'status': 'paused', 'reason': str(exc), 'automatic_retry': False}))
             parser.exit(2)
     else:

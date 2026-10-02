@@ -1,0 +1,8 @@
+{
+  "type": "moomoo_market",
+  "kind": "market_reader",
+  "version": "1.0.0",
+  "entrypoint": "platforms.data.moomoo_market:MoomooMarketData",
+  "default_config_dir": "secrets/moomoo",
+  "description": "moomoo snapshot, history and financial-statement diagnostics; not an executable universe feed"
+}

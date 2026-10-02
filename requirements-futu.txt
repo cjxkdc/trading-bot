@@ -1,0 +1,2 @@
+# Optional Futu HK OpenD integration. SDK import does not establish a session.
+futu-api==10.11.7108

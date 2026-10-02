@@ -1,6 +1,6 @@
-# Trading bot — 模块化交易研究 v0.5
+# Trading bot — 模块化交易研究 v0.6
 
-策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行、Tiger 模拟账户执行和只读账户查询。
+策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行，以及 Tiger、Futu 香港、moomoo AU 模拟券商模块。Futu/moomoo 完成离线测试，等待登录验证。
 
 ## 三块各自做什么
 
@@ -110,6 +110,17 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 
 默认不会抢占其他 API 设备的行情访问权。诊断结果不是完整股票池，不能直接交给 `broker-paper`。完整接入所需的数据、权限和命令见 [行情接入说明](platforms/data/README.md)。
 
+## v0.6：Futu 香港与 moomoo AU
+
+新增 `futu_paper`、`moomoo_paper` 两个模拟券商和对应的独立行情检查模块。分别使用 `futu_paper_config.json`、`moomoo_paper_config.json`；共用原策略，独立连接设置、端口和订单账本。
+
+```text
+python bot.py broker-status --config futu_paper_config.json
+python bot.py broker-status --config moomoo_paper_config.json
+```
+
+以上默认离线。代码仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复；登录和联网验收尚未进行。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
+
 ## v0.3 已有基础
 
 - 运行入口不再直接构造特定数据源和券商，统一注入 PortfolioRunner。
@@ -128,6 +139,7 @@ python research.py holdout --data SPY.csv --out runs/experiment-001
 | QC 回测 | 导出、报告存档与对比 | v0.4 云端实际运行与报告核对 |
 | 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
 | Tiger 模拟券商 | 账户查询、限价下单/查询/撤单、持久化订单、防重复、实盘拦截；已联网验证提交与撤单 | 连续行情、完整策略运行、公司行动、取消批次后的人工处置流程 |
+| Futu / moomoo 模拟券商 | 独立配置与账本、SIMULATE 限价单/查询/撤单、离线 SDK 与恢复测试 | 本人登录与权限核验、模拟订单联网验收、完整科技股行情输入 |
 
 执行器接受本地 paper 和 broker_paper 两种模拟模式，拒绝 live。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
 
@@ -140,7 +152,7 @@ python -m unittest discover -s tests
 
 完整历史表适配检查还需 pandas；QC 环境自带。本地没有 pandas 时相关检查会显式跳过，其余检查使用标准库。
 
-开发时运行 `python -m pip install -r requirements-dev.txt -r requirements-tiger.txt` 可安装完整测试依赖。Tiger 是可选安装；未安装时只跳过实际 SDK 契约检查。GitHub Actions 在 Linux 和 Windows 上安装两份依赖、执行全部检查，并核对已提交的 QC 单文件是否与源码一致；这些检查不会连接券商或提交云端回测。
+开发时运行 `python -m pip install -r requirements-dev.txt -r requirements-tiger.txt -r requirements-futu.txt -r requirements-moomoo.txt` 可安装完整测试依赖。券商 SDK 都是可选安装；缺失时相关实际 SDK 契约检查会跳过。GitHub Actions 在 Linux 和 Windows 上安装全部测试依赖，并核对 QC 单文件是否与源码一致；这些检查不会连接券商或提交云端回测。
 
 Git 仅管理代码、示例配置和文档。`runs/`、本地账户 SQLite、`.env`、密钥和虚拟环境均忽略。上传到 GitHub 不会启动程序；运行和后续服务器部署需单独配置。
 
