@@ -1,4 +1,4 @@
-"""Build a single paste-ready QC file from the three maintained layers."""
+"""Build a single paste-ready QC file from strategy, contracts and backtest adapter."""
 
 from pathlib import Path
 import ast
@@ -10,7 +10,7 @@ import argparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from assembly import build_portfolio_runner, default_portfolio_config, portfolio_spec, strategy_catalog
+from app.assembly import build_portfolio_runner, default_portfolio_config, portfolio_spec, strategy_catalog
 from framework.configuration import load_config, normalize_config
 
 
@@ -27,34 +27,38 @@ def backtest_configuration(config):
 def build(config=None):
     config = backtest_configuration(config if config is not None else default_portfolio_config())
     runner = build_portfolio_runner(config)
-    if runner.input_schema != "us_technology_daily_v1":
-        raise ValueError("QC export requires the technology daily input schema")
+    if runner.input_schema not in {"us_technology_daily_v1", "us_equity_momentum_daily_v1"}:
+        raise ValueError("QC export requires a supported daily US equity schema")
+    selected = strategy_catalog()[config['strategy']['type']]
+    qc_profile = selected.get('backtest', {}).get('quantconnect', {})
     runner.engine.strategy.history_requirements  # Enforce the history request contract before export.
     plugins = {k: v for k, v in strategy_catalog().items()
-               if v["kind"] == "portfolio" and v.get("input_schema") == "us_technology_daily_v1"}
-    sources = ["framework/portfolio.py", "framework/decisions.py"]
+               if v["kind"] == "portfolio" and v.get("input_schema") == runner.input_schema}
+    sources = ["framework/portfolio.py", "framework/decisions.py", "framework/collection.py"]
     sources += sorted({v["entrypoint"].split(":")[0].replace(".", "/") + ".py" for v in plugins.values()})
-    sources.append("platforms/quantconnect/adapter.py")
+    sources.append("backtests/quantconnect/adapter.py")
     parts = []
-    available_modules = {p[:-3].replace("/", ".") for p in sources} | {"assembly"}
+    available_modules = {p[:-3].replace("/", ".") for p in sources} | {"app.assembly"}
     for name in sources:
         source = (ROOT / name).read_text(encoding="utf-8")
         tree = ast.parse(source)
         remove = set()
         for node in tree.body:
-            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in {"framework", "strategies", "assembly"}:
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in {"framework", "strategies", "app"}:
                 if node.module not in available_modules or node.level:
                     raise ValueError(f"Unbundled local dependency in {name}: {node.module}")
                 remove.update(range(node.lineno, node.end_lineno + 1))
             elif isinstance(node, ast.ImportFrom) and node.level:
                 raise ValueError(f"Relative imports need an explicit bundling rule: {name}")
-            elif isinstance(node, ast.Import) and any(a.name.split('.')[0] in {'framework','strategies','assembly','platforms'} for a in node.names):
+            elif isinstance(node, ast.Import) and any(a.name.split('.')[0] in {'framework','strategies','app','platforms','data','brokers','backtests'} for a in node.names):
                 raise ValueError(f"Use supported from-imports in paste-ready plugins: {name}")
-        if name == "platforms/quantconnect/adapter.py":
+        if name == "backtests/quantconnect/adapter.py":
             constructors = ", ".join(repr(k) + ": " + v["entrypoint"].split(":")[1] for k, v in plugins.items())
             specs = {k: portfolio_spec({"type": k}) for k in plugins}
             parts.append("# Frozen plug-in registry generated from local manifests.\n"
                 + "_RUN_CONFIG = " + repr(config) + "\n"
+                + "_INPUT_SCHEMA = " + repr(runner.input_schema) + "\n"
+                + "_QC_PROFILE = " + repr(qc_profile) + "\n"
                 + "_PLUGIN_CLASSES = {" + constructors + "}\n"
                 + "_PLUGIN_SPECS = " + repr(specs) + "\n"
                 + "def build_portfolio_strategy(config):\n"
@@ -77,7 +81,7 @@ def build(config=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=ROOT / "portfolio_config.json")
+    parser.add_argument("--config", type=Path, default=ROOT / "configs/portfolio_config.json")
     parser.add_argument("--out", type=Path, default=ROOT / "platforms/quantconnect/main.py")
     args = parser.parse_args()
     path = args.out

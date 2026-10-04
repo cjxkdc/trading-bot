@@ -1,0 +1,48 @@
+{
+  "type": "moomoo_paper",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "brokers.moomoo_paper:MoomooPaperConnector",
+  "account_status": true,
+  "description": "moomoo AU OpenD profile; SIMULATE US whole-share DAY limit orders and durable reconciliation",
+  "display_name": "moomoo 模拟盘",
+  "control": {
+    "entrypoint": "brokers.controls:OpenDPaperControl",
+    "mode": "broker_paper",
+    "capabilities": [
+      "inspect",
+      "execute",
+      "prepare",
+      "calendar",
+      "reconcile"
+    ],
+    "path_fields": [
+      "config_dir",
+      "state_dir"
+    ],
+    "default_profile": {
+      "config_dir": "secrets/moomoo",
+      "state_dir": "runs/moomoo-paper"
+    },
+    "order_capabilities": {
+      "market": [
+        "US"
+      ],
+      "asset_class": [
+        "equity"
+      ],
+      "currency": [
+        "USD"
+      ],
+      "order_type": [
+        "limit"
+      ],
+      "quantity_type": [
+        "whole"
+      ],
+      "time_in_force": [
+        "day"
+      ]
+    }
+  }
+}

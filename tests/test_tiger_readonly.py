@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from assembly import inspect_broker, _build_platform
+from app.assembly import inspect_broker, _build_platform
 from platforms.brokers.tiger_readonly import (CONFIG_FILE, TigerReadOnly, TigerReadOnlyError,
     account_snapshot, configuration_check, _readonly_client_class, _connect)
 
@@ -86,7 +86,7 @@ class ReadOnlyTests(unittest.TestCase):
             self.assertNotIn("SECRET", json.dumps(result))
 
 
-@unittest.skipUnless(HAS_SDK, "Install requirements-tiger.txt for real SDK contract tests")
+@unittest.skipUnless(HAS_SDK, "Install requirements/tiger.txt for real SDK contract tests")
 class TigerSdkContractTests(unittest.TestCase):
     def test_sdk_read_boundary_allows_only_documented_account_queries(self):
         from tigeropen.trade.trade_client import TradeClient

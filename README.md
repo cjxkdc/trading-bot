@@ -1,167 +1,81 @@
-# Trading bot — 模块化交易研究 v0.7
+# Trading Bot
 
-策略、框架、平台分开维护，由配置选择并装配。目前提供科技股组合策略、QuantConnect 回测导出与报告比较、单标的 CSV 研究、本地模拟执行、Tiger 模拟券商，以及 Futu 香港/moomoo AU 的 paper 和实盘接口。Futu/moomoo 完成离线测试，等待登录验证；默认仍是模拟执行。
+**已安装环境的日常使用：双击本文件夹里的 `Trading Bot.exe`，在浏览器 Portal 中操作。**
 
-## 三块各自做什么
+## 首次运行（Windows）
 
-| 目录 | 职责 |
+GitHub 提供源码，不包含 exe、已构建网页或 Python 虚拟环境。桌面发布 ZIP 包含已构建网页；是否包含 exe 取决于打包时是否提供启动器。两种方式都需要自己的券商登录与数据源配置。
+
+1. 安装 Python 3.12，解压完整项目，在项目根目录运行 `deploy/desktop/Install Local.cmd`。
+2. 选择实际使用的券商，安装对应 SDK。例如 moomoo：
+
+   ```powershell
+   .venv\Scripts\python.exe -m pip install -r requirements/moomoo.txt
+   ```
+
+   Futu 使用 `requirements/futu.txt`，Tiger 使用 `requirements/tiger.txt`。
+3. **仅从 GitHub 下载源码时**，另安装 Node.js（至少 22.12），在项目根目录构建网页：
+
+   ```powershell
+   npm --prefix ui ci --ignore-scripts
+   npm --prefix ui run build
+   ```
+
+   使用已带 `ui/dist/` 的发布包可跳过这一步，日常运行不需要 Node。
+4. 运行 `deploy/desktop/Start Local Portal.cmd`；发布包带有 exe 时，也可双击根目录启动器。
+5. 在工作台配置自己的数据源；Futu/moomoo 需要另外安装官方 OpenD，登录自己的账户并绑定模拟账户。Massive 需要自己的 API Key，数据权限必须满足所选策略。连接 OpenD 不会替代策略所需的完整选股数据。
+
+先通过首页「一键测试并准备」检查环境、账户和数据，再按结果进行模拟操作。自动运行需要单独保存计划并开启。服务器部署使用发布包及 [服务器指南](docs/SERVER.md)；从源码部署同样须先构建网页。
+
+## 日常操作
+
+右上角开关控制交易后台。关闭网页不等于关闭后台；完整退出在「运行与日志」。当前 Portal 仅启用模拟账户与本地回放。
+
+## 准备一次模拟交易
+
+选好策略、模拟券商和数据源后，在「总览」点击 **一键测试并准备**。程序依次检查账户、数据配置与权限、所需数据、选股结果和模拟订单准备条件；每一步会保留结果，不需要手动逐项点击。
+
+- 每次都会按当前策略检查并采集数据；数据模块会复用有效缓存，减少重复下载历史行情。更换策略后，按新策略的数据要求重新检查。
+- 周末也可以运行检查、更新数据并查看选股。交易时段或报价不满足要求时，订单准备会显示具体原因，已完成的检查仍然可见。
+- 检查和准备都不会发送订单。只有出现「提交模拟订单」后，核对当前模拟账户、股票、数量和限价，再确认提交。准备结果会过期，过期后重新检查。
+- 下载期间可用「停止下载」请求结束当前采集；正在等待的网络请求可能先返回。停止后不会继续准备订单，已下载的缓存保留。
+- 数据缺失、权限不足或其他限制会保留在结果中；完成选股不代表已满足交易条件。「分步操作」仍可单独更新、预览或准备。
+
+此按钮不会开启定时运行，也不会更改已有自动运行设置。维护或只想手动测试时，先在「运行与日志」关闭自动运行；后台电源与自动运行是两个独立开关。
+
+## 文件放在哪里
+
+| 目录 / 文件 | 用途 |
 |---|---|
-| `strategies/` | 选股、打分、目标仓位、声明需要的历史数据；只做计算 |
-| `framework/` | 标准数据类型、决策核验、仓位与费用检查、订单状态和研究回测 |
-| `platforms/` | 数据源、券商连接器、QuantConnect 接入；转换外部数据和订单 |
-| `assembly.py` | 根据登记文件和配置装配三块 |
-| `bot.py` | 列出模块、预览组合、运行本地模拟、导出回测 |
+| `Trading Bot.exe` | 日常启动入口 |
+| `configs/` | 策略参数、券商实例和数据源配置 |
+| `strategies/` | 可替换策略，包括科技股动量与 MOM8 适配版 |
+| `brokers/` | 可替换券商接口 |
+| `data/` | 可替换数据源接口 |
+| `framework/` | 公共运行、风控和订单恢复 |
+| `backtests/` | 回测与 QuantConnect 接入 |
+| `app/` | 程序装配、启动器、命令行工具 |
+| `portal/`、`ui/` | 面板服务和网页界面 |
+| `docs/` | 使用指南、架构与第三方说明 |
+| `runs/` | 缓存、实验、运行记录、账户账本及备份 |
+| `secrets/` | 本机密钥和账户连接设置，不上传 Git |
+| `tests/`、`tools/`、`requirements/` | 开发检查、构建工具和依赖清单 |
+| `.venv/` | 程序的 Python 运行环境 |
+| `bot.py` | 保留的命令行入口 |
 
-`platforms/data/` 放数据适配器，`platforms/brokers/` 放券商适配器，`platforms/quantconnect/` 放 QC 回测接入。平台登记与策略登记分别位于各自的 `plugins/`。旧模块路径保留轻量兼容导入。
+配置和启动代码已归档到对应目录。`runs/`、`secrets/` 和 `.venv/` 保持原位；不要单独移动 exe，也不要清空账户账本。
 
-换同一接口范围内的策略或平台，增加模块、登记并修改配置即可；期权、做空、多币种保证金或异步实盘执行等新能力，需要完善相应接口和执行模型。
+## 常用说明
 
-## 默认策略与主配置
+- [完整使用指南](docs/guide.md) · [架构](docs/architecture.md)
+- [配置索引](configs/README.md) · [命令行入口](app/README.md)
+- [Portal 安装与模块接入](portal/README.md) · [Python 依赖](requirements/README.md)
+- [Massive 接入](data/MASSIVE.md) · [MOM8 规则与适配差异](strategies/MOM8.md)
+- [第三方声明](docs/THIRD_PARTY_NOTICES.md)
+- [AWS 与远程 Portal](docs/SERVER.md) · [桌面 / 服务器发布包](deploy/README.md)
 
-主配置为 [portfolio_config.json](portfolio_config.json)，同时供本地组合入口和 QC 导出读取。默认科技股盈利动量规则仍是：最多 5 只，每只 19%，过去 12 个月营业利润为正，成交额过滤，252 日跳过最近 21 日的动量，同一细分行业最多 2 只。月初调仓由 QC 接入的交易日历安排。
+服务器模式通过 HTTPS 网站访问，保留独立的工作台登录；切换券商后重新核验当前账户。固定 IP 或域名均可使用，不需要本机隧道。`moomoo 网页沙盒` 是只读授权验证接口，不提供下单；OpenD 模拟盘保持独立。
 
-本次没有根据历史收益调优参数。可比较版本见 [策略说明](strategies/README.md)。`configs/equal_weight_control.json` 是接口演示，不是投资基准。
+「运行与日志」里的自动运行开关可启用定时模拟调仓，默认关闭。后台电源开关与自动运行开关各自独立。详见 [自动模拟交易](docs/AUTOMATION.md)。服务器包包含可选 OpenD 托管工具，安装更新不会替你开启交易或改动登录凭据。
 
-- `strategy`：选择策略及其参数。
-- `data`：选择本地行情输入，目前为标准快照文件。
-- `broker`：选择本地执行连接器，目前为 paper。
-- `limits`、`fees`、`initial_cash`：仓位限制、费用假设、初始虚拟资金。
-- `backtest`：QC 回测起止日期和滑点假设。
-
-配置可通过 `extends` 引用另一个本地文件，路径相对当前配置；同名的顶层块整块替换。使用 `bot.py config` 可查看最终配置。`paper_config.json` 是指向主配置的兼容入口。`config.json` 专属于早期单标的研究。
-
-## 从这里开始
-
-需要 Python 3.11+。Windows 的纽约时区计算需要 tzdata：
-
-```text
-python -m pip install -r requirements.txt
-python bot.py strategies
-python bot.py platforms
-python bot.py config
-python bot.py demo --out runs/demo-001
-```
-
-demo 使用合成数据：只验证文件读取、选股、整股下单、费用和账户记录，不是市场回测。它建立独立本地账户，不连接老虎、Futu 或其他真实券商。
-
-先预览目标持仓，再重复回放同一批数据：
-
-```text
-python bot.py plan --snapshot runs/demo-001/synthetic-snapshot.json
-python bot.py paper --snapshot runs/demo-001/synthetic-snapshot.json --state runs/demo-001/state
-```
-
-预览不创建账户、不下单。相同账户、同一交易日重复运行已完成决策，不会再买一次；丢失账本、旧批次未完成或更换同日策略会阻止执行。一个账户只对应一个状态目录，不应复制或清空账本来绕过检查。
-
-## 回测放在项目里面
-
-科技股组合使用 QuantConnect/LEAN 的历史数据和回测引擎：
-
-```text
-python bot.py export-qc --out runs/qc-baseline-001
-```
-
-将生成的 `main.py` 全部复制到 QC 新 Python 项目，再点击 Backtest。该命令只导出；不会提交云端任务。每个输出目录附带配置与代码指纹，禁止覆盖旧实验。具体流程见 [回测说明](backtests/README.md)。
-
-默认可复制文件也在 [platforms/quantconnect/main.py](platforms/quantconnect/main.py)。默认区间仍为 2020 年、初始资金 100,000 美元，每笔固定费用 1 美元、单边滑点 0.10%；它们是研究假设，未对应实际券商费率。
-
-旧的单标的研究入口继续保留：
-
-```text
-python research.py screen --data SPY.csv --out runs/experiment-001
-python research.py validate --data SPY.csv --out runs/experiment-001
-python research.py holdout --data SPY.csv --out runs/experiment-001
-```
-
-数据为 `date,total_return_index`，必须核对总回报序列的分红/拆股口径并提供预热历史。`config.json` 定义开发、验证和最终测试区间；阶段之间冻结数据、配置、源码。该模型按连续比例敞口和收盘总回报估计，不能用于科技股多股票组合或冒充真实券商撮合。
-
-## v0.4 新增
-
-- `import-qc`：导入 QC JSON，保存原始报告、配置、代码副本和校验值；总收益与年化分开。
-- `compare-qc`：生成 Markdown/JSON 对比，显示不同年份、成本及完成状态；不自动选“最佳策略”。
-- `export-qc --start --end --slippage-bps --note`：独立导出不同区间和成本假设，先记录研究问题。
-- `broker-status`：默认离线检查 Tiger 配置；加 `--connect` 只查询账户、持仓及未完成订单。
-- `PortfolioContext`：策略可以选择接收冻结的持仓名单，为排名缓冲留出接口；当前策略未增加新规则。
-
-具体用法见 [回测流程](backtests/README.md)、[Tiger 接入](platforms/brokers/README.md) 和 [策略接口](strategies/README.md)。
-
-## v0.5：Tiger 模拟券商
-
-新增独立 `tiger_paper` broker；选股模块不变。券商操作默认使用 [tiger_paper_config.json](tiger_paper_config.json)，继承原策略，凭据位于 `secrets/tiger_paper/`。`portfolio_config.json` 和 `paper` 命令继续用于离线研究/本地回放。
-
-```text
-.venv\Scripts\python.exe bot.py broker-status
-.venv\Scripts\python.exe bot.py broker-status --connect
-```
-
-Tiger 模拟账户仅接受 17 位模拟账号，并要求 Tiger 返回 `account_type=PAPER`。该模块所有 API 请求都检查账户归属，真实账号在客户端初始化前即被拦截。Tiger 目前没有实盘模块。
-
-`broker-paper --snapshot <当日真实行情快照>` 可执行一轮模拟调仓。订单尚未成交时暂停，保留订单账本，下次核对已有订单，不重复发送。同一框架负责策略计算和风控，Tiger 平台模块负责实际的模拟订单。当前还没有自动行情订阅、完整实时股票池或持续运行的调度器。
-
-2026-10-02 已验证 Tiger 模拟账户查询，以及 1 股 AAPL、限价 1 美元的模拟测试单：已接受 → 已撤销，成交 0，剩余挂单 0。这是连接验证，不是策略表现验证；部分成交与断线恢复另有离线测试。
-
-### Tiger 行情检查
-
-新增独立 `tiger_market` 数据检查模块，可复查权限、读取单只股票的日线、报价和营业利润，并保存结果：
-
-```text
-.venv\Scripts\python.exe bot.py market-status --connect --out runs/market-check-001
-```
-
-默认不会抢占其他 API 设备的行情访问权。诊断结果不是完整股票池，不能直接交给 `broker-paper`。完整接入所需的数据、权限和命令见 [行情接入说明](platforms/data/README.md)。
-
-## v0.6：Futu 香港与 moomoo AU
-
-新增 `futu_paper`、`moomoo_paper` 两个模拟券商和对应的独立行情检查模块。分别使用 `futu_paper_config.json`、`moomoo_paper_config.json`；共用原策略，独立连接设置、端口和订单账本。
-
-```text
-python bot.py broker-status --config futu_paper_config.json
-python bot.py broker-status --config moomoo_paper_config.json
-```
-
-以上默认离线。paper 模块仅允许 SIMULATE，支持美股整股限价单、查询、撤单和订单恢复。Futu 已于 2026-10-02 完成模拟账户绑定、资金/持仓/挂单及 AAPL 元数据与快照的联网查询；支持当前美股股票/期权合并模拟账户，但仍只用现金交易股票/ETF。模拟订单生命周期及 moomoo 登录仍待联网验收。完整股票池与基本面数据转换仍待实现，行情诊断不能直接作为调仓输入。安装、端口配置和后续登录步骤见 [Futu/moomoo 接入说明](platforms/opend.md)。
-
-## v0.7：独立实盘接口
-
-新增 `futu_live` 和 `moomoo_live`，与各自 paper 模块共用订单实现和执行框架；四套配置继承同一策略，账本按平台和交易环境分开。实盘必须填写账户/登录 ID，由券商确认区域、账户类型和 US 权限，并验证所交易标的是股票/ETF。
-
-`broker-status --config futu_live_config.json` 默认只作离线检查；加 `--connect` 也只读。真正执行使用独立 `broker-live` 命令和 `--enable-live` 参数，没有实盘默认配置。只读检查不会解锁或交易。实盘连接尚未验收，未发送实盘订单，使用步骤及 GUI/命令行 OpenD 的解锁区别见 [接入说明](platforms/opend.md)。
-
-## v0.3 已有基础
-
-- 运行入口不再直接构造特定数据源和券商，统一注入 PortfolioRunner。
-- 数据和券商连接器也按登记文件加载，分别选择。
-- 主配置供本地组合运行和 QC 导出共用；导出不包含券商/数据连接参数。
-- 有效策略参数包括构造函数默认值，都进入决策记录。
-- 历史长度由策略声明；QC 不再写死 253 根日线，也不再替策略进行盈利筛选。
-- 增加只读组合预览、实验导出与两个单因素比较配置。
-- 保留订单意图先落盘、先减后加、重复执行保护和不确定订单阻断。
-
-## 当前能力边界
-
-| 路径 | 已完成 | 尚待完成 |
-|---|---|---|
-| 策略研究 | 规则实现、可替换配置、独立对照 | 多年份及独立验证，证明改动有效 |
-| QC 回测 | 导出、报告存档与对比 | v0.4 云端实际运行与报告核对 |
-| 本地 paper | 文件报价立即全额成交、SQLite 状态恢复 | 连续实时行情、结算、公司行动、真实盘口 |
-| Tiger 模拟券商 | 账户查询、限价下单/查询/撤单、持久化订单、防重复、实盘拦截；已联网验证提交与撤单 | 连续行情、完整策略运行、公司行动、取消批次后的人工处置流程 |
-| Futu / moomoo 模拟券商 | 独立配置与账本、SIMULATE 限价单/查询/撤单、离线 SDK 与恢复测试；Futu 账户及单股快照已联网读取 | moomoo 登录与权限核验、模拟订单联网验收、完整科技股行情输入 |
-| Futu / moomoo 实盘接口 | 独立 REAL 账户、只读查询、显式启用后的限价单/查询/撤单/解锁、标的类型验证；离线测试 | 本人登录、实盘接口与费用/结算验收、完整数据源与持续运行 |
-
-执行器接受本地 paper、broker_paper，以及明确启用的 live 模式。异步未完成订单会暂停批次，拒单或撤单不会自动重新计算/重发剩余交易。更换平台时共用策略计算，不保证不同数据口径和撮合模型得到相同收益。
-
-运行检查：
-
-```text
-python tools/build_quantconnect.py
-python -m unittest discover -s tests
-```
-
-完整历史表适配检查还需 pandas；QC 环境自带。本地没有 pandas 时相关检查会显式跳过，其余检查使用标准库。
-
-开发时运行 `python -m pip install -r requirements-dev.txt -r requirements-tiger.txt -r requirements-futu.txt -r requirements-moomoo.txt` 可安装完整测试依赖。券商 SDK 都是可选安装；缺失时相关实际 SDK 契约检查会跳过。GitHub Actions 在 Linux 和 Windows 上安装全部测试依赖，并核对 QC 单文件是否与源码一致；这些检查不会连接券商或提交云端回测。
-
-Git 仅管理代码、示例配置和文档。`runs/`、本地账户 SQLite、`.env`、密钥和虚拟环境均忽略。上传到 GitHub 不会启动程序；运行和后续服务器部署需单独配置。
-
-后续顺序：导出当前基准 → 核对 QC 完整回测 → 固定方案做多年份与成本比较 → 券商模拟账户验证 → 再单独准备实盘。服务器和完整 UI 暂时不是必需项。
-
+在项目根目录运行命令，例如 `python bot.py config`；依赖安装仍使用 `python -m pip install -r requirements.txt`。

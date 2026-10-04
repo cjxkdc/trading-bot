@@ -1,0 +1,3 @@
+# Isolated build environment for the thin Windows launcher.
+# Broker SDKs are loaded from the project venv, not bundled in the executable.
+pyinstaller==6.22.3

@@ -11,7 +11,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from assembly import _build_platform, inspect_broker, open_broker_paper_session
+from app.assembly import _build_platform, inspect_broker, open_broker_paper_session
 from bot import TIGER_PAPER_CONFIG, DEFAULT_CONFIG, run_paper
 from framework.configuration import load_config, normalize_config, fees_from_config
 from framework.contracts import OrderIntent
@@ -80,7 +80,7 @@ class PaperRegistrationTests(unittest.TestCase):
             connect.assert_not_called()
 
 
-@unittest.skipUnless(HAS_SDK, 'Install requirements-tiger.txt for Tiger paper contracts')
+@unittest.skipUnless(HAS_SDK, 'Install requirements/tiger.txt for Tiger paper contracts')
 class PaperBrokerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -1,0 +1,3 @@
+# Portal runtime plus the optional Tiger SDK.
+-r ../requirements.txt
+tigeropen==3.8.0

@@ -1,0 +1,45 @@
+{
+  "type": "moomoo_live",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "brokers.moomoo_live:MoomooLiveConnector",
+  "account_status": true,
+  "description": "moomoo AU real-account adapter; explicit account, live activation and separate durable ledger required",
+  "display_name": "moomoo 实盘",
+  "control": {
+    "entrypoint": "brokers.controls:OpenDPaperControl",
+    "mode": "live",
+    "capabilities": [
+      "inspect",
+      "execute"
+    ],
+    "path_fields": [
+      "config_dir",
+      "state_dir"
+    ],
+    "default_profile": {
+      "config_dir": "secrets/moomoo_live",
+      "state_dir": "runs/moomoo-live"
+    },
+    "order_capabilities": {
+      "market": [
+        "US"
+      ],
+      "asset_class": [
+        "equity"
+      ],
+      "currency": [
+        "USD"
+      ],
+      "order_type": [
+        "limit"
+      ],
+      "quantity_type": [
+        "whole"
+      ],
+      "time_in_force": [
+        "day"
+      ]
+    }
+  }
+}

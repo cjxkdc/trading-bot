@@ -16,7 +16,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import bot
-from assembly import _build_platform, open_broker_paper_session, open_live_session, open_paper_session
+from app.assembly import _build_platform, open_broker_paper_session, open_live_session, open_paper_session
 from framework.configuration import load_config, normalize_config
 from framework.contracts import OrderIntent
 from framework.execution import Executor, ExecutionBlocked
@@ -41,11 +41,11 @@ def live_row(provider='futu', **kwargs):
 class LiveSelectionTests(unittest.TestCase):
     def test_all_four_configs_share_the_strategy_but_have_separate_ledgers(self):
         from tools.build_quantconnect import build
-        baseline = normalize_config(load_config(ROOT / 'portfolio_config.json'))
+        baseline = normalize_config(load_config(ROOT / 'configs/portfolio_config.json'))
         directories = set()
         for p in ('futu', 'moomoo'):
             for mode in ('paper', 'live'):
-                cfg = normalize_config(load_config(ROOT / (p + '_' + mode + '_config.json')))
+                cfg = normalize_config(load_config(ROOT / 'configs' / (p + '_' + mode + '_config.json')))
                 self.assertEqual(cfg['strategy'], baseline['strategy'])
                 self.assertEqual(build(cfg), build(baseline))
                 connector = _build_platform(cfg['broker'], 'broker')
@@ -80,8 +80,8 @@ class LiveSelectionTests(unittest.TestCase):
 
     def test_live_and_paper_commands_reject_the_other_config_before_network_or_state(self):
         with tempfile.TemporaryDirectory() as folder, patch('platforms.brokers.opend_broker.connection') as connect:
-            paper = normalize_config(load_config(ROOT / 'futu_paper_config.json'))
-            live = normalize_config(load_config(ROOT / 'futu_live_config.json'))
+            paper = normalize_config(load_config(ROOT / 'configs/futu_paper_config.json'))
+            live = normalize_config(load_config(ROOT / 'configs/futu_live_config.json'))
             target = Path(folder) / 'new'
             for manager in (open_paper_session(live, None, target, None),
                             open_broker_paper_session(live, None, target, None),

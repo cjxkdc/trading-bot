@@ -7,7 +7,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from assembly import _build_platform, inspect_market_data
+from app.assembly import _build_platform, inspect_market_data
 from platforms.data.tiger_market import (READ_METHODS, TigerMarketData, TigerMarketError,
     _client_class, _completed_bars, _connect, _probe, _quote_usable, collect)
 
@@ -75,7 +75,7 @@ class MarketTests(unittest.TestCase):
             inspect.assert_not_called()
 
 
-@unittest.skipUnless(HAS_SDK, 'Install requirements-tiger.txt for SDK contract tests')
+@unittest.skipUnless(HAS_SDK, 'Install requirements/tiger.txt for SDK contract tests')
 class MarketSdkTests(unittest.TestCase):
     def test_sdk_constructor_never_claims_device_access_implicitly(self):
         from tigeropen.tiger_open_client import TigerOpenClient

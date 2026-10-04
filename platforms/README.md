@@ -7,7 +7,7 @@
 | 模块 | 登记类型 | 功能 |
 |---|---|---|
 | `data/snapshot.py` | snapshot_file | 读取标准股票快照，返回 MarketSnapshot |
-| `data/csv.py` | csv | 读取单标的总回报数据，供 research.py 使用 |
+| `data/csv.py` | csv | 读取单标的总回报数据，供 app/research.py 使用 |
 | `data/tiger_market.py` | tiger_market / market_reader | Tiger 权限、单只股票报价/历史/基本面检查，保存诊断；不产生可交易快照 |
 | `data/futu_market.py`、`data/moomoo_market.py` | futu_market、moomoo_market / market_reader | 对应 OpenD 的单股票快照、日线、财报检查；不产生可交易快照 |
 | `brokers/paper.py` | paper | 专用本地报价回放账户，立即全额模拟成交 |

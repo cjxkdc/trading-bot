@@ -1,0 +1,10 @@
+{
+  "type": "massive_momentum",
+  "kind": "snapshot_collector",
+  "version": "1.0.0",
+  "entrypoint": "data.massive_momentum:MassiveMomentumData",
+  "output_schema": "current_us_equity_momentum_research_v1",
+  "description": "旧采集接口兼容入口；Portal 统一使用 Massive，需求由策略声明。",
+  "display_name": "Massive 全美股动量数据",
+  "strategy_schema": "us_equity_momentum_daily_v1"
+}

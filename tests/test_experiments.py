@@ -83,7 +83,7 @@ class ExperimentTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.experiment = self.root / "baseline"
-        export_backtest(ROOT / "portfolio_config.json", self.experiment)
+        export_backtest(ROOT / "configs/portfolio_config.json", self.experiment)
         self.raw = self.root / "qc.json"
         self.raw.write_text(json.dumps(fixture()), encoding="utf-8")
 
@@ -139,7 +139,7 @@ class ExperimentTests(unittest.TestCase):
     def test_compare_identifies_cost_and_period_differences_without_a_winner(self):
         first = self.archive()
         second_exp = self.root / "stress"
-        export_backtest(ROOT / "portfolio_config.json", second_exp, start="2022-01-01",
+        export_backtest(ROOT / "configs/portfolio_config.json", second_exp, start="2022-01-01",
                         end="2023-12-31", slippage_bps=30, note="Costs and different period; synthetic fixture")
         data = fixture()
         data["backtest"]["runtimeStatistics"].update({"Research start": "2022-01-01", "Research end": "2023-12-31"})

@@ -61,4 +61,4 @@ class BoundaryTests(unittest.TestCase):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 names = [a.name for a in node.names] if isinstance(node, ast.Import) else (
                     [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
-                self.assertFalse(any(n.split('.')[0] in {"strategies", "platforms", "assembly", "moomoo", "futu"} for n in names))
+                self.assertFalse(any(n.split('.')[0] in {"strategies", "platforms", "app", "moomoo", "futu"} for n in names))

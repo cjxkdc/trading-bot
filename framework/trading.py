@@ -1,7 +1,7 @@
 """USD, whole-share, long-only execution contracts and deterministic sizing."""
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_FLOOR, ROUND_CEILING
 from typing import Protocol
 from framework.contracts import Broker, OrderIntent
 from framework.decisions import digest
@@ -137,7 +137,7 @@ def check_order(order, account, quotes, now, policy, fees):
                    tuple(sorted((s, q) for s, q in positions.items() if q)), now)
 
 
-def plan_orders(decision, account, quotes, now, policy, fees):
+def plan_orders(decision, account, quotes, now, policy, fees, *, split_orders=False, tick_size=None):
     positions = validate_market(account, quotes, now, policy)
     targets = {t.asset_id: amount(t.weight) for t in decision.targets}
     if (len(targets) != len(decision.targets) or any(w > policy.max_weight for w in targets.values())
@@ -156,10 +156,44 @@ def plan_orders(decision, account, quotes, now, policy, fees):
             if (side == "SELL" and delta >= 0) or (side == "BUY" and delta <= 0):
                 continue
             price = quotes[symbol].bid if side == "SELL" else quotes[symbol].ask
+            if tick_size is not None:
+                tick = amount(tick_size,True)
+                price = (price / tick).to_integral_value(rounding=ROUND_CEILING if side == 'BUY' else ROUND_FLOOR) * tick
+                amount(price,True)
             client_id = digest([account.account_id, decision.decision_id, symbol, side])
             quantity = abs(delta)
-            if quantity * price > policy.max_order_value:
+            if quantity * price > policy.max_order_value and not split_orders:
                 raise ValueError("Target change exceeds order cap; splitting is not implemented")
+            if split_orders:
+                cap = int(policy.max_order_value / price)
+                if cap < 1:
+                    raise ValueError('One share exceeds the order cap')
+                remaining, part = quantity, 0
+                while remaining:
+                    quantity = min(remaining, D(cap))
+                    part += 1
+                    part_id = digest([client_id, 'part', part])
+                    if side == 'BUY':
+                        lo, hi = 0, int(quantity)
+                        while lo < hi:
+                            mid = (lo + hi + 1) // 2
+                            try:
+                                check_order(OrderIntent(part_id, symbol, side, D(mid), price),
+                                            projected, quotes, now, policy, fees)
+                            except ValueError:
+                                hi = mid - 1
+                            else:
+                                lo = mid
+                        quantity = D(lo)
+                    if not quantity:
+                        break
+                    order = OrderIntent(part_id, symbol, side, quantity, price)
+                    projected = check_order(order, projected, quotes, now, policy, fees)
+                    orders.append(order)
+                    remaining -= quantity
+                    if len(orders) > 200:
+                        raise ValueError('Too many orders for one cycle')
+                continue
             if side == "BUY":
                 # Find the largest permitted integer buy including post-fee limits.
                 lo, hi = 0, int(quantity)

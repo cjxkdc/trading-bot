@@ -1,0 +1,42 @@
+{
+  "type": "paper",
+  "kind": "broker",
+  "version": "1.0",
+  "entrypoint": "brokers.paper:PaperConnector",
+  "description": "本地报价回放账户；无券商连接",
+  "display_name": "本地回放账户",
+  "control": {
+    "entrypoint": "brokers.controls:LocalPaperControl",
+    "mode": "paper",
+    "capabilities": [
+      "inspect",
+      "execute"
+    ],
+    "path_fields": [
+      "state_dir"
+    ],
+    "default_profile": {
+      "state_dir": "runs/portal-local-paper"
+    },
+    "order_capabilities": {
+      "market": [
+        "US"
+      ],
+      "asset_class": [
+        "equity"
+      ],
+      "currency": [
+        "USD"
+      ],
+      "order_type": [
+        "limit"
+      ],
+      "quantity_type": [
+        "whole"
+      ],
+      "time_in_force": [
+        "day"
+      ]
+    }
+  }
+}

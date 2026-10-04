@@ -63,7 +63,7 @@ def configuration_check(provider, config_dir=None, *, environment='SIMULATE'):
         sdk = version(PROFILES[provider]['package'])
     except PackageNotFoundError:
         sdk = None
-    issues = [] if sdk == SDK_VERSION else ['Install requirements-' + provider + '.txt']
+    issues = [] if sdk == SDK_VERSION else ['Install requirements/' + provider + '.txt']
     if environment == 'REAL' and (cfg.account_id is None or cfg.login_user_id is None):
         issues.append('Live connections require explicit account_id and login_user_id in connection.json')
     return {'provider': provider, 'mode': 'offline_check', 'status': 'not_ready' if issues else 'configuration_ready_not_authenticated',
@@ -257,8 +257,9 @@ def connection(cfg, *, trade=False, allow_orders=False, enable_live=False):
         else:
             class QuoteContext(BoundedConnection, sdk.OpenQuoteContext):
                 pass
-            context = QuoteContext(host=cfg.host, port=cfg.port,
-                                   security_firm=getattr(sdk.SecurityFirm, PROFILES[cfg.provider]['firm']))
+            # In 10.11 this quote parameter selects cryptocurrency, not stock-account jurisdiction.
+            # Equity quotes use NONE. Trade connections keep their explicit firm/account binding.
+            context = QuoteContext(host=cfg.host, port=cfg.port)
         user_id = _check_identity(context, cfg)
         profile = {'user_id': user_id, 'provider': cfg.provider, 'environment': cfg.environment}
         if trade:

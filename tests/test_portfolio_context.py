@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from assembly import build_portfolio_runner, default_portfolio_config, open_paper_session
+from app.assembly import build_portfolio_runner, default_portfolio_config, open_paper_session
 from framework.decisions import decide
 from framework.execution import ExecutionBlocked
 from framework.portfolio import PortfolioContext, PortfolioEngine, StockTarget
@@ -48,7 +48,7 @@ class PortfolioContextTests(unittest.TestCase):
         a, b = (PortfolioContext(date(2020, 1, 2), (s,)) for s in ("A", "B"))
         rows = [stock("A"), stock("B")]
         cloud = adapter.make_decision(engine, rows, date(2020, 1, 2), a)
-        from assembly import portfolio_spec
+        from app.assembly import portfolio_spec
         local = decide(engine, rows, date(2020, 1, 2), portfolio_spec(adapter.strategy_configuration()), context=a)
         self.assertEqual(local, cloud)
         self.assertNotEqual(local.decision_id, decide(engine, rows, date(2020, 1, 2), local.record["strategy"], context=b).decision_id)
@@ -77,7 +77,7 @@ class PortfolioContextTests(unittest.TestCase):
 
     def test_bundled_context_contract_produces_the_same_decision_record(self):
         from test_composition import bundle_namespace
-        from assembly import portfolio_spec
+        from app.assembly import portfolio_spec
         cfg = default_portfolio_config()
         namespace = bundle_namespace(cfg)
         remote_context = namespace["PortfolioContext"](date(2020, 1, 2), ("A",))

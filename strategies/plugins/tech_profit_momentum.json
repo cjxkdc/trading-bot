@@ -1,1 +1,67 @@
-{"type":"tech_profit_momentum","kind":"portfolio","version":"0.1","entrypoint":"strategies.tech_profit_momentum:TechProfitMomentum","input_schema":"us_technology_daily_v1","description":"科技股盈利动量；规则保持 v0.1"}
+{
+  "type": "tech_profit_momentum",
+  "kind": "portfolio",
+  "version": "0.1",
+  "entrypoint": "strategies.tech_profit_momentum:TechProfitMomentum",
+  "readme": "TECH_PROFIT_MOMENTUM.md",
+  "input_schema": "us_technology_daily_v1",
+  "description": "科技股盈利动量；规则保持 v0.1",
+  "display_name": "科技股盈利动量",
+  "parameters": {
+    "count": {
+      "label": "目标股票数"
+    },
+    "weight": {
+      "label": "单股目标权重 (%)",
+      "scale": 100,
+      "step": 0.1
+    },
+    "lookback": {
+      "label": "动量观察期 (交易日)"
+    },
+    "skip": {
+      "label": "跳过最近 (交易日)"
+    },
+    "min_dollar_volume": {
+      "label": "最低日均成交额 (USD)"
+    },
+    "require_profit": {
+      "label": "要求 TTM 营业利润为正"
+    },
+    "industry_limit": {
+      "label": "同一行业最多持股数"
+    }
+  },
+  "limit_rules": [
+    {
+      "product": [
+        "weight"
+      ],
+      "limit": "max_weight"
+    },
+    {
+      "product": [
+        "count",
+        "weight"
+      ],
+      "limit": "max_gross"
+    }
+  ],
+  "data_requirements": {
+    "universe": "technology",
+    "fields": [
+      "adjusted_closes",
+      "industry",
+      "dollar_volumes"
+    ],
+    "conditional_fields": [
+      {
+        "parameter": "require_profit",
+        "equals": true,
+        "fields": [
+          "operating_income_ttm"
+        ]
+      }
+    ]
+  }
+}

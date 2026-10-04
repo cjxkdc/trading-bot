@@ -2,7 +2,7 @@
 
 ## 使用
 
-在项目根目录检查 `portfolio_config.json`，然后：
+在项目根目录检查 `configs/portfolio_config.json`，然后：
 
 ```text
 python bot.py export-qc --out runs/qc-baseline-001
@@ -55,7 +55,7 @@ QC 批量目标下单先处理减仓。旧持仓到 10:00 仍无有效当分钟�
 
 - `configs/momentum_only.json`：动量和流动性，去掉盈利门槛及额外行业限制。
 - `configs/momentum_profit.json`：加盈利门槛。
-- `portfolio_config.json`：再加同一细分行业最多 2 只。
+- `configs/portfolio_config.json`：再加同一细分行业最多 2 只。
 
 旧 MODE 的 momentum/profit/full 开关仅为兼容保留。手动改生成文件会使运行偏离 manifest，须另行记录；优先通过配置再导出。
 

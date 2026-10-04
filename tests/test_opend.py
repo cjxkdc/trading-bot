@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from assembly import _build_platform, inspect_broker, inspect_market_data, open_broker_paper_session
+from app.assembly import _build_platform, inspect_broker, inspect_market_data, open_broker_paper_session
 from framework.configuration import load_config, normalize_config
 from framework.contracts import OrderIntent
 from platforms.opend import (ROOT, PROFILES, SDK_VERSION, Settings, OpenDError, BoundedConnection, call,
@@ -47,8 +47,8 @@ def account_row(**overrides):
 class RegistrationTests(unittest.TestCase):
     def test_independent_profiles_preserve_strategy_framework_and_qc_export(self):
         from tools.build_quantconnect import build
-        base = normalize_config(load_config(ROOT / 'portfolio_config.json'))
-        configs = [normalize_config(load_config(ROOT / (p + '_paper_config.json'))) for p in ('futu', 'moomoo')]
+        base = normalize_config(load_config(ROOT / 'configs/portfolio_config.json'))
+        configs = [normalize_config(load_config(ROOT / 'configs' / (p + '_paper_config.json'))) for p in ('futu', 'moomoo')]
         for cfg in configs:
             self.assertEqual(cfg['strategy'], base['strategy'])
             self.assertEqual(build(cfg), build(base))
@@ -65,7 +65,7 @@ class RegistrationTests(unittest.TestCase):
             socket.assert_not_called()
 
     def test_provider_selects_its_own_default_market_config(self):
-        with patch('assembly._build_platform') as build:
+        with patch('app.assembly._build_platform') as build:
             for p in ('tiger', 'futu', 'moomoo'):
                 inspect_market_data(p + '_market')
                 self.assertEqual(build.call_args.kwargs['config_dir'], ROOT / ('secrets/tiger_paper' if p == 'tiger' else 'secrets/' + p))
@@ -98,7 +98,7 @@ class RegistrationTests(unittest.TestCase):
             select_account([account_row(trd_env='REAL', acc_id=456), account_row()], selected, SDK)
 
     def test_different_state_directory_fails_before_network(self):
-        cfg = normalize_config(load_config(ROOT / 'futu_paper_config.json'))
+        cfg = normalize_config(load_config(ROOT / 'configs/futu_paper_config.json'))
         with tempfile.TemporaryDirectory() as folder, patch('platforms.brokers.opend_broker.connection') as connect:
             with self.assertRaisesRegex(ValueError, 'state directory'):
                 with open_broker_paper_session(cfg, None, Path(folder) / 'other', None):
@@ -113,7 +113,7 @@ class RegistrationTests(unittest.TestCase):
                 inspect_market_data(p + '_market', claim_device=True)
 
     def test_initial_login_failure_does_not_leave_an_empty_poisoned_state_directory(self):
-        cfg = normalize_config(load_config(ROOT / 'futu_paper_config.json'))
+        cfg = normalize_config(load_config(ROOT / 'configs/futu_paper_config.json'))
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'
             cfg['broker']['state_dir'] = str(state)
@@ -124,7 +124,7 @@ class RegistrationTests(unittest.TestCase):
             self.assertFalse(state.exists())
 
     def test_failed_initialization_never_removes_a_partial_ledger(self):
-        from assembly import _open_simulation_session
+        from app.assembly import _open_simulation_session
         connector = Mock(state_files=('partial.sqlite',))
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'

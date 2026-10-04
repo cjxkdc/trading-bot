@@ -6,6 +6,11 @@ venv/
 .coverage
 htmlcov/
 
+# Locally built desktop launcher (sources and build instructions are tracked)
+build/
+dist/
+Trading Bot.exe
+
 # Local experiments and account state
 runs/
 *.sqlite
@@ -18,6 +23,8 @@ runs/
 .env.*
 !.env.example
 secrets/
+configs/portal/cloud.json
+/打开云端工作台.url
 credentials/
 tiger_openapi_config.properties
 tiger_openapi_token.properties
@@ -26,3 +33,6 @@ tiger_openapi_token.properties
 
 .DS_Store
 Thumbs.db
+
+# Frontend dependencies and generated assets
+node_modules/

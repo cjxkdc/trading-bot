@@ -1,6 +1,4 @@
-"""moomoo AU simulation profile."""
-from platforms.brokers.opend_broker import OpenDConnector
-
-
-class MoomooPaperConnector(OpenDConnector):
-    provider = 'moomoo'
+"""Compatibility import; maintained implementation: brokers.moomoo_paper."""
+import importlib as _importlib
+import sys as _sys
+_sys.modules[__name__] = _importlib.import_module("brokers.moomoo_paper")

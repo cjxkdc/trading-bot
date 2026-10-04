@@ -1,0 +1,17 @@
+{
+  "default": "massive",
+  "sources": {
+    "massive": {
+      "type": "massive",
+      "config_dir": "secrets/massive",
+      "source_config": "configs/massive.json",
+      "cache_dir": "runs/data/massive/cache"
+    },
+    "futu": {
+      "type": "futu_technology",
+      "config_dir": "secrets/futu",
+      "source_config": "configs/futu_technology.json",
+      "cache_dir": "runs/data/futu-technology/cache"
+    }
+  }
+}

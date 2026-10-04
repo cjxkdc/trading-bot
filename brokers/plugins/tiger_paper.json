@@ -1,0 +1,45 @@
+{
+  "type": "tiger_paper",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "brokers.tiger_paper:TigerPaperConnector",
+  "account_status": true,
+  "description": "Tiger-hosted PAPER account only; USD whole-share DAY limit orders with durable reconciliation",
+  "display_name": "Tiger 模拟盘",
+  "control": {
+    "entrypoint": "brokers.controls:TigerPaperControl",
+    "mode": "broker_paper",
+    "capabilities": [
+      "inspect",
+      "execute"
+    ],
+    "path_fields": [
+      "config_dir",
+      "state_dir"
+    ],
+    "default_profile": {
+      "config_dir": "secrets/tiger_paper",
+      "state_dir": "runs/tiger-paper"
+    },
+    "order_capabilities": {
+      "market": [
+        "US"
+      ],
+      "asset_class": [
+        "equity"
+      ],
+      "currency": [
+        "USD"
+      ],
+      "order_type": [
+        "limit"
+      ],
+      "quantity_type": [
+        "whole"
+      ],
+      "time_in_force": [
+        "day"
+      ]
+    }
+  }
+}

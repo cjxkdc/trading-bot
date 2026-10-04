@@ -1,4 +1,4 @@
-"""Research and order contracts. Concrete adapters remain in platforms/."""
+"""Research and order contracts. Concrete adapters live in data/ and brokers/."""
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal

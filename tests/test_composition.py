@@ -10,8 +10,8 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
-import assembly
-from assembly import (build_portfolio_runner, default_portfolio_config,
+from app import assembly
+from app.assembly import (build_portfolio_runner, default_portfolio_config,
                       open_paper_session, portfolio_spec, prepare_portfolio)
 from bot import export_backtest, run_paper
 from framework.configuration import load_config, normalize_config
@@ -49,7 +49,7 @@ class CompositionTests(unittest.TestCase):
         return path
 
     def test_switch_strategy_by_config_reuses_runner_and_changes_selection(self):
-        _, first, snapshot, momentum = prepare_portfolio(ROOT / "portfolio_config.json", self.snapshot)
+        _, first, snapshot, momentum = prepare_portfolio(ROOT / "configs/portfolio_config.json", self.snapshot)
         _, second, _, control = prepare_portfolio(ROOT / "configs/equal_weight_control.json", self.snapshot)
         self.assertIs(type(first), type(second))
         self.assertEqual({t.asset_id for t in momentum.targets},
@@ -92,7 +92,7 @@ class CompositionTests(unittest.TestCase):
         cfg = default_portfolio_config()
         cfg.update(data={"type": "reversed"}, broker={"type": "other"})
         config = self.config_file(cfg)
-        ordinary = run_paper(self.snapshot, ROOT / "portfolio_config.json", self.root / "ordinary")
+        ordinary = run_paper(self.snapshot, ROOT / "configs/portfolio_config.json", self.root / "ordinary")
         with patch.dict(sys.modules, {module.__name__: module}), patch.object(
                 assembly, "platform_catalog", lambda: original_catalog(folder)):
             alternate = run_paper(self.snapshot, config, self.root / "alternate")
@@ -115,7 +115,7 @@ class CompositionTests(unittest.TestCase):
         self.assertFalse((self.root / "state").exists())
 
     def test_live_connector_is_rejected_before_initialization_or_connection(self):
-        cfg, runner, snapshot, _ = prepare_portfolio(ROOT / "portfolio_config.json", self.snapshot)
+        cfg, runner, snapshot, _ = prepare_portfolio(ROOT / "configs/portfolio_config.json", self.snapshot)
         connector = Mock(mode="live")
         with patch.object(assembly, "_build_platform", return_value=connector):
             with self.assertRaisesRegex(ValueError, "paper connections only"):
@@ -127,7 +127,7 @@ class CompositionTests(unittest.TestCase):
 
     def test_strategy_change_cannot_reuse_a_completed_account_cycle(self):
         state = self.root / "state"
-        run_paper(self.snapshot, ROOT / "portfolio_config.json", state)
+        run_paper(self.snapshot, ROOT / "configs/portfolio_config.json", state)
         with self.assertRaisesRegex(ExecutionBlocked, "frozen"):
             run_paper(self.snapshot, ROOT / "configs/equal_weight_control.json", state)
 
@@ -192,7 +192,7 @@ class CompositionTests(unittest.TestCase):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 names = [a.name for a in node.names] if isinstance(node, ast.Import) else (
                     [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
-                forbidden = {"platforms", "assembly", "bot", "moomoo", "futu", "tigeropen", "AlgorithmImports"}
+                forbidden = {"platforms", "app", "bot", "moomoo", "futu", "tigeropen", "AlgorithmImports"}
                 self.assertFalse(any(name.split(".")[0] in forbidden for name in names), str(path))
 
 

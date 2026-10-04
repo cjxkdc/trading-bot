@@ -1,0 +1,10 @@
+{
+  "type": "equity_momentum_snapshot",
+  "kind": "snapshot_data",
+  "version": "1.0",
+  "entrypoint": "data.equity_momentum:EquitySnapshotFile",
+  "input_schema": "us_equity_momentum_daily_v1",
+  "description": "需完整普通股池、市值、股数成交量及已核对持仓；独立于科技股数据。",
+  "display_name": "全美股动量执行快照",
+  "strategy_schema": "us_equity_momentum_daily_v1"
+}

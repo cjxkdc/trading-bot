@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python: '3.11'
+            python: '3.12'
           - os: windows-latest
             python: '3.12'
     runs-on: ${{ matrix.os }}
@@ -29,10 +29,22 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt -r requirements-tiger.txt -r requirements-futu.txt -r requirements-moomoo.txt
+        run: python -m pip install -r requirements/dev.txt
       - name: Run behavioral tests
-        run: python -m unittest discover -s tests -v
+        run: python -X utf8 tools/test_project.py
       - name: Rebuild QuantConnect export
-        run: python tools/build_quantconnect.py
+        run: python tools/build_quantconnect.py --config tests/fixtures/portfolio_default.json
       - name: Check generated export matches maintained source
         run: git diff --exit-code -- platforms/quantconnect/main.py
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Install portal dependencies
+        working-directory: ui
+        run: npm ci --ignore-scripts
+      - name: Run portal behavior tests
+        working-directory: ui
+        run: node --test
+      - name: Build local portal
+        working-directory: ui
+        run: npm run build

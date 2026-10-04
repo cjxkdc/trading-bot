@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import asdict
 from decimal import Decimal
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -68,6 +69,8 @@ class Journal:
     @contextmanager
     def exclusive(self):
         # OS releases the lock on crashes. One writer per dedicated account journal.
+        if getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Journal exclusive lock is not reentrant')
         with self.lock_path.open("a+b") as handle:
             handle.seek(0, 2)
             if handle.tell() == 0:
@@ -81,8 +84,10 @@ class Journal:
                 import fcntl
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             try:
+                self._exclusive_held = True
                 yield
             finally:
+                self._exclusive_held = False
                 handle.seek(0)
                 if os.name == "nt":
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -128,13 +133,72 @@ class Journal:
             raise ValueError("Missing intent")
         return row[0], unpack_state(row[1]) if row[1] else None
 
+    def unfinished_orders(self, limit=1000):
+        """Return durable incomplete intents without leaking database layout to callers."""
+        if type(limit) is not int or not 1 <= limit <= 10000:
+            raise ValueError('Invalid reconciliation limit')
+        rows = self.db.execute(
+            "SELECT cycle,body,status FROM intents WHERE status NOT IN ('filled','abandoned') ORDER BY rowid LIMIT ?",
+            (limit+1,)).fetchall()
+        if len(rows) > limit:
+            raise ValueError('Too many unresolved intents; manual reconciliation required')
+        return tuple((cycle, unpack_order(body), status) for cycle, body, status in rows)
+
+    def cycle_statuses(self):
+        """A frozen batch exists even when nothing reached the broker yet."""
+        rows = self.db.execute('''
+            SELECT batches.cycle, intents.status, COUNT(intents.id)
+            FROM batches LEFT JOIN intents ON batches.cycle=intents.cycle
+            GROUP BY batches.cycle,intents.status ORDER BY batches.cycle
+        ''').fetchall()
+        cycles = {}
+        for cycle, status, count in rows:
+            value = cycles.setdefault(cycle, {})
+            if status is not None:
+                value[status] = count
+        for cycle, body in self.db.execute('SELECT cycle,body FROM batches'):
+            expected = json.loads(body)
+            actual = [json.loads(row[0]) for row in self.db.execute(
+                'SELECT body FROM intents WHERE cycle=? ORDER BY rowid', (cycle,))]
+            if expected != actual:
+                raise ValueError('Frozen batch and intent ledger disagree; reconciliation required')
+        return cycles
+
     def save(self, state):
         with self.transaction():
             self.db.execute("UPDATE intents SET status=?,state=? WHERE id=?",
                             (state.status, packed(asdict(state)), state.client_id))
 
+    def abandon_planned(self, account_id):
+        """Explicitly retire only never-claimed intents, keeping frozen bodies and audit.
+
+        Caller must hold the execution lock and have reconciled the broker through
+        a read-only connection immediately before this operation.
+        """
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Abandonment requires the exclusive journal lock')
+        summaries = self.cycle_statuses()
+        if any(cycle.rsplit(':', 1)[0] != account_id for cycle in summaries):
+            raise ValueError('Journal belongs to another account')
+        if any(set(counts)-{'filled', 'planned', 'abandoned'} for counts in summaries.values()):
+            raise ValueError('Only completely filled and never-submitted orders can be closed')
+        rows = self.db.execute("SELECT id,cycle,body FROM intents WHERE status='planned' ORDER BY rowid").fetchall()
+        if not rows:
+            return 0
+        with self.transaction():
+            self.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, action TEXT NOT NULL, body TEXT NOT NULL)''')
+            event = {'account_id': account_id, 'intents': [
+                {'client_id': ident, 'cycle': cycle, 'intent': json.loads(body)} for ident, cycle, body in rows]}
+            self.db.execute('INSERT INTO execution_audit(recorded_at,action,body) VALUES(?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), 'abandon_unsubmitted', packed(event)))
+            changed = self.db.execute("UPDATE intents SET status='abandoned' WHERE status='planned'").rowcount
+            if changed != len(rows):
+                raise ValueError('Intent state changed while closing the batch')
+        return changed
+
     def other_unfinished(self, cycle):
-        return self.db.execute("SELECT id FROM intents WHERE cycle<>? AND status<>'filled' LIMIT 1",
+        return self.db.execute("SELECT id FROM intents WHERE cycle<>? AND status NOT IN ('filled','abandoned') LIMIT 1",
                                (cycle,)).fetchone() is not None
 
     def has_later_cycle(self, cycle):

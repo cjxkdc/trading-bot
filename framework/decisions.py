@@ -32,11 +32,11 @@ class Decision:
 
 
 def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
-           *, input_schema="us_technology_daily_v1", context=None):
+           *, input_schema="us_technology_daily_v1", context=None, current_information=False):
     stocks = tuple(sorted(stocks, key=lambda s: s.asset_id))
     if len({s.price_as_of for s in stocks}) > 1:
         raise ValueError("All candidates must share the same completed signal session")
-    targets = engine.plan(stocks, execution_day, context)
+    targets = engine.plan(stocks, execution_day, context, current_information=current_information)
     record = {
         "schema": 1, "input_schema": input_schema,
         "execution_day": execution_day.isoformat(),
@@ -47,4 +47,6 @@ def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
     }
     if context is not None:
         record["portfolio_context"] = canonical(asdict(context))
+    if current_information is True:
+        record['information_mode'] = 'current_observation'
     return Decision(digest(record), targets, record)

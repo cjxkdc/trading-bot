@@ -1,0 +1,24 @@
+{
+  "default": "futu_paper",
+  "profiles": {
+    "futu_paper": {
+      "config_file": "configs/futu_paper_config.json"
+    },
+    "moomoo_paper": {
+      "config_file": "configs/moomoo_paper_config.json"
+    },
+    "tiger_paper": {
+      "config_file": "configs/tiger_paper_config.json"
+    },
+    "paper": {
+      "type": "paper",
+      "state_dir": "runs/portal-local-paper"
+    },
+    "futu_live": {
+      "config_file": "configs/futu_live_config.json"
+    },
+    "moomoo_live": {
+      "config_file": "configs/moomoo_live_config.json"
+    }
+  }
+}

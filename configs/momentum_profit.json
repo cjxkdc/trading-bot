@@ -1,5 +1,5 @@
 {
-  "extends": "../portfolio_config.json",
+  "extends": "portfolio_config.json",
   "strategy": {
     "type": "tech_profit_momentum",
     "count": 5,

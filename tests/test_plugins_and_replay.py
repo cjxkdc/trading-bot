@@ -7,8 +7,8 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-import assembly
-from assembly import build_portfolio_strategy, portfolio_spec, strategy_catalog
+from app import assembly
+from app.assembly import build_portfolio_strategy, portfolio_spec, strategy_catalog
 from bot import run_paper
 from framework.decisions import decide
 from framework.portfolio import PortfolioEngine
@@ -85,7 +85,7 @@ class PluginReplayTests(unittest.TestCase):
             root = Path(folder)
             path = root/'snapshot.json'
             path.write_text(json.dumps(demo_snapshot()))
-            config = Path(__file__).resolve().parents[1]/'paper_config.json'
+            config = Path(__file__).resolve().parents[1]/'configs/paper_config.json'
             first = run_paper(path,config,root/'state')
             again = run_paper(path,config,root/'state')
             self.assertEqual(first,again)
@@ -102,7 +102,7 @@ class PluginReplayTests(unittest.TestCase):
             path = root/'snapshot.json'
             path.write_text(json.dumps(data))
             with self.assertRaises(ValueError):
-                run_paper(path,Path(__file__).resolve().parents[1]/'paper_config.json',root/'state')
+                run_paper(path,Path(__file__).resolve().parents[1]/'configs/paper_config.json',root/'state')
             self.assertFalse((root/'state').exists())
 
 

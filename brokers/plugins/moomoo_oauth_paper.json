@@ -1,0 +1,27 @@
+{
+  "type": "moomoo_oauth_paper",
+  "kind": "broker",
+  "version": "1.0.0",
+  "entrypoint": "brokers.moomoo_oauth:MoomooOAuthConnector",
+  "account_status": false,
+  "display_name": "moomoo 网页沙盒 · 只读验证",
+  "description": "通过券商官网授权读取独立的美股模拟账户。此模块未启用交易，与 OpenD 模拟盘账本分离。",
+  "control": {
+    "entrypoint": "brokers.moomoo_oauth:MoomooOAuthControl",
+    "mode": "broker_paper",
+    "capabilities": [
+      "inspect"
+    ],
+    "path_fields": [
+      "state_dir"
+    ],
+    "default_profile": {
+      "state_dir": "runs/moomoo-oauth-paper"
+    },
+    "authentication": {
+      "mode": "oauth",
+      "entrypoint": "brokers.moomoo_oauth:MoomooAuthorization",
+      "title": "券商官网授权 · 只读"
+    }
+  }
+}

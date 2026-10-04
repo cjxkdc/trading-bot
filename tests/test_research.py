@@ -1,6 +1,6 @@
 import unittest
 from datetime import date, timedelta
-from research import backtest, signal
+from app.research import backtest, signal
 
 
 class ResearchTests(unittest.TestCase):

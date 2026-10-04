@@ -29,6 +29,18 @@ class StockSnapshot:
 
 
 @dataclass(frozen=True)
+class EquitySnapshot(StockSnapshot):
+    """Listed US common-stock input, with explicit capitalization and share volume.
+
+    Kept separate from the original technology contract: turnover in dollars is
+    not share volume, and a missing market cap must never become a zero.
+    """
+    market_cap: float
+    raw_close: float
+    share_volumes: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class StockTarget:
     asset_id: str
     weight: float
@@ -82,13 +94,14 @@ class PortfolioEngine:
         self.strategy = strategy
         self.max_gross, self.max_weight = max_gross, max_weight
 
-    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None):
+    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None, *, current_information=False):
         stocks = tuple(stocks)
         ids = {stock.asset_id for stock in stocks}
         if len(ids) != len(stocks):
             raise ValueError("Duplicate asset identifiers")
         for stock in stocks:
-            if not stock.known_on <= stock.price_as_of < execution_day:
+            cutoff = execution_day if current_information is True else stock.price_as_of
+            if not stock.known_on <= cutoff or not stock.price_as_of < execution_day:
                 raise ValueError("Information must precede the execution session")
         if context is not None:
             if not isinstance(context, PortfolioContext) or context.as_of > execution_day:

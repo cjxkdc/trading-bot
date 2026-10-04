@@ -1,0 +1,7 @@
+{
+  "type": "csv",
+  "kind": "historical_data",
+  "version": "1.0",
+  "entrypoint": "data.csv:CsvData",
+  "description": "\u5355\u6807\u7684\u603b\u56de\u62a5\u5e8f\u5217\uff1b\u7528\u4e8e\u539f\u6709 research.py"
+}

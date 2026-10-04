@@ -93,7 +93,7 @@ def load_adapter():
     api.PortfolioTarget = lambda symbol, weight: (symbol, weight)
     api.OrderStatus = types.SimpleNamespace(INVALID="invalid")
     api.DataNormalizationMode = types.SimpleNamespace(RAW="raw", ADJUSTED="adjusted")
-    path = Path(__file__).resolve().parents[1] / "platforms/quantconnect/adapter.py"
+    path = Path(__file__).resolve().parents[1] / "backtests/quantconnect/adapter.py"
     spec = importlib.util.spec_from_file_location("qc_adapter_test", path)
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, {"AlgorithmImports": api}):

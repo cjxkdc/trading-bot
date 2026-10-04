@@ -1,6 +1,4 @@
-"""Futu HK simulation profile."""
-from platforms.brokers.opend_broker import OpenDConnector
-
-
-class FutuPaperConnector(OpenDConnector):
-    provider = 'futu'
+"""Compatibility import; maintained implementation: brokers.futu_paper."""
+import importlib as _importlib
+import sys as _sys
+_sys.modules[__name__] = _importlib.import_module("brokers.futu_paper")

@@ -1,6 +1,4 @@
-"""Futu market-data diagnostics."""
-from platforms.data.opend_market import OpenDMarketData
-
-
-class FutuMarketData(OpenDMarketData):
-    provider = 'futu'
+"""Compatibility import; maintained implementation: data.futu_market."""
+import importlib as _importlib
+import sys as _sys
+_sys.modules[__name__] = _importlib.import_module("data.futu_market")

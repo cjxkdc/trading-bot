@@ -1,2 +1,7 @@
-# Python's zoneinfo needs IANA data on Windows; supplied by the OS on most Unix hosts.
+# Default runtime: local Portal and the trading framework.
+# Install from the project root: python -m pip install -r requirements.txt
+# Optional broker SDKs and development tools are grouped in requirements/.
+# Python's zoneinfo needs IANA data on Windows.
 tzdata; sys_platform == "win32"
+fastapi==0.142.2
+uvicorn==0.54.0

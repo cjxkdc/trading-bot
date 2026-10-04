@@ -1,0 +1,8 @@
+{
+  "type": "futu_market",
+  "kind": "market_reader",
+  "version": "1.0.0",
+  "entrypoint": "data.futu_market:FutuMarketData",
+  "default_config_dir": "secrets/futu",
+  "description": "Futu snapshot, history and financial-statement diagnostics; not an executable universe feed"
+}

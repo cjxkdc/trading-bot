@@ -16,6 +16,9 @@ class MarketSnapshot:
     quotes: Mapping[str, Quote]
     execution_time: datetime
     portfolio_context: PortfolioContext | None = None
+    current_information: bool = False
+    instruments: Mapping[str, str] | None = None
+    clock_offset_seconds: float = 0.
 
 
 class SnapshotProvider(Protocol):
@@ -43,13 +46,18 @@ class PortfolioRunner:
             raise ValueError("Execution timestamp must include timezone")
         execution_day = snapshot.execution_time.astimezone(ZoneInfo("America/New_York")).date()
         return decide(self.engine, snapshot.stocks, execution_day, self.strategy_spec,
-                      input_schema=self.input_schema, context=snapshot.portfolio_context)
+                      input_schema=self.input_schema, context=snapshot.portfolio_context,
+                      current_information=snapshot.current_information)
 
-    def execute(self, decision, snapshot, broker, journal):
+    def execute(self, decision, snapshot, broker, journal, *, approved_orders=None, expected_account=None,
+                recover=False, before_submit=None):
         # Recompute before execution so a preview cannot be paired with other data.
         if decision != self.plan(snapshot):
             raise ValueError("Preview does not match the supplied market snapshot")
         journal.record_decision(decision)
-        result = Executor(broker, journal, self.policy, self.fees).run(
-            decision, snapshot.quotes, snapshot.execution_time)
+        result = Executor(broker, journal, self.policy, self.fees,
+                          settlement_seconds=10 if approved_orders is not None else 0).run(
+            decision, snapshot.quotes, snapshot.execution_time,
+            approved_orders=approved_orders, expected_account=expected_account,
+            recover=recover, before_submit=before_submit)
         return dict(result, account=asdict(broker.account()))

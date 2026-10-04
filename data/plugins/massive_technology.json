@@ -1,0 +1,10 @@
+{
+  "type": "massive_technology",
+  "kind": "snapshot_collector",
+  "version": "1.0.0",
+  "entrypoint": "data.massive_technology:MassiveTechnologyData",
+  "output_schema": "current_equity_research_v1",
+  "description": "旧采集接口兼容入口；Portal 统一使用 Massive，需求由策略声明。",
+  "display_name": "Massive 科技股数据",
+  "strategy_schema": "us_technology_daily_v1"
+}

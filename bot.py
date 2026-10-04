@@ -1,16 +1,18 @@
 """Select plug-ins, preview a portfolio, replay locally, or export a QC backtest."""
 import argparse
+import sys
 import json
 from pathlib import Path
-from assembly import (inspect_broker, inspect_market_data, open_paper_session, open_broker_paper_session, open_live_session, platform_catalog, prepare_portfolio,
+from app.assembly import (inspect_broker, inspect_market_data, open_paper_session, open_broker_paper_session, open_live_session, platform_catalog, prepare_portfolio,
                       strategy_catalog, write_demo_snapshot)
 from framework.configuration import load_config, normalize_config
 from framework.journal import packed
 from platforms.opend import OpenDError
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG = ROOT / "portfolio_config.json"
-TIGER_PAPER_CONFIG = ROOT / 'tiger_paper_config.json'
+DEFAULT_CONFIG = ROOT / "configs/portfolio_config.json"
+# Compatibility export for explicit integrations; never an implicit CLI selection.
+TIGER_PAPER_CONFIG = ROOT / 'configs/tiger_paper_config.json'
 
 
 def run_paper(snapshot_path, config_path, state_dir):
@@ -19,7 +21,7 @@ def run_paper(snapshot_path, config_path, state_dir):
         return dict(runner.execute(decision, snapshot, broker, journal), mode="local_paper_replay")
 
 
-def run_broker_paper(snapshot_path, config_path=TIGER_PAPER_CONFIG, state_dir=None):
+def run_broker_paper(snapshot_path, config_path, state_dir=None):
     cfg, runner, snapshot, decision = prepare_portfolio(config_path, snapshot_path)
     with open_broker_paper_session(cfg, snapshot, state_dir, runner.fees) as (broker, journal):
         return dict(runner.execute(decision, snapshot, broker, journal), mode='broker_paper')
@@ -68,6 +70,9 @@ def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'workbench':
+        from app.workbench_cli import main as workbench_main
+        return workbench_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("strategies")
@@ -86,7 +91,7 @@ def main():
     paper.add_argument("--state", type=Path, required=True)
     trade = sub.add_parser('broker-paper', help='One simulation execution pass; pending orders pause the batch')
     trade.add_argument('--snapshot', type=Path, required=True, help='Current real-market snapshot; never synthetic demo data')
-    trade.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
+    trade.add_argument('--config', type=Path, required=True, help='Legacy explicit profile; everyday trading uses: workbench execute')
     trade.add_argument('--state', type=Path, help='Must match the broker configuration state_dir')
     live = sub.add_parser('broker-live', help='Real-account execution; explicit configuration and activation required')
     live.add_argument('--snapshot', type=Path, required=True)
@@ -109,12 +114,12 @@ def main():
     compare.add_argument("--results", type=Path, nargs="+", required=True)
     compare.add_argument("--out", type=Path, required=True)
     broker = sub.add_parser("broker-status", help="Offline check by default; --connect sends read-only queries")
-    broker.add_argument("--broker", help='Default: broker from tiger_paper_config.json')
-    broker.add_argument('--config', type=Path, default=TIGER_PAPER_CONFIG)
+    broker.add_argument("--broker", help='Explicit legacy diagnostic plugin; omit all profile options to use the selected workbench broker')
+    broker.add_argument('--config', type=Path)
     broker.add_argument("--config-dir", type=Path)
     broker.add_argument("--connect", action="store_true")
     market = sub.add_parser('market-status', help='Data-access diagnostic; never produces or executes orders')
-    market.add_argument('--provider', default='tiger_market')
+    market.add_argument('--provider')
     market.add_argument('--config-dir', type=Path, help='Default: selected provider configuration directory')
     market.add_argument('--symbol', default='AAPL', help='Probe only this symbol to limit history-quota usage')
     market.add_argument('--connect', action='store_true')
@@ -140,17 +145,22 @@ def main():
         print(json.dumps(export_backtest(args.config, args.out, start=args.start, end=args.end,
                                         slippage_bps=args.slippage_bps, note=args.note)))
     elif args.command == "import-qc":
-        from framework.experiments import import_result
-        from platforms.quantconnect.results import parse_result
+        from backtests.experiments import import_result
+        from backtests.quantconnect.results import parse_result
         path = import_result(args.experiment, args.result, parse_result, run_code=args.code)
         print(json.dumps({"result_dir": str(path)}))
     elif args.command == "compare-qc":
-        from framework.experiments import compare_results
-        from platforms.quantconnect.results import parse_result
+        from backtests.experiments import compare_results
+        from backtests.quantconnect.results import parse_result
         report = compare_results(args.results, parse_result, args.out)
         print(json.dumps({"report": str(args.out / "comparison.md"),
                           "comparison_differences": report["comparison_differences"]}))
     elif args.command == "broker-status":
+        if args.config is None and args.broker is None and args.config_dir is None:
+            from app.workbench_cli import main as workbench_main
+            return workbench_main(['status' if args.connect else 'offline'])
+        if args.config is None:
+            parser.error('Legacy diagnostics require an explicit --config; use workbench status for the current account')
         cfg = normalize_config(load_config(args.config))
         name = args.broker or cfg['broker']['type']
         config_dir = args.config_dir
@@ -166,13 +176,18 @@ def main():
         if result.get("issues"):
             parser.exit(2)
     elif args.command == 'market-status':
-        from platforms.data.tiger_market import TigerMarketError
+        if args.provider is None and args.out is None and not args.claim_device:
+            from app.workbench_cli import main as workbench_main
+            return workbench_main(['data-status' if args.connect else 'view'])
+        from data.tiger_market import TigerMarketError
         if args.claim_device and not args.connect:
             parser.error('--claim-device requires --connect')
         if args.connect and args.out is None:
             parser.error('--connect requires a new --out directory to preserve the diagnostic')
         if args.out is not None:
             args.out.mkdir(parents=True, exist_ok=False)
+        if args.provider is None:
+            parser.error('Quote diagnostics require --provider; use workbench data-status for the selected data source')
         try:
             result = inspect_market_data(args.provider, args.config_dir, connect=args.connect,
                                          symbol=args.symbol, claim_device=args.claim_device)
@@ -193,7 +208,7 @@ def main():
             parser.exit(2)
     elif args.command in {'broker-paper', 'broker-live'}:
         from framework.execution import ExecutionBlocked
-        from platforms.brokers.tiger_paper import TigerPaperError
+        from brokers.tiger_paper import TigerPaperError
         try:
             if args.command == 'broker-live':
                 if not args.enable_live:
@@ -210,4 +225,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

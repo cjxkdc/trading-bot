@@ -1,0 +1,32 @@
+{
+  "type": "snapshot_file",
+  "kind": "snapshot_data",
+  "version": "1.0",
+  "entrypoint": "data.snapshot:SnapshotFile",
+  "input_schema": "us_technology_daily_v1",
+  "description": "导入标准执行快照；根据当前策略校验股票数据格式。",
+  "display_name": "本地快照文件",
+  "strategy_schema": "us_technology_daily_v1",
+  "control": {
+    "entrypoint": "data.request_control:SnapshotProviderControl",
+    "capabilities": [
+      "upload",
+      "preview"
+    ],
+    "path_fields": [
+      "directory"
+    ],
+    "default_profile": {
+      "directory": "runs/data/snapshot-file"
+    },
+    "settings_fields": [],
+    "request_driven": true,
+    "profile_aliases": [
+      "equity_momentum_snapshot"
+    ]
+  },
+  "strategy_schemas": [
+    "us_technology_daily_v1",
+    "us_equity_momentum_daily_v1"
+  ]
+}

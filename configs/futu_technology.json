@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "universe_id": "futu_technology_industries_v1",
+  "max_symbols": 1000,
+  "industries": {
+    "US.LIST2015": "半导体",
+    "US.LIST2016": "半导体设备与材料",
+    "US.LIST2047": "太阳能",
+    "US.LIST2072": "电子元件",
+    "US.LIST2075": "消费电子产品",
+    "US.LIST2098": "通讯设备",
+    "US.LIST2252": "信息技术服务",
+    "US.LIST2275": "科技仪器",
+    "US.LIST2470": "应用软件",
+    "US.LIST2492": "计算机硬件",
+    "US.LIST2506": "电子与计算机分销",
+    "US.LIST2508": "软件基础设施"
+  }
+}

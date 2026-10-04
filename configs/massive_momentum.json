@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "max_reference_symbols": 20000,
+  "max_requests_per_run": 40000,
+  "metadata_cache_days": 1
+}

@@ -1,6 +1,6 @@
 # Paste this ENTIRE file into a new QuantConnect Python project's main.py.
 # Generated file: edit the original modules, then rebuild.
-# Source SHA256: 95ff4d58c0ab4eb7d6ac23f28e521c6f28390cd690e455cd538ee8f285d4e4d4
+# Source SHA256: 2c4f74234503e2770102accbe80211c1fdd72a5d3123565669c1258647d4fb3e
 
 # ===== framework/portfolio.py =====
 """Platform-independent contract for cross-sectional, long-only portfolios."""
@@ -31,6 +31,18 @@ class StockSnapshot:
     operating_income_ttm: float
     adjusted_closes: tuple[float, ...]
     dollar_volumes: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class EquitySnapshot(StockSnapshot):
+    """Listed US common-stock input, with explicit capitalization and share volume.
+
+    Kept separate from the original technology contract: turnover in dollars is
+    not share volume, and a missing market cap must never become a zero.
+    """
+    market_cap: float
+    raw_close: float
+    share_volumes: tuple[float, ...]
 
 
 @dataclass(frozen=True)
@@ -87,13 +99,14 @@ class PortfolioEngine:
         self.strategy = strategy
         self.max_gross, self.max_weight = max_gross, max_weight
 
-    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None):
+    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None, *, current_information=False):
         stocks = tuple(stocks)
         ids = {stock.asset_id for stock in stocks}
         if len(ids) != len(stocks):
             raise ValueError("Duplicate asset identifiers")
         for stock in stocks:
-            if not stock.known_on <= stock.price_as_of < execution_day:
+            cutoff = execution_day if current_information is True else stock.price_as_of
+            if not stock.known_on <= cutoff or not stock.price_as_of < execution_day:
                 raise ValueError("Information must precede the execution session")
         if context is not None:
             if not isinstance(context, PortfolioContext) or context.as_of > execution_day:
@@ -151,11 +164,11 @@ class Decision:
 
 
 def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
-           *, input_schema="us_technology_daily_v1", context=None):
+           *, input_schema="us_technology_daily_v1", context=None, current_information=False):
     stocks = tuple(sorted(stocks, key=lambda s: s.asset_id))
     if len({s.price_as_of for s in stocks}) > 1:
         raise ValueError("All candidates must share the same completed signal session")
-    targets = engine.plan(stocks, execution_day, context)
+    targets = engine.plan(stocks, execution_day, context, current_information=current_information)
     record = {
         "schema": 1, "input_schema": input_schema,
         "execution_day": execution_day.isoformat(),
@@ -166,7 +179,46 @@ def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
     }
     if context is not None:
         record["portfolio_context"] = canonical(asdict(context))
+    if current_information is True:
+        record['information_mode'] = 'current_observation'
     return Decision(digest(record), targets, record)
+
+# ===== framework/collection.py =====
+"""Optional, pure strategy hooks for exact ranked-prefix data collection.
+
+Providers supply histories and hydrate candidates in priority order. Only the
+strategy decides eligibility, priority and when lower-ranked candidates cannot
+change its selection. No vendor, network, account or order handles belong here.
+"""
+from dataclasses import dataclass, field
+from datetime import date
+import re
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class PriceHistory:
+    ticker: str
+    price_as_of: date
+    adjusted_closes: tuple[float, ...]
+    raw_close: float
+    share_volumes: tuple[float, ...]
+    dollar_volumes: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class RankedCollectionPolicy:
+    signature: str
+    priority: Callable = field(repr=False, compare=False)
+    complete: Callable = field(repr=False, compare=False)
+
+    def __post_init__(self):
+        if (not isinstance(self.signature, str) or not re.fullmatch(r'[0-9a-f]{64}', self.signature)
+                or not callable(self.priority) or not callable(self.complete)):
+            raise ValueError('Invalid ranked collection policy')
+
+    def record(self):
+        return {'kind': 'ranked_prefix_v1', 'signature': self.signature}
 
 # ===== strategies/equal_weight.py =====
 """A simple control plug-in for testing composition, not an investment thesis."""
@@ -253,8 +305,10 @@ class TechProfitMomentum:
 
 # Frozen plug-in registry generated from local manifests.
 _RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'tech_profit_momentum', 'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}, 'initial_cash': '100000', 'limits': {'max_gross': '0.95', 'max_weight': '0.19', 'max_order_value': '100000', 'max_quote_age_seconds': 120}, 'fees': {'per_order': '1', 'bps': '0'}, 'backtest': {'backend': 'quantconnect', 'start': '2020-01-01', 'end': '2020-12-31', 'slippage_bps': 10}}
+_INPUT_SCHEMA = 'us_technology_daily_v1'
+_QC_PROFILE = {}
 _PLUGIN_CLASSES = {'equal_weight': EqualWeight, 'tech_profit_momentum': TechProfitMomentum}
-_PLUGIN_SPECS = {'equal_weight': {'type': 'equal_weight', 'version': '1.0', 'source_sha256': '6819b56af61c6f67660a0c6ba8d52b05789e063e2b32f3fff70917eb8c03bcdb', 'engine_sha256': '1f68c9664caffe512ecc3e73ca8e24135d33b4a87a96a97131a71018541b1fdc', 'parameters': {'count': 5, 'weight': 0.19}}, 'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '1f68c9664caffe512ecc3e73ca8e24135d33b4a87a96a97131a71018541b1fdc', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
+_PLUGIN_SPECS = {'equal_weight': {'type': 'equal_weight', 'version': '1.0', 'source_sha256': '6819b56af61c6f67660a0c6ba8d52b05789e063e2b32f3fff70917eb8c03bcdb', 'engine_sha256': 'e62656fe608b00aeab1355e4c0b6461186d913d125eb7cd2753acb06800a7b83', 'parameters': {'count': 5, 'weight': 0.19}}, 'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': 'e62656fe608b00aeab1355e4c0b6461186d913d125eb7cd2753acb06800a7b83', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
 def build_portfolio_strategy(config):
     return _PLUGIN_CLASSES[config['type']](**{k:v for k,v in config.items() if k not in {'type','id'}})
 def portfolio_spec(config):
@@ -263,7 +317,7 @@ def portfolio_spec(config):
     params.update({k:v for k,v in config.items() if k not in {'type','id'}})
     return dict(base, parameters=params)
 
-# ===== platforms/quantconnect/adapter.py =====
+# ===== backtests/quantconnect/adapter.py =====
 """QuantConnect adapter; bundle with tools/build_quantconnect.py before upload."""
 
 from AlgorithmImports import *
@@ -276,6 +330,9 @@ from math import isfinite
 if "_RUN_CONFIG" not in globals():
     _RUN_CONFIG = {k: v for k, v in default_portfolio_config().items()
                    if k not in {"data", "broker"}}
+    _entry = strategy_catalog()[_RUN_CONFIG['strategy']['type']]
+    _INPUT_SCHEMA = _entry['input_schema']
+    _QC_PROFILE = _entry.get('backtest', {}).get('quantconnect', {})
 START = tuple(map(int, _RUN_CONFIG["backtest"]["start"].split("-")))
 END = tuple(map(int, _RUN_CONFIG["backtest"]["end"].split("-")))
 INITIAL_CASH = float(_RUN_CONFIG["initial_cash"])
@@ -297,7 +354,8 @@ def strategy_configuration():
 
 
 def make_decision(engine, candidates, execution_day, context=None):
-    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()), context=context)
+    return decide(engine, candidates, execution_day, portfolio_spec(strategy_configuration()),
+                  input_schema=_INPUT_SCHEMA, context=context)
 
 
 class TechProfitMomentumAlgorithm(QCAlgorithm):
@@ -346,20 +404,30 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
     def _freeze_facts(self, fundamentals):
         facts = {}
         for f in fundamentals:
-            if (not f.has_fundamental_data
-                    or f.asset_classification.morningstar_sector_code != MorningstarSectorCode.TECHNOLOGY):
+            all_equities = _QC_PROFILE.get('universe') == 'us_common_stock'
+            if (not f.has_fundamental_data or (not all_equities
+                    and f.asset_classification.morningstar_sector_code != MorningstarSectorCode.TECHNOLOGY)):
                 continue
             ref = f.security_reference
             if (ref.security_type != "ST00000001" or ref.is_depositary_receipt
-                    or not ref.is_primary_share):
+                    or not ref.is_primary_share
+                    or (all_equities and f.company_reference.primary_exchange_id not in {'NYS', 'NAS', 'ASE'})):
                 continue
             # Copy scalar values now. Fundamental objects have time-dependent getters.
-            income = float(f.financial_statements.income_statement.operating_income.twelve_months)
-            industry = int(f.asset_classification.morningstar_industry_code)
+            income = (0.0 if all_equities else
+                      float(f.financial_statements.income_statement.operating_income.twelve_months))
+            industry = int(f.asset_classification.morningstar_industry_group_code if all_equities
+                           else f.asset_classification.morningstar_industry_code)
             if industry <= 0:
                 continue
             sid = str(f.symbol.id)
-            facts[sid] = (f.symbol, str(industry), income)
+            if all_equities:
+                cap = float(f.market_cap)
+                if not isfinite(cap) or cap <= 0:
+                    continue
+                facts[sid] = (f.symbol, str(industry), income, cap)
+            else:
+                facts[sid] = (f.symbol, str(industry), income)
         return facts
 
     def _select_universe(self, fundamentals):
@@ -436,7 +504,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         stamp = max(eligible)
         facts = self._fact_snapshots[stamp]
         if not facts:
-            raise RuntimeError(f"Empty technology fundamental snapshot at {stamp}; check data coverage")
+            raise RuntimeError(f"Empty equity fundamental snapshot at {stamp}; check data coverage")
         return stamp, facts
 
     @staticmethod
@@ -475,7 +543,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         if len(sessions) != history_count or sessions[-1] != prior_day:
             raise RuntimeError(f"Expected {history_count} completed daily bars through previous session")
         # Selection rules (including profitability) belong to the strategy.
-        # All point-in-time technology candidates go through the same data contract.
+        # All point-in-time candidates use the selected input data contract.
         pool = sorted(facts.items())
         result = []
         for offset in range(0, len(pool), 40):
@@ -483,7 +551,11 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
             symbols = [f[0] for _, f in batch]
             adjusted = self._history(symbols, requirements.price_bars, DataNormalizationMode.ADJUSTED)
             raw = self._history(symbols, requirements.dollar_volume_bars, DataNormalizationMode.RAW)
-            for sid, (symbol, industry, income) in batch:
+            equity_input = _INPUT_SCHEMA == 'us_equity_momentum_daily_v1'
+            split_history = (self._history(symbols, requirements.dollar_volume_bars,
+                             DataNormalizationMode.SPLIT_ADJUSTED) if equity_input else None)
+            for sid, fact in batch:
+                symbol, industry, income = fact[:3]
                 prices = self._daily_rows(adjusted, symbol, self.time)
                 volumes = self._daily_rows(raw, symbol, self.time)
                 # An IPO, halt or missing session cannot shorten the lookback silently.
@@ -491,11 +563,23 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
                 volume_days = sessions[-requirements.dollar_volume_bars:]
                 if not all(day in prices for day in price_days) or not all(day in volumes for day in volume_days):
                     continue
-                result.append(StockSnapshot(
+                values = (
                     sid, symbol.value, known_on or prior_day, sessions[-1], industry, income,
                     tuple(prices[day][0] for day in price_days),
                     tuple(volumes[day][0] * volumes[day][1] for day in volume_days)
-                ))
+                )
+                if equity_input:
+                    split_rows = self._daily_rows(split_history, symbol, self.time)
+                    if not all(day in split_rows for day in volume_days):
+                        continue
+                    # SplitAdjusted historical volume uses the provider's whole
+                    # history scale. Bring it back to the signal-session share
+                    # units so a later split cannot change the 1m-share filter.
+                    split_scale = split_rows[prior_day][0] / volumes[prior_day][0]
+                    result.append(EquitySnapshot(*values, fact[3], volumes[prior_day][0],
+                        tuple(split_rows[day][1] * split_scale for day in volume_days)))
+                else:
+                    result.append(StockSnapshot(*values))
         return result
 
     def _fresh(self, data, symbol):
@@ -527,7 +611,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         executable = [PortfolioTarget(symbols[t.asset_id], t.weight) for t in targets
                       if self._fresh(data, symbols[t.asset_id])]
         self._pending = None
-        tag = "tech-profit-momentum " + str(today)
+        tag = STRATEGY_TYPE + " " + str(today)
         if executable:
             # LEAN processes reductions before increases, including reweighting
             # retained names. Synchronous market orders; RAW portfolio accounting.

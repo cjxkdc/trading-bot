@@ -1,0 +1,62 @@
+{
+  "type": "massive",
+  "kind": "snapshot_collector",
+  "version": "2.0.0",
+  "entrypoint": "data.massive_provider:MassiveData",
+  "output_schema": "current_us_equity_request_v1",
+  "display_name": "Massive",
+  "description": "按当前策略请求股票范围、历史长度和数据字段；统一账户配置，仅供研究预览。",
+  "strategy_schemas": [
+    "us_technology_daily_v1",
+    "us_equity_momentum_daily_v1"
+  ],
+  "control": {
+    "entrypoint": "data.request_control:MassiveProviderControl",
+    "capabilities": [
+      "collect",
+      "inspect",
+      "configure",
+      "cancel",
+      "upload",
+      "preview",
+      "paper_signal"
+    ],
+    "path_fields": [
+      "config_dir",
+      "source_config",
+      "cache_dir"
+    ],
+    "default_profile": {
+      "config_dir": "secrets/massive",
+      "source_config": "configs/massive.json",
+      "cache_dir": "runs/data/massive/cache"
+    },
+    "settings_fields": [
+      {
+        "name": "api_key",
+        "label": "API Key",
+        "type": "string",
+        "secret": true,
+        "placeholder": "留空保留已保存的密钥",
+        "max_length": 256
+      },
+      {
+        "name": "requests_per_minute",
+        "label": "请求 / 分钟",
+        "type": "integer",
+        "min": 1,
+        "max": 600,
+        "default": 5
+      }
+    ],
+    "revision_paths": [
+      "config_dir",
+      "source_config"
+    ],
+    "request_driven": true,
+    "profile_aliases": [
+      "massive_momentum",
+      "massive_technology"
+    ]
+  }
+}

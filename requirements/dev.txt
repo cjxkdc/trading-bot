@@ -1,0 +1,9 @@
+# Complete offline test environment, including the optional SDK contracts.
+# Each broker group includes the shared runtime; version pins have one source.
+-r futu.txt
+-r moomoo.txt
+-r tiger.txt
+httpx==0.28.1
+# Pinned CI dependency for the historical-data adapter tests.
+pandas==3.0.1
+-r oauth.txt

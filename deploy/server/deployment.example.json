@@ -1,0 +1,5 @@
+{
+  "provider": "aws_lightsail",
+  "region": "ap-southeast-2",
+  "instance_name": "your-instance-name"
+}

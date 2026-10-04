@@ -1,6 +1,6 @@
 # 富途香港与 moomoo AU：paper 与实盘接口
 
-两家平台均提供模拟盘与实盘接口，代码和离线测试已完成。2026-10-02 已登录 Futu OpenD，联网核验美股模拟账户的资金、持仓、挂单以及 AAPL 标的信息和行情快照；本次未下单或撤单。moomoo 与实盘连接仍未联网验收。默认仍为模拟盘；实盘使用独立模块、配置和启动参数。
+两家平台均提供模拟盘与实盘接口，代码和离线测试已完成。2026-10-02 已登录 Futu OpenD，联网核验美股模拟账户的资金、持仓、挂单以及 AAPL 标的信息和行情快照；本次未下单或撤单。2026-10-03 也已联网核验 moomoo 美股模拟账户并在 Portal 完成只读连接检查。实盘连接仍未联网验收。默认仍为模拟盘；实盘使用独立模块、配置和启动参数。
 
 ## 如何切换
 
@@ -9,8 +9,8 @@
 | 模拟券商模块 | `futu_paper` | `moomoo_paper` |
 | 实盘券商模块 | `futu_live` | `moomoo_live` |
 | 行情检查模块 | `futu_market` | `moomoo_market` |
-| 策略运行配置 | `futu_paper_config.json` | `moomoo_paper_config.json` |
-| 实盘运行配置 | `futu_live_config.json` | `moomoo_live_config.json` |
+| 策略运行配置 | `configs/futu_paper_config.json` | `configs/moomoo_paper_config.json` |
+| 实盘运行配置 | `configs/futu_live_config.json` | `configs/moomoo_live_config.json` |
 | 本地设置目录 | `secrets/futu/` | `secrets/moomoo/` |
 | 默认账本目录 | `runs/futu-paper/` | `runs/moomoo-paper/` |
 | 实盘设置目录 | `secrets/futu_live/` | `secrets/moomoo_live/` |
@@ -28,16 +28,16 @@
 在项目目录运行（Windows 可将 `python` 换成 `.venv\Scripts\python.exe`）：
 
 ```text
-python -m pip install -r requirements.txt -r requirements-futu.txt -r requirements-moomoo.txt
-python bot.py broker-status --config futu_paper_config.json
-python bot.py broker-status --config moomoo_paper_config.json
+python -m pip install -r requirements/futu.txt -r requirements/moomoo.txt
+python bot.py broker-status --config configs/futu_paper_config.json
+python bot.py broker-status --config configs/moomoo_paper_config.json
 python bot.py market-status --provider futu_market
 python bot.py market-status --provider moomoo_market
 ```
 
 默认不会联网。`configuration_ready_not_authenticated` 只说明离线设置和 SDK 版本通过检查，不代表账户接通。
 
-也可以对实盘配置执行 `broker-status --config futu_live_config.json` 或 `--config moomoo_live_config.json`。未填写实盘账户与登录 ID 时会返回 `not_ready`，不会尝试连接或自动选择第一个账户。
+也可以对实盘配置执行 `broker-status --config configs/futu_live_config.json` 或 `--config configs/moomoo_live_config.json`。未填写实盘账户与登录 ID 时会返回 `not_ready`，不会尝试连接或自动选择第一个账户。
 
 ## 之后登录时
 
@@ -47,10 +47,10 @@ python bot.py market-status --provider moomoo_market
 4. 运行下面的只读检查。检查只显示账户指纹；原始账户 ID 可在本人 OpenD 账户信息/API 账户列表中确认并填入本地文件。
 
 ```text
-python bot.py broker-status --config futu_paper_config.json --connect
+python bot.py broker-status --config configs/futu_paper_config.json --connect
 python bot.py market-status --provider futu_market --connect --symbol AAPL --out runs/futu-data-001
 
-python bot.py broker-status --config moomoo_paper_config.json --connect
+python bot.py broker-status --config configs/moomoo_paper_config.json --connect
 python bot.py market-status --provider moomoo_market --connect --symbol AAPL --out runs/moomoo-data-001
 ```
 
@@ -71,8 +71,8 @@ python bot.py market-status --provider moomoo_market --connect --symbol AAPL --o
 取得符合 `us_technology_daily_v1` 的当日真实快照后，才可用现有执行入口：
 
 ```text
-python bot.py broker-paper --config futu_paper_config.json --snapshot <当日真实快照.json>
-python bot.py broker-paper --config moomoo_paper_config.json --snapshot <当日真实快照.json>
+python bot.py broker-paper --config configs/futu_paper_config.json --snapshot <当日真实快照.json>
+python bot.py broker-paper --config configs/moomoo_paper_config.json --snapshot <当日真实快照.json>
 ```
 
 上述为一次执行/对账过程，尚无持续调度器；保持同一账本处理未完成批次。此次未运行这些联网命令。
@@ -85,6 +85,8 @@ Futu 本次联网检查确认 `SIMULATE / STOCK_AND_OPTION / US`，读取资金�
 
 官方资料：[接入架构](https://openapi.futunn.com/futu-api-doc/intro/intro.html)、[模拟下单](https://openapi.futunn.com/futu-api-doc/trade/place-order.html)、[资金字段](https://openapi.futunn.com/futu-api-doc/trade/get-funds.html)、[财务报表](https://openapi.futunn.com/futu-api-doc/quote/get-financials-statements.html)。
 
+moomoo 本次联网检查确认 `SIMULATE / STOCK_AND_OPTION / US`，现金为 1,000,000 USD，持仓与挂单均为零。模拟账户及登录用户已明确绑定到本地 `secrets/moomoo/connection.json`；当前 OpenD 的实际端口为 `127.0.0.1:11111`，覆盖项目约定的 11112。Portal 已切换为 `moomoo_paper` 并通过只读账户检查，保留原先的 MOM8 策略与 Massive 数据源。后台处于手动模式；本次没有启动策略执行、下单、撤单或解锁交易，也没有创建或重置交易账本。若同时运行 Futu 与 moomoo OpenD，须为它们配置不同端口。
+
 ## 实盘配置与使用
 
 将 `configs/futu_live_connection.example.json` 或 `configs/moomoo_live_connection.example.json` 复制为对应实盘设置目录内的 `connection.json`。必须填入本人真实 `account_id` 和 `login_user_id`，两者均为数字字符串；端口仍对应同一平台的 OpenD。禁止填写交易密码，凭据和账本均被 Git 忽略。
@@ -94,8 +96,8 @@ Futu 本次联网检查确认 `SIMULATE / STOCK_AND_OPTION / US`，读取资金�
 先做只读检查：
 
 ```text
-python bot.py broker-status --config futu_live_config.json --connect
-python bot.py broker-status --config moomoo_live_config.json --connect
+python bot.py broker-status --config configs/futu_live_config.json --connect
+python bot.py broker-status --config configs/moomoo_live_config.json --connect
 ```
 
 该检查不会解锁、下单或撤单。正式执行入口是 `broker-live`；普通 `paper` 和 `broker-paper` 命令会拒绝实盘配置。实盘和模拟盘不共用状态目录，也不能复制账本互换环境。
@@ -103,8 +105,8 @@ python bot.py broker-status --config moomoo_live_config.json --connect
 后续完成登录、权限和数据验收，并明确决定发送实盘订单时，才运行：
 
 ```text
-python bot.py broker-live --config futu_live_config.json --snapshot <当日真实快照.json> --enable-live
-python bot.py broker-live --config moomoo_live_config.json --snapshot <当日真实快照.json> --enable-live
+python bot.py broker-live --config configs/futu_live_config.json --snapshot <当日真实快照.json> --enable-live
+python bot.py broker-live --config configs/moomoo_live_config.json --snapshot <当日真实快照.json> --enable-live
 ```
 
 `--enable-live` 只为这次程序调用开启实盘发送；没有此参数会在读取快照和连接账户之前停止。`initial_cash` 不会改变真实资金，账户余额由券商查询取得。限价、整股、USD 现金、报价时效、仓位上限与订单恢复沿用同一框架。

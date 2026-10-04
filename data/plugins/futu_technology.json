@@ -1,0 +1,33 @@
+{
+  "type": "futu_technology",
+  "kind": "snapshot_collector",
+  "version": "1.0.0",
+  "entrypoint": "data.futu_technology:FutuTechnologyData",
+  "output_schema": "futu_technology_preview_v1",
+  "description": "Futu 行情来源；当前采集器支持科技股日线与财报，其他数据需求暂未适配。",
+  "display_name": "Futu",
+  "strategy_schema": "us_technology_daily_v1",
+  "control": {
+    "entrypoint": "data.controls:CurrentResearchControl",
+    "capabilities": [
+      "collect",
+      "upload",
+      "preview"
+    ],
+    "path_fields": [
+      "config_dir",
+      "source_config",
+      "cache_dir"
+    ],
+    "default_profile": {
+      "config_dir": "secrets/futu",
+      "source_config": "configs/futu_technology.json",
+      "cache_dir": "runs/data/futu-technology/cache"
+    },
+    "settings_fields": [],
+    "revision_paths": [
+      "config_dir",
+      "source_config"
+    ]
+  }
+}

@@ -1,1 +1,42 @@
-{"type":"equal_weight","kind":"portfolio","version":"1.0","entrypoint":"strategies.equal_weight:EqualWeight","input_schema":"us_technology_daily_v1","description":"按稳定标识选取的等权对照插件，仅用于框架验证"}
+{
+  "type": "equal_weight",
+  "kind": "portfolio",
+  "version": "1.0",
+  "entrypoint": "strategies.equal_weight:EqualWeight",
+  "input_schema": "us_technology_daily_v1",
+  "description": "按稳定标识选取的等权对照插件，仅用于框架验证",
+  "display_name": "等权对照",
+  "parameters": {
+    "count": {
+      "label": "目标股票数"
+    },
+    "weight": {
+      "label": "单股目标权重 (%)",
+      "scale": 100,
+      "step": 0.1
+    }
+  },
+  "limit_rules": [
+    {
+      "product": [
+        "weight"
+      ],
+      "limit": "max_weight"
+    },
+    {
+      "product": [
+        "count",
+        "weight"
+      ],
+      "limit": "max_gross"
+    }
+  ],
+  "data_requirements": {
+    "universe": "technology",
+    "fields": [
+      "adjusted_closes",
+      "industry",
+      "dollar_volumes"
+    ]
+  }
+}

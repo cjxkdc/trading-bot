@@ -1,0 +1,78 @@
+{
+  "type": "mom8",
+  "kind": "portfolio",
+  "version": "1.0.0-adapted",
+  "entrypoint": "strategies.mom8:MOM8",
+  "readme": "MOM8.md",
+  "input_schema": "us_equity_momentum_daily_v1",
+  "display_name": "MOM8 · 框架适配版",
+  "description": "朋友的全美股动量策略：12–1 动量、200 日均线、8 只持股、前 12 名缓冲。适配为最多 95% 仓位、按框架设定周期配平、空缺留现金；不使用 BIL。",
+  "backtest": {
+    "quantconnect": {
+      "universe": "us_common_stock",
+      "industry": "morningstar_industry_group"
+    }
+  },
+  "parameters": {
+    "count": {
+      "label": "目标股票数"
+    },
+    "weight": {
+      "label": "单股目标权重 (%)",
+      "scale": 100,
+      "step": 0.001
+    },
+    "lookback": {
+      "label": "动量观察期 (交易日)"
+    },
+    "skip": {
+      "label": "跳过最近 (交易日)"
+    },
+    "trend_window": {
+      "label": "趋势均线 (交易日)"
+    },
+    "keep_buffer": {
+      "label": "保留持仓的排名缓冲"
+    },
+    "industry_limit": {
+      "label": "同一行业最多持股数"
+    },
+    "min_market_cap": {
+      "label": "最低市值 (USD)"
+    },
+    "max_market_cap": {
+      "label": "最高市值 (USD)"
+    },
+    "min_price": {
+      "label": "最低未复权股价 (USD)"
+    },
+    "min_average_volume": {
+      "label": "最低 20 日日均成交股数"
+    }
+  },
+  "limit_rules": [
+    {
+      "product": [
+        "weight"
+      ],
+      "limit": "max_weight"
+    },
+    {
+      "product": [
+        "count",
+        "weight"
+      ],
+      "limit": "max_gross"
+    }
+  ],
+  "data_requirements": {
+    "universe": "all",
+    "fields": [
+      "adjusted_closes",
+      "industry",
+      "market_cap",
+      "raw_close",
+      "share_volumes"
+    ]
+  }
+}

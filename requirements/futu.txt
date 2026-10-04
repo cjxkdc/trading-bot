@@ -1,0 +1,3 @@
+# Portal runtime plus the optional Futu HK OpenD SDK.
+-r ../requirements.txt
+futu-api==10.11.7108

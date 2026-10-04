@@ -1,0 +1,8 @@
+{
+  "type": "futu_technology",
+  "kind": "snapshot_collector",
+  "version": "1.0.0",
+  "entrypoint": "platforms.data.futu_technology:FutuTechnologyData",
+  "output_schema": "futu_technology_preview_v1",
+  "description": "Read-only current Futu technology universe, daily bars and quarterly operating income; research preview only"
+}

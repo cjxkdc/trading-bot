@@ -4,17 +4,17 @@
 
 | 代码 | 职责 |
 |---|---|
-| `framework/backtest.py` | 已有的单标的 CSV 研究模型、成本和收益统计 |
-| `research.py` | 单标的候选筛选、冻结、验证和最终测试 |
-| `platforms/quantconnect/adapter.py` | 多股票历史数据、交易日历和 LEAN 回测接入 |
+| `backtests/engine.py` | 已有的单标的 CSV 研究模型、成本和收益统计 |
+| `app/research.py` | 单标的候选筛选、冻结、验证和最终测试 |
+| `backtests/quantconnect/adapter.py` | 多股票历史数据、交易日历和 LEAN 回测接入 |
 | `tools/build_quantconnect.py` | 将配置、策略和框架合成可复制的 QC 文件 |
-| `platforms/quantconnect/results.py` | 解析 QC JSON，明确指标单位与回测完成状态 |
-| `framework/experiments.py` | 保存证据、检查文件变化、生成比较报告；不依赖 QC SDK |
+| `backtests/quantconnect/results.py` | 解析 QC JSON，明确指标单位与回测完成状态 |
+| `backtests/experiments.py` | 保存证据、检查文件变化、生成比较报告；不依赖 QC SDK |
 | `runs/` | 每次实验独立保存的导出文件、报告和日志；不提交到账户代码 |
 
 ## 当前科技股策略
 
-先检查 `portfolio_config.json` 的策略、日期、资金和成本，再运行：
+先检查 `configs/portfolio_config.json` 的策略、日期、资金和成本，再运行：
 
 ```text
 python bot.py export-qc --out runs/qc-baseline-001

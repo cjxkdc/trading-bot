@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "strategy": {
+    "type": "mom8",
+    "count": 8,
+    "weight": 0.11875,
+    "lookback": 252,
+    "skip": 21,
+    "trend_window": 200,
+    "keep_buffer": 12,
+    "industry_limit": 2,
+    "min_market_cap": 2000000000,
+    "max_market_cap": 500000000000,
+    "min_price": 5,
+    "min_average_volume": 1000000
+  },
+  "data": {
+    "type": "snapshot_file"
+  },
+  "broker": {
+    "type": "paper"
+  },
+  "initial_cash": "100000",
+  "limits": {
+    "max_gross": "0.95",
+    "max_weight": "0.19",
+    "max_order_value": "100000",
+    "max_quote_age_seconds": 120
+  },
+  "fees": {
+    "per_order": "1",
+    "bps": "0"
+  },
+  "backtest": {
+    "backend": "quantconnect",
+    "start": "2020-01-01",
+    "end": "2020-12-31",
+    "slippage_bps": 10
+  }
+}

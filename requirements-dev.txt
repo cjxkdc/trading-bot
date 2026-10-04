@@ -1,3 +1,0 @@
--r requirements.txt
-# Matches the local environment used to check the QC history adapter.
-pandas==3.0.1
