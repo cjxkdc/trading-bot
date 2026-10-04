@@ -24,7 +24,7 @@ class LauncherWorkerTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory(prefix='trading launcher ')
         self.addCleanup(folder.cleanup)
-        self.root = Path(folder.name)
+        self.root = Path(folder.name).resolve()
         (self.root / 'configs').mkdir()
         (self.root / 'configs/data_sources.json').write_bytes((ROOT / 'configs/data_sources.json').read_bytes())
         self.cfg = json.loads((ROOT / 'configs/portfolio_config.json').read_text(encoding='utf-8'))
@@ -265,7 +265,7 @@ class LauncherProcessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='launch space ')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         for name in ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python',
                      'app/launcher_worker.py', 'configs/futu_paper_config.json', 'data & not a command.json'):
             path = self.root / name

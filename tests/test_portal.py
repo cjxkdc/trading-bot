@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PortalTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         shutil.copytree(ROOT / 'configs', self.root / 'configs')
         for folder in ('strategies', 'framework'):
             shutil.copytree(ROOT / folder, self.root / folder, ignore=shutil.ignore_patterns('__pycache__'))

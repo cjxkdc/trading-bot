@@ -15,7 +15,7 @@ from tools.package_release import package
 class UpgradeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.folder = Path(self.temp.name)
+        self.folder = Path(self.temp.name).resolve()
         self.release, self.installed = self.folder / 'release', self.folder / 'installed'
         for root, files in [(self.release, {'app/main.py': b'new', 'app/added.py': b'added', 'ui/dist/index.html': b'new UI', 'configs/account.json': b'defaults'}),
                             (self.installed, {'app/main.py': b'old', 'configs/account.json': b'custom', 'secrets/key': b'PRIVATE',
