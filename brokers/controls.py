@@ -59,6 +59,24 @@ class BrokerControl:
 
 
 class OpenDPaperControl(BrokerControl):
+    def financial_account_reference(self):
+        from brokers.opend_broker import _identity
+        connector = self.connector()
+        self.validate_binding(connector)
+        cfg = connector._settings()
+        return _identity(dict(provider=connector.provider, environment='SIMULATE',
+                              user_id=str(cfg.login_user_id), account_id=str(cfg.account_id)))
+
+    def financial_observation(self):
+        from brokers.opend_observation import financial_observation
+        from platforms.opend import OpenDError
+        connector = self.connector()
+        self.validate_binding(connector)
+        try:
+            return financial_observation(connector)
+        except OpenDError:
+            raise ControlError('账户估值读取失败；请检查 OpenD 登录与模拟账户绑定，历史记录已保留。') from None
+
     def trading_sessions(self, start, end):
         from brokers.opend_observation import trading_sessions
         from platforms.opend import OpenDError

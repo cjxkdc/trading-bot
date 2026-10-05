@@ -1,6 +1,6 @@
 # Paste this ENTIRE file into a new QuantConnect Python project's main.py.
 # Generated file: edit the original modules, then rebuild.
-# Source SHA256: 723283324b32147ce0d82a002c02ec1055d16acf8e5d997c34be61c65b4483ca
+# Source SHA256: c97dadee4d8ca46113167f55a16ad1c8738b6d62cfa84cdaadff161dcf4a460a
 
 # ===== framework/portfolio.py =====
 """Platform-independent contract for cross-sectional, long-only portfolios."""
@@ -99,13 +99,14 @@ class PortfolioEngine:
         self.strategy = strategy
         self.max_gross, self.max_weight = max_gross, max_weight
 
-    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None):
+    def plan(self, stocks: Sequence[StockSnapshot], execution_day: date, context=None, *, current_information=False):
         stocks = tuple(stocks)
         ids = {stock.asset_id for stock in stocks}
         if len(ids) != len(stocks):
             raise ValueError("Duplicate asset identifiers")
         for stock in stocks:
-            if not stock.known_on <= stock.price_as_of < execution_day:
+            cutoff = execution_day if current_information is True else stock.price_as_of
+            if not stock.known_on <= cutoff or not stock.price_as_of < execution_day:
                 raise ValueError("Information must precede the execution session")
         if context is not None:
             if not isinstance(context, PortfolioContext) or context.as_of > execution_day:
@@ -163,11 +164,11 @@ class Decision:
 
 
 def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
-           *, input_schema="us_technology_daily_v1", context=None):
+           *, input_schema="us_technology_daily_v1", context=None, current_information=False):
     stocks = tuple(sorted(stocks, key=lambda s: s.asset_id))
     if len({s.price_as_of for s in stocks}) > 1:
         raise ValueError("All candidates must share the same completed signal session")
-    targets = engine.plan(stocks, execution_day, context)
+    targets = engine.plan(stocks, execution_day, context, current_information=current_information)
     record = {
         "schema": 1, "input_schema": input_schema,
         "execution_day": execution_day.isoformat(),
@@ -178,7 +179,174 @@ def decide(engine: PortfolioEngine, stocks, execution_day, strategy_spec,
     }
     if context is not None:
         record["portfolio_context"] = canonical(asdict(context))
+    if current_information is True:
+        record['information_mode'] = 'current_observation'
     return Decision(digest(record), targets, record)
+
+# ===== framework/collection.py =====
+"""Optional, pure strategy hooks for exact ranked-prefix data collection.
+
+Providers supply histories and hydrate candidates in priority order. Only the
+strategy decides eligibility, priority and when lower-ranked candidates cannot
+change its selection. No vendor, network, account or order handles belong here.
+"""
+from dataclasses import dataclass, field
+from datetime import date
+import re
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class PriceHistory:
+    ticker: str
+    price_as_of: date
+    adjusted_closes: tuple[float, ...]
+    raw_close: float
+    share_volumes: tuple[float, ...]
+    dollar_volumes: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class RankedCollectionPolicy:
+    signature: str
+    priority: Callable = field(repr=False, compare=False)
+    complete: Callable = field(repr=False, compare=False)
+
+    def __post_init__(self):
+        if (not isinstance(self.signature, str) or not re.fullmatch(r'[0-9a-f]{64}', self.signature)
+                or not callable(self.priority) or not callable(self.complete)):
+            raise ValueError('Invalid ranked collection policy')
+
+    def record(self):
+        return {'kind': 'ranked_prefix_v1', 'signature': self.signature}
+
+# ===== framework/scheduling.py =====
+"""Daily, weekly and monthly schedules using broker-supplied exchange sessions."""
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+DEFAULT_SCHEDULE = dict(cadence='monthly', day=1, weekday=0, prepare_time='06:00', trade_time='09:35',
+                        window_minutes=60, timezone='America/New_York', poll_seconds=30, initial_entry='immediate')
+
+
+def schedule_config(value):
+    if not isinstance(value, dict) or set(value) - DEFAULT_SCHEDULE.keys():
+        raise ValueError('Unknown schedule fields')
+    cfg = dict(DEFAULT_SCHEDULE, **value)
+    if cfg['initial_entry'] not in {'immediate', 'scheduled'}:
+        raise ValueError('Invalid initial entry rule')
+    if cfg['cadence'] not in {'daily', 'weekly', 'monthly'} or cfg['timezone'] != 'America/New_York':
+        raise ValueError('Unsupported US equity schedule')
+    for key, low, high in [('day', 1, 28), ('weekday', 0, 4), ('window_minutes', 5, 120), ('poll_seconds', 15, 300)]:
+        if type(cfg[key]) is not int or not low <= cfg[key] <= high:
+            raise ValueError('Invalid schedule number')
+    for key in ('prepare_time', 'trade_time'):
+        text = cfg[key]
+        if not isinstance(text, str) or len(text) != 5 or text[2] != ':':
+            raise ValueError('Time must be HH:MM')
+        t = time.fromisoformat(text)
+        if t.isoformat(timespec='minutes') != text:
+            raise ValueError('Time must be HH:MM')
+    if not '00:00' <= cfg['prepare_time'] < cfg['trade_time'] or not '09:35' <= cfg['trade_time'] <= '14:00':
+        raise ValueError('Preparation must precede the regular-hours execution window')
+    return cfg
+
+
+def instant(day, hhmm, cfg):
+    return datetime.combine(day, time.fromisoformat(hhmm), ZoneInfo(cfg['timezone']))
+
+
+def month_window(day, sessions, cfg):
+    anchor = day.replace(day=cfg['day'])
+    eligible = sorted(s for s in sessions if s.year == day.year and s.month == day.month and s >= anchor)
+    if not eligible:
+        raise ValueError('Exchange calendar does not cover the monthly anchor')
+    start = instant(eligible[0], cfg['trade_time'], cfg)
+    return start, start + timedelta(minutes=cfg['window_minutes'])
+
+
+def period_key(day, cfg):
+    if cfg['cadence'] == 'monthly':
+        return day.strftime('%Y-%m')
+    if cfg['cadence'] == 'weekly':
+        return 'week-' + str(day - timedelta(days=day.weekday()))
+    return str(day)
+
+
+def schedule_window(day, sessions, cfg):
+    if cfg['cadence'] == 'monthly':
+        return month_window(day, sessions, cfg)
+    if cfg['cadence'] == 'weekly':
+        monday = day - timedelta(days=day.weekday())
+        anchor = monday + timedelta(days=cfg['weekday'])
+        eligible = sorted(s for s in sessions if anchor <= s < monday + timedelta(days=14))
+    else:
+        eligible = [day] if day in sessions else []
+    if not eligible:
+        raise ValueError('No exchange session in this schedule period')
+    start = instant(eligible[0], cfg['trade_time'], cfg)
+    return start, start + timedelta(minutes=cfg['window_minutes'])
+
+
+def period_window(day, sessions, cfg):
+    # A Friday holiday may move its weekly window into the following Monday.
+    if cfg['cadence'] == 'weekly':
+        previous = day - timedelta(days=day.weekday() + 7)
+        try:
+            start, end = schedule_window(previous, sessions, cfg)
+            if start.date() == day:
+                return start, end, period_key(previous, cfg)
+        except ValueError:
+            pass
+    start, end = schedule_window(day, sessions, cfg)
+    return start, end, period_key(day, cfg)
+
+
+def initial_window(now, sessions, cfg):
+    """The first portfolio starts at the next usable regular session, independent of cadence."""
+    local = now.astimezone(ZoneInfo(cfg['timezone']))
+    if cfg.get('initial_entry', 'immediate') == 'scheduled':
+        start = next_window(now, sessions, cfg)
+        if start is None:
+            raise ValueError('Exchange calendar does not cover initial schedule')
+        return max(start, local), start + timedelta(minutes=cfg['window_minutes'])
+    for day in sorted(s for s in sessions if s >= local.date()):
+        opening, close = instant(day, '09:35', cfg), instant(day, '16:00', cfg)
+        start = max(opening, local) if day == local.date() else opening
+        # Leave enough time for a complete quote/account preparation near the close.
+        if start >= close - timedelta(minutes=5):
+            continue
+        return start, min(start + timedelta(minutes=cfg['window_minutes']), close)
+    raise ValueError('Exchange calendar does not cover the initial portfolio')
+
+
+def selection_period(day, sessions, cfg, *, first=False):
+    """Shared completed-session trigger for QC and the broker calendar scheduler."""
+    start, _, key = period_window(day, sessions, cfg)
+    if day not in sessions:
+        return None
+    if first and cfg.get('initial_entry', 'immediate') == 'immediate':
+        return key
+    return key if start.date() == day else None
+
+
+def next_window(now, sessions, cfg):
+    local = now.astimezone(ZoneInfo(cfg['timezone']))
+    cursor = local.date() - timedelta(days=7) if cfg['cadence'] == 'weekly' else local.date()
+    for _ in range(100):
+        try:
+            start, end = schedule_window(cursor, sessions, cfg)
+            if end > local:
+                return start
+        except ValueError:
+            pass
+        if cfg['cadence'] == 'monthly':
+            cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+        elif cfg['cadence'] == 'weekly':
+            cursor = cursor - timedelta(days=cursor.weekday()) + timedelta(days=7)
+        else:
+            cursor += timedelta(days=1)
+    return None
 
 # ===== strategies/mom8.py =====
 """MOM8 selection adapted from Yizhi Song's FriesTrader (MIT).
@@ -225,6 +393,29 @@ class MOM8:
     def history_requirements(self):
         return HistoryRequirements(max(self.lookback + 1, self.trend_window, 20), 20)
 
+    def price_score(self, stock):
+        """The price/volume part of rank(), reused before requesting metadata."""
+        prices, volumes = stock.adjusted_closes, stock.share_volumes
+        if len(prices) < self.history_requirements.price_bars or len(volumes) < 20:
+            return None
+        if (any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v <= 0
+                for v in (*prices, stock.raw_close))
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v < 0
+                       for v in volumes[-20:])):
+            return None
+        if (stock.raw_close < self.min_price or sum(volumes[-20:]) / 20 < self.min_average_volume
+                or prices[-1] <= sum(prices[-self.trend_window:]) / self.trend_window):
+            return None
+        score = prices[-1-self.skip] / prices[-1-self.lookback] - 1
+        return score if isfinite(score) else None
+
+    def data_collection_policy(self, signature):
+        # Once the diversified keep-buffer is filled in descending price-score
+        # order, no remaining candidate can change it, including held-stock
+        # retention. Do not stop at the initial purchase count of eight.
+        return RankedCollectionPolicy(signature, self.price_score,
+                                      lambda stocks: len(self.rank(stocks)) == self.keep_buffer)
+
     def rank(self, stocks):
         ranked = []
         for stock in stocks:
@@ -232,22 +423,12 @@ class MOM8:
             # volume/capitalization as an empty basket and liquidating it.
             if not all(hasattr(stock, k) for k in ('market_cap', 'raw_close', 'share_volumes')):
                 raise ValueError('MOM8 requires the US equity momentum data schema')
-            prices, volumes = stock.adjusted_closes, stock.share_volumes
-            if len(prices) < self.history_requirements.price_bars or len(volumes) < 20:
+            score = self.price_score(stock)
+            cap = stock.market_cap
+            if (score is None or isinstance(cap, bool) or not isinstance(cap, (int, float)) or not isfinite(cap)
+                    or not stock.industry or not self.min_market_cap <= cap <= self.max_market_cap):
                 continue
-            values = (*prices, stock.market_cap, stock.raw_close)
-            if (any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v <= 0 for v in values)
-                    or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v < 0
-                           for v in volumes[-20:])):
-                continue
-            if (not stock.industry or not self.min_market_cap <= stock.market_cap <= self.max_market_cap
-                    or stock.raw_close < self.min_price
-                    or sum(volumes[-20:]) / 20 < self.min_average_volume
-                    or prices[-1] <= sum(prices[-self.trend_window:]) / self.trend_window):
-                continue
-            score = prices[-1-self.skip] / prices[-1-self.lookback] - 1
-            if isfinite(score):
-                ranked.append((score, stock))
+            ranked.append((score, stock))
         # Same ticker tie-break as the deployed raw/SIC upstream MOM8 policy.
         ranked.sort(key=lambda item: (-item[0], item[1].ticker, item[1].asset_id))
         counts, diversified = Counter(), []
@@ -275,11 +456,11 @@ class MOM8:
         return self.select_with_context(stocks, PortfolioContext(date.min, ()))
 
 # Frozen plug-in registry generated from local manifests.
-_RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'mom8', 'count': 8, 'weight': 0.11875, 'lookback': 252, 'skip': 21, 'trend_window': 200, 'keep_buffer': 12, 'industry_limit': 2, 'min_market_cap': 2000000000, 'max_market_cap': 500000000000, 'min_price': 5.0, 'min_average_volume': 1000000}, 'initial_cash': '100000', 'limits': {'max_gross': '0.95', 'max_weight': '0.19', 'max_order_value': '100000', 'max_quote_age_seconds': 120}, 'fees': {'per_order': '1', 'bps': '0'}, 'backtest': {'backend': 'quantconnect', 'start': '2020-01-01', 'end': '2020-12-31', 'slippage_bps': 10}}
+_RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'mom8', 'count': 8, 'weight': 0.11875, 'lookback': 252, 'skip': 21, 'trend_window': 200, 'keep_buffer': 12, 'industry_limit': 2, 'min_market_cap': 2000000000, 'max_market_cap': 500000000000, 'min_price': 5.0, 'min_average_volume': 1000000}, 'initial_cash': '100000', 'limits': {'max_gross': '0.95', 'max_weight': '0.19', 'max_order_value': '100000', 'max_quote_age_seconds': 120}, 'fees': {'per_order': '1', 'bps': '0'}, 'backtest': {'backend': 'quantconnect', 'start': '2020-01-01', 'end': '2020-12-31', 'slippage_bps': 10}, 'schedule': {'cadence': 'monthly', 'day': 1, 'weekday': 0, 'prepare_time': '06:00', 'trade_time': '09:35', 'window_minutes': 60, 'timezone': 'America/New_York', 'poll_seconds': 30, 'initial_entry': 'scheduled'}, 'benchmark': 'QQQ'}
 _INPUT_SCHEMA = 'us_equity_momentum_daily_v1'
 _QC_PROFILE = {'universe': 'us_common_stock', 'industry': 'morningstar_industry_group'}
 _PLUGIN_CLASSES = {'mom8': MOM8}
-_PLUGIN_SPECS = {'mom8': {'type': 'mom8', 'version': '1.0.0-adapted', 'source_sha256': '92e19c965475ac811c2df36b45361af4141ae89f926a1730dc11226584db5eff', 'engine_sha256': '5cdcb05ce39b928b052e68abb646d5ccf3aa6a21838818ef1ee7300f5547b75f', 'parameters': {'count': 8, 'weight': 0.11875, 'lookback': 252, 'skip': 21, 'trend_window': 200, 'keep_buffer': 12, 'industry_limit': 2, 'min_market_cap': 2000000000, 'max_market_cap': 500000000000, 'min_price': 5.0, 'min_average_volume': 1000000}}}
+_PLUGIN_SPECS = {'mom8': {'type': 'mom8', 'version': '1.0.0-adapted', 'source_sha256': '3dc974c1f5d15ebc2f61dd409d601a878612b5626bef151493a4bb45497ec363', 'engine_sha256': 'e62656fe608b00aeab1355e4c0b6461186d913d125eb7cd2753acb06800a7b83', 'parameters': {'count': 8, 'weight': 0.11875, 'lookback': 252, 'skip': 21, 'trend_window': 200, 'keep_buffer': 12, 'industry_limit': 2, 'min_market_cap': 2000000000, 'max_market_cap': 500000000000, 'min_price': 5.0, 'min_average_volume': 1000000}}}
 def build_portfolio_strategy(config):
     return _PLUGIN_CLASSES[config['type']](**{k:v for k,v in config.items() if k not in {'type','id'}})
 def portfolio_spec(config):
@@ -311,6 +492,7 @@ SLIPPAGE_BPS = float(_RUN_CONFIG["backtest"]["slippage_bps"])
 FEE_PER_ORDER = float(_RUN_CONFIG["fees"]["per_order"])
 MODE = "configured"  # Legacy momentum/profit/full overrides remain explicit opt-ins.
 VERSION = "0.4.0"
+RUN_SCHEDULE = schedule_config(_RUN_CONFIG.get('schedule', {'initial_entry': 'scheduled'}))
 STRATEGY_TYPE = _RUN_CONFIG["strategy"]["type"]
 STRATEGY_PARAMETERS = {k: v for k, v in _RUN_CONFIG["strategy"].items() if k not in {"type", "id"}}
 
@@ -350,7 +532,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self.universe_settings.asynchronous = False
         self.add_security_initializer(self._configure_security)
         self.qqq = self.add_equity(
-            "QQQ", Resolution.MINUTE,
+            _RUN_CONFIG.get('benchmark', 'QQQ'), Resolution.MINUTE,
             data_normalization_mode=DataNormalizationMode.ADJUSTED
         ).symbol
         self.set_benchmark(self.qqq)
@@ -358,13 +540,13 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self._engine = PortfolioEngine(build_portfolio_strategy(strategy_configuration()),
             float(_RUN_CONFIG["limits"]["max_gross"]), float(_RUN_CONFIG["limits"]["max_weight"]))
         self._fact_snapshots = {}
-        self._last_month = None
+        self._last_period = None
         self._pending = None
         self._selected_symbols = []
         self._completed = 0
         self.add_universe(self._select_universe)
         # Only to obtain prior fundamental snapshots, not to trade.
-        # Each monthly signal separately requests the strategy's declared price history.
+        # Each scheduled signal requests the strategy's declared price history.
         self.set_warm_up(timedelta(days=10), Resolution.DAILY)
 
     def _configure_security(self, security):
@@ -417,13 +599,12 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         # forbids orders during warmup. Otherwise a holiday start can miss January.
         if execution_day < datetime(*START).date():
             return Universe.UNCHANGED
-        month = (execution_day.year, execution_day.month)
-        if month == self._last_month:
+        sessions = [execution_day + timedelta(days=i) for i in range(-35, 40)
+                    if self._is_session(execution_day + timedelta(days=i))]
+        period = selection_period(execution_day, sessions, RUN_SCHEDULE, first=self._last_period is None)
+        if period is None or period == self._last_period:
             return Universe.UNCHANGED
         signal_day = self._previous_session(execution_day)
-        # A mid-month start stays cash until the next complete month-end signal.
-        if (signal_day.year, signal_day.month) == month:
-            return Universe.UNCHANGED
         snapshot_at, prior_facts = self._facts_for_signal(signal_day)
         candidates = self._load_candidates(prior_facts, signal_day, snapshot_at.date())
         context = None
@@ -436,7 +617,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         symbols = {sid: facts[0] for sid, facts in prior_facts.items()}
         self._selected_symbols = [symbols[t.asset_id] for t in targets]
         self._pending = (execution_day, targets, symbols)
-        self._last_month = month
+        self._last_period = period
         audit = {
             "version": VERSION, "execution_day": str(execution_day),
             "decision_id": decision.decision_id, "strategy": decision.record["strategy"],
@@ -463,8 +644,8 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
 
     def _facts_for_signal(self, signal_day):
         # Preserve the original conservative policy: only information received
-        # by midnight at the start of the month-end session. For a Monday
-        # month-end, Saturday's delivery is valid; a Monday callback is optional.
+        # by midnight at the start of the signal session. For a Monday
+        # signal, Saturday's delivery is valid; a Monday callback is optional.
         cutoff = datetime.combine(signal_day, datetime.min.time())
         earliest = datetime.combine(self._previous_session(signal_day) + timedelta(days=1),
                                     datetime.min.time())
@@ -568,13 +749,22 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
             return
         if self.time.date() > today:
             raise RuntimeError("Rebalance missed its execution session")
-        if (self.time.hour, self.time.minute) < (9, 35):
+        trade_time = tuple(map(int, RUN_SCHEDULE['trade_time'].split(':')))
+        if self._completed == 0 and RUN_SCHEDULE['initial_entry'] == 'immediate':
+            trade_time = (9, 35)
+        if (self.time.hour, self.time.minute) < trade_time:
             return
+        window_end = datetime.combine(today, datetime.min.time()) + timedelta(
+            hours=trade_time[0], minutes=trade_time[1] + RUN_SCHEDULE['window_minutes'])
+        if self.time >= window_end:
+            raise RuntimeError("Rebalance missed its execution window")
         held = [kv.key for kv in self.portfolio if kv.value.invested]
         missing_held = [s for s in held if not self._fresh(data, s)]
         missing_new = [symbols[t.asset_id] for t in targets if not self._fresh(data, symbols[t.asset_id])]
         if missing_held or missing_new:
-            if (self.time.hour, self.time.minute) < (10, 0):
+            deadline = datetime.combine(today, datetime.min.time()) + timedelta(
+                hours=trade_time[0], minutes=trade_time[1] + min(25, RUN_SCHEDULE['window_minutes'] - 1))
+            if self.time < deadline:
                 return
             if missing_held:
                 raise RuntimeError("Cannot safely rebalance stale or halted existing holdings")
@@ -604,6 +794,8 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self.log("RESEARCH_CONFIG " + json.dumps({"sha256": digest(_RUN_CONFIG), "configuration": _RUN_CONFIG}))
         self.set_runtime_statistic("Research start", datetime(*START).date().isoformat())
         self.set_runtime_statistic("Research end", datetime(*END).date().isoformat())
-        self.set_runtime_statistic("Monthly rebalances", str(self._completed))
+        self.set_runtime_statistic("Rebalances", str(self._completed))
+        self.set_runtime_statistic("Schedule", RUN_SCHEDULE['cadence'] + ' ' + RUN_SCHEDULE['trade_time'])
+        self.set_runtime_statistic("First entry", RUN_SCHEDULE['initial_entry'])
         self.set_runtime_statistic("Strategy mode", MODE)
         self.set_runtime_statistic("Costs", f"${FEE_PER_ORDER}/order + {SLIPPAGE_BPS}bps slippage")

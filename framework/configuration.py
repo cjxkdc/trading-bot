@@ -29,7 +29,7 @@ def normalize_config(value):
     if not isinstance(cfg, dict):
         raise ValueError("Configuration must be an object")
     allowed = {"schema_version", "strategy", "data", "broker", "limits", "fees",
-               "initial_cash", "backtest"}
+               "initial_cash", "backtest", "schedule", "benchmark"}
     if set(cfg) - allowed:
         raise ValueError("Unknown configuration fields: " + ", ".join(sorted(set(cfg) - allowed)))
     # Compatibility with v0.2 paper_config.json. These defaults select local replay only.
@@ -44,6 +44,13 @@ def normalize_config(value):
     policy_from_config(cfg)
     fees_from_config(cfg)
     cfg["initial_cash"] = str(amount(cfg["initial_cash"], True))
+    if 'schedule' in cfg:
+        from framework.scheduling import schedule_config
+        cfg['schedule'] = schedule_config(cfg['schedule'])
+    if 'benchmark' in cfg:
+        import re
+        if not isinstance(cfg['benchmark'], str) or not re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,14}', cfg['benchmark']):
+            raise ValueError('Invalid benchmark ticker')
     if "backtest" in cfg:
         settings = cfg["backtest"]
         if not isinstance(settings, dict) or set(settings) != {"backend", "start", "end", "slippage_bps"}:

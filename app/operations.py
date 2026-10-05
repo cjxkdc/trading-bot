@@ -1,8 +1,8 @@
 """The same built-in operations are used by the service, workers and CLI."""
-ACTIONS = frozenset({'offline', 'status', 'preview', 'prepare', 'execute', 'refresh', 'data-status', 'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder'})
+ACTIONS = frozenset({'offline', 'status', 'observe', 'preview', 'prepare', 'execute', 'refresh', 'data-status', 'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder'})
 # Composite service jobs are deliberately not valid worker commands.
 WORKBENCH_ACTIONS = ACTIONS | {'preflight'}
-BROKER_CHECKS = frozenset({'offline', 'status', 'calendar', 'reconcile', 'resolve-remainder'})
+BROKER_CHECKS = frozenset({'offline', 'status', 'observe', 'calendar', 'reconcile', 'resolve-remainder'})
 DATA_CAPABILITIES = {'configure-data': 'configure', 'data-status': 'inspect', 'refresh': 'collect', 'preview': 'preview'}
 
 

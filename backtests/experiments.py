@@ -4,6 +4,7 @@ import ast
 from hashlib import sha256
 import json
 from pathlib import Path
+from framework.scheduling import schedule_config
 
 
 def read_json(path):
@@ -134,9 +135,11 @@ def compare_results(folders, parser, out):
                      "strategy": cfg["strategy"], "start": cfg["backtest"]["start"],
                      "end": cfg["backtest"]["end"], "initial_cash": cfg["initial_cash"],
                      "slippage_bps": cfg["backtest"]["slippage_bps"], "fees": cfg["fees"],
+                     "schedule": schedule_config(cfg.get('schedule', {'initial_entry': 'scheduled'})),
+                     "benchmark": cfg.get('benchmark', 'QQQ'),
                      "completion": result["completion"], "code_evidence": record["code_evidence"],
                      "warnings": record["warnings"], **result["metrics"]})
-    differences = [key for key in ("start", "end", "initial_cash", "slippage_bps", "fees")
+    differences = [key for key in ("start", "end", "initial_cash", "slippage_bps", "fees", "schedule", "benchmark")
                    if any(row[key] != rows[0][key] for row in rows[1:])]
     report = {"schema_version": 1, "comparison_differences": differences, "rows": rows,
               "conclusion": "Descriptive comparison only; no strategy is automatically approved for trading"}

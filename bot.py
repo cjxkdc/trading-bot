@@ -48,10 +48,12 @@ def run_live(snapshot_path, config_path, state_dir=None, *, enable_live=False, u
         return dict(runner.execute(decision, snapshot, broker, journal), mode='live')
 
 
-def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None, note=""):
+def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None, note="", schedule=None):
     from tools.build_quantconnect import backtest_configuration, build
     from hashlib import sha256
     cfg = normalize_config(load_config(config_path))
+    if schedule is not None:
+        cfg['schedule'] = schedule
     for key, value in (("start", start), ("end", end), ("slippage_bps", slippage_bps)):
         if value is not None:
             cfg["backtest"][key] = value
@@ -60,7 +62,11 @@ def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None
     manifest = {"schema_version": 1, "status": "exported_not_run",
                 "configuration": backtest_configuration(cfg),
                 "main_sha256": sha256(source.encode("utf-8")).hexdigest(),
-                "research_note": note}
+                "research_note": note,
+                "execution_model": {'backtest': 'LEAN market orders with configured fee/slippage models',
+                                    'runtime': 'broker DAY limit orders',
+                                    'data': 'QC universe/fundamentals may differ from the runtime provider',
+                                    'initial_clock': 'Backtest starts at midnight; immediate entry uses the first available session'}}
     out = Path(out)
     out.mkdir(parents=True, exist_ok=False)
     (out / "main.py").write_text(source, encoding="utf-8", newline="\n")

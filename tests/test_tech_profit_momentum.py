@@ -113,7 +113,7 @@ class AdapterTimingTests(unittest.TestCase):
         algo._hours = types.SimpleNamespace(is_date_open=lambda dt: dt.weekday() < 5 and dt.date() != date(2020, 1, 1))
         algo.is_warming_up = False
         algo._fact_snapshots = {datetime(2019, 12, 31): {"A": ("A-symbol", "software", 1)}}
-        algo._last_month = None
+        algo._last_period = None
         algo._pending = None
         algo._engine = PortfolioEngine(TechProfitMomentum())
         algo._completed = 0
@@ -151,7 +151,7 @@ class AdapterTimingTests(unittest.TestCase):
         algo._fact_snapshots = {datetime(2019, 12, 30): {"A": ("A-symbol", "software", 1)}}
         with self.assertRaisesRegex(RuntimeError, "Missing timely fundamentals"):
             algo._select_universe([])
-        self.assertIsNone(algo._last_month)
+        self.assertIsNone(algo._last_period)
 
     def test_september_2020_monday_month_end_uses_saturday_delivery(self):
         algo = self.make_algo()
@@ -251,6 +251,44 @@ class AdapterTimingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "stale or halted"):
             algo.on_data(object())
         algo.set_holdings.assert_not_called()
+
+    def test_configured_execution_time_and_window_are_enforced(self):
+        with patch.dict(self.module.RUN_SCHEDULE, trade_time='10:10', window_minutes=20,
+                        initial_entry='scheduled'):
+            algo = self.make_algo()
+            algo._select_universe([])
+            algo.portfolio = []
+            algo._fresh = Mock(return_value=True)
+            algo.set_holdings = Mock()
+            algo.time = datetime(2020, 1, 2, 10, 9)
+            algo.on_data(object())
+            algo.set_holdings.assert_not_called()
+            algo.time = datetime(2020, 1, 2, 10, 10)
+            algo.on_data(object())
+            algo.set_holdings.assert_called_once()
+            algo._pending = (date(2020, 1, 2), (), {})
+            algo.time = datetime(2020, 1, 2, 10, 30)
+            with self.assertRaisesRegex(RuntimeError, 'execution window'):
+                algo.on_data(object())
+            algo.set_holdings.assert_called_once()
+
+    def test_daily_weekly_and_midperiod_first_entry_use_shared_plan(self):
+        cases = [('daily', 'scheduled', datetime(2020, 1, 15)),
+                 ('weekly', 'scheduled', datetime(2020, 1, 13)),
+                 ('monthly', 'immediate', datetime(2020, 1, 15))]
+        for cadence, initial, day in cases:
+            with self.subTest(cadence=cadence), patch.dict(self.module.RUN_SCHEDULE,
+                    cadence=cadence, weekday=0, initial_entry=initial):
+                algo = self.make_algo()
+                algo.time = day
+                previous = day - timedelta(days=1)
+                while previous.weekday() > 4:
+                    previous -= timedelta(days=1)
+                algo._fact_snapshots = {previous: {'A': ('A-symbol', 'software', 1)}}
+                algo._load_candidates = Mock(return_value=[stock(known_on=previous.date(),
+                    price_as_of=previous.date())])
+                self.assertEqual(algo._select_universe([]), ['A-symbol'])
+                self.assertEqual(algo._pending[0], day.date())
 
     def test_empty_selection_liquidates_and_live_mode_is_blocked(self):
         algo = self.make_algo()

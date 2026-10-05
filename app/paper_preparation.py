@@ -80,6 +80,7 @@ def prepare(*, root, source, loaded, runner, control, path, context, clock, prog
             raise ControlError('目标仍有整股差额，但现金或仓位限制不允许下单；本轮已暂停。')
         return {'status':'complete', 'no_orders':True, 'execution_ready':False,
                 'preparation_attempted':True, 'orders':[], 'decision_id':decision.decision_id,
+                'targets':[dict(asset_id=t.asset_id,weight=t.weight,score=t.score,**loaded.labels[t.asset_id]) for t in decision.targets],
                 'message':'当前持仓已匹配目标或差额不足一股，本轮无需提交订单。', 'issues':warnings}
     envelope = json.loads(packed({
         'schema':SCHEMA,'context':context,'source_snapshot':str(path),
@@ -93,6 +94,7 @@ def prepare(*, root, source, loaded, runner, control, path, context, clock, prog
     output = Path(root)/'runs/portal/execution'/f'{uuid4().hex}.json'
     write_json(output,envelope)
     return {'status':'previewed','message':f'模拟订单预览完成：{len(decision.targets)} 只股票、{len(orders)} 笔委托，尚未发送订单。',
+            'decision_id':decision.decision_id,
             'execution_ready':True,'preparation_attempted':True,'snapshot_path':str(output),'preview_token':token,
             'targets':[dict(asset_id=t.asset_id,weight=t.weight,score=t.score,**loaded.labels[t.asset_id]) for t in decision.targets],
             'orders':[{'ticker':mapping[o.symbol],'side':o.side,'quantity':str(o.quantity),
@@ -163,5 +165,9 @@ def _execute_prepared(*, root, raw, context, token, source, runner, control, cfg
                                 approved_orders=orders,expected_account=account,
                                 recover=recover,before_submit=before_submit)
     return {'status':'complete','message':f"本轮模拟执行完成：{result['orders']} 笔订单已核对成交。",
+            'decision_id':decision.decision_id,
+            'targets':[dict(asset_id=t.asset_id,weight=t.weight,score=t.score,**loaded.labels[t.asset_id]) for t in decision.targets],
+            'orders':[{'ticker':mapping[o.symbol],'side':o.side,'quantity':str(o.quantity),
+                       'limit_price':str(o.limit_price),'client_order_id':o.client_id} for o in orders],
             'recovery_state':'complete',
             'details':{k:v for k,v in result.items() if k != 'account'}}

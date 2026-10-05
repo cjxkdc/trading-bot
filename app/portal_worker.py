@@ -84,6 +84,19 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         if not isinstance(automation, dict) or set(automation) != {'generation', 'context', 'window_start', 'window_end'}:
             raise ControlError('自动运行授权格式无效。')
         before_submit = lambda: submission_guard(root, automation)
+    if action == 'observe':
+        if 'observe' not in registry.descriptor('broker', broker_id)['capabilities']:
+            raise ControlError('当前账户模块尚未提供估值接口。')
+        observation = registry.control('broker', broker_id).financial_observation()
+        try:
+            cfg = registry.configuration(broker_id)
+            source = registry.control('data', source_id, bind_request=False)
+            benchmark = getattr(source, 'benchmark_observation', None)
+            if callable(benchmark):
+                observation['benchmark'] = benchmark(cfg.get('benchmark', 'QQQ'), clock=clock)
+        except Exception:
+            observation.setdefault('limitations', []).append('基准数据暂不可用；账户记录仍已取得。')
+        return dict(status='complete', message='账户表现已更新。', observation=observation)
     if action in {'calendar', 'reconcile', 'resolve-remainder'}:
         control = registry.control('broker', broker_id)
         descriptor = registry.descriptor('broker', broker_id)

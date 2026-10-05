@@ -50,6 +50,64 @@ def account_observation(connector):
         return account
 
 
+def financial_observation(connector):
+    """Broker NAV, not execution buying power. No unlock, order writes or ledger reset."""
+    from brokers.opend_broker import _scope, _identity, _cash_balance, _number
+    if connector.mode != 'broker_paper' or connector.environment != 'SIMULATE':
+        raise ControlError('账户表现目前仅支持明确绑定的模拟账户。')
+    with connector._session() as (sdk, client, profile, validate):
+        if profile.get('environment') != 'SIMULATE':
+            raise ObservationBlocked('账户环境与模拟模块不一致。')
+        scope = _scope(sdk, profile)
+        funds = records(call(client, 'accinfo_query', **scope, currency=sdk.Currency.USD, refresh_cache=True))
+        rows = records(call(client, 'position_list_query', **scope, refresh_cache=True,
+                            position_market=sdk.TrdMarket.NONE, currency=sdk.Currency.USD))
+        # Single-market paper accounts omit the display currency in GetFunds.
+        # Infer USD only from the independently validated, US-only paper profile.
+        us_only_paper = (profile.get('environment') == 'SIMULATE'
+                         and profile.get('sim_acc_type') in {'STOCK', 'STOCK_AND_OPTION'}
+                         and tuple(profile.get('trdmarket_auth') or ()) == ('US',))
+        if (len(funds) != 1 or (funds[0].get('currency') != sdk.Currency.USD
+                and not (us_only_paper and funds[0].get('currency') in (None, 'N/A', '')))):
+            raise ObservationBlocked('未取得明确的美元账户净资产，不能用购买力代替。')
+        fund = funds[0]
+        positions = []
+        def optional(value):
+            if value in (None, 'N/A', ''):
+                return None
+            try:
+                return float(_number(value))
+            except OpenDError:
+                return None
+        for row in rows:
+            code = row.get('code', '')
+            if (not code.startswith('US.') or _code(code[3:]) != code
+                    or row.get('currency') != sdk.Currency.USD
+                    or row.get('position_side') != sdk.PositionSide.LONG):
+                raise ObservationBlocked('账户包含未支持的证券或币种，暂不汇总收益。')
+            qty = _number(row.get('qty'))
+            if qty:
+                positions.append(dict(symbol=code[3:], quantity=float(qty),
+                    market_value=optional(row.get('market_val')),
+                    cost_price=optional(row.get('cost_price')) if row.get('cost_price_valid') is True else None,
+                    unrealized_pnl=optional(row.get('pl_val'))))
+        if validate:
+            validate(tuple(p['symbol'] for p in positions))
+        orders = _orders(sdk, client, profile)
+        try:
+            available = float(_cash_balance(fund, profile))
+        except OpenDError:
+            available = None
+        return dict(environment='SIMULATE', account_ref=_identity(profile), currency='USD',
+                    as_of=datetime.now(timezone.utc).isoformat(), equity=float(_number(fund.get('total_assets'), True)),
+                    cash_total=optional(fund.get('us_cash')), cash_available=available,
+                    market_value=optional(fund.get('market_val')), positions=positions, fees=None,
+                    open_order_count=sum(STATUSES.get(r.get('order_status')) not in TERMINAL for r in orders),
+                    valuation_source='broker', cash_flow_coverage='manual_review_required',
+                    limitations=['手续费与出入金未由此接口核实；未知值不按零处理。',
+                                 '账户估值为券商查询时的估值，休市时可能沿用最近行情。'])
+
+
 def quote_observation(connector, instruments, max_age, *, now=None):
     supplied_clock = now
     now = now or datetime.now(timezone.utc)

@@ -73,6 +73,7 @@ GitHub 提供源码，不包含 exe、已构建网页或 Python 虚拟环境。�
 - [Massive 接入](data/MASSIVE.md) · [MOM8 规则与适配差异](strategies/MOM8.md)
 - [第三方声明](docs/THIRD_PARTY_NOTICES.md)
 - [AWS 与远程 Portal](docs/SERVER.md) · [桌面 / 服务器发布包](deploy/README.md)
+- [账户表现、监控通知与统一调仓计划](docs/OBSERVABILITY.md)
 
 服务器模式通过 HTTPS 网站访问，保留独立的工作台登录；切换券商后重新核验当前账户。固定 IP 或域名均可使用，不需要本机隧道。`moomoo 网页沙盒` 是只读授权验证接口，不提供下单；OpenD 模拟盘保持独立。
 

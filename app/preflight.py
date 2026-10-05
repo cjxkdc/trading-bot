@@ -135,6 +135,7 @@ class Preflight:
         with self.service.lock:
             self.current()
             safe = self.service._public(result)
+            self.service._record_observation('prepare', self.broker, result)
             # A selection preview cannot accidentally become a submission capability.
             if not authorized:
                 safe['execution_ready'] = False

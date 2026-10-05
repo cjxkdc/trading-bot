@@ -6,6 +6,7 @@ import json
 from math import isfinite
 from framework.portfolio import StockSnapshot, EquitySnapshot, PortfolioEngine, PortfolioContext
 from framework.decisions import decide, digest
+from framework.scheduling import schedule_config, selection_period
 from app.assembly import build_portfolio_strategy, portfolio_spec, default_portfolio_config, strategy_catalog
 
 
@@ -23,6 +24,7 @@ SLIPPAGE_BPS = float(_RUN_CONFIG["backtest"]["slippage_bps"])
 FEE_PER_ORDER = float(_RUN_CONFIG["fees"]["per_order"])
 MODE = "configured"  # Legacy momentum/profit/full overrides remain explicit opt-ins.
 VERSION = "0.4.0"
+RUN_SCHEDULE = schedule_config(_RUN_CONFIG.get('schedule', {'initial_entry': 'scheduled'}))
 STRATEGY_TYPE = _RUN_CONFIG["strategy"]["type"]
 STRATEGY_PARAMETERS = {k: v for k, v in _RUN_CONFIG["strategy"].items() if k not in {"type", "id"}}
 
@@ -62,7 +64,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self.universe_settings.asynchronous = False
         self.add_security_initializer(self._configure_security)
         self.qqq = self.add_equity(
-            "QQQ", Resolution.MINUTE,
+            _RUN_CONFIG.get('benchmark', 'QQQ'), Resolution.MINUTE,
             data_normalization_mode=DataNormalizationMode.ADJUSTED
         ).symbol
         self.set_benchmark(self.qqq)
@@ -70,13 +72,13 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self._engine = PortfolioEngine(build_portfolio_strategy(strategy_configuration()),
             float(_RUN_CONFIG["limits"]["max_gross"]), float(_RUN_CONFIG["limits"]["max_weight"]))
         self._fact_snapshots = {}
-        self._last_month = None
+        self._last_period = None
         self._pending = None
         self._selected_symbols = []
         self._completed = 0
         self.add_universe(self._select_universe)
         # Only to obtain prior fundamental snapshots, not to trade.
-        # Each monthly signal separately requests the strategy's declared price history.
+        # Each scheduled signal requests the strategy's declared price history.
         self.set_warm_up(timedelta(days=10), Resolution.DAILY)
 
     def _configure_security(self, security):
@@ -129,13 +131,12 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         # forbids orders during warmup. Otherwise a holiday start can miss January.
         if execution_day < datetime(*START).date():
             return Universe.UNCHANGED
-        month = (execution_day.year, execution_day.month)
-        if month == self._last_month:
+        sessions = [execution_day + timedelta(days=i) for i in range(-35, 40)
+                    if self._is_session(execution_day + timedelta(days=i))]
+        period = selection_period(execution_day, sessions, RUN_SCHEDULE, first=self._last_period is None)
+        if period is None or period == self._last_period:
             return Universe.UNCHANGED
         signal_day = self._previous_session(execution_day)
-        # A mid-month start stays cash until the next complete month-end signal.
-        if (signal_day.year, signal_day.month) == month:
-            return Universe.UNCHANGED
         snapshot_at, prior_facts = self._facts_for_signal(signal_day)
         candidates = self._load_candidates(prior_facts, signal_day, snapshot_at.date())
         context = None
@@ -148,7 +149,7 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         symbols = {sid: facts[0] for sid, facts in prior_facts.items()}
         self._selected_symbols = [symbols[t.asset_id] for t in targets]
         self._pending = (execution_day, targets, symbols)
-        self._last_month = month
+        self._last_period = period
         audit = {
             "version": VERSION, "execution_day": str(execution_day),
             "decision_id": decision.decision_id, "strategy": decision.record["strategy"],
@@ -175,8 +176,8 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
 
     def _facts_for_signal(self, signal_day):
         # Preserve the original conservative policy: only information received
-        # by midnight at the start of the month-end session. For a Monday
-        # month-end, Saturday's delivery is valid; a Monday callback is optional.
+        # by midnight at the start of the signal session. For a Monday
+        # signal, Saturday's delivery is valid; a Monday callback is optional.
         cutoff = datetime.combine(signal_day, datetime.min.time())
         earliest = datetime.combine(self._previous_session(signal_day) + timedelta(days=1),
                                     datetime.min.time())
@@ -280,13 +281,22 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
             return
         if self.time.date() > today:
             raise RuntimeError("Rebalance missed its execution session")
-        if (self.time.hour, self.time.minute) < (9, 35):
+        trade_time = tuple(map(int, RUN_SCHEDULE['trade_time'].split(':')))
+        if self._completed == 0 and RUN_SCHEDULE['initial_entry'] == 'immediate':
+            trade_time = (9, 35)
+        if (self.time.hour, self.time.minute) < trade_time:
             return
+        window_end = datetime.combine(today, datetime.min.time()) + timedelta(
+            hours=trade_time[0], minutes=trade_time[1] + RUN_SCHEDULE['window_minutes'])
+        if self.time >= window_end:
+            raise RuntimeError("Rebalance missed its execution window")
         held = [kv.key for kv in self.portfolio if kv.value.invested]
         missing_held = [s for s in held if not self._fresh(data, s)]
         missing_new = [symbols[t.asset_id] for t in targets if not self._fresh(data, symbols[t.asset_id])]
         if missing_held or missing_new:
-            if (self.time.hour, self.time.minute) < (10, 0):
+            deadline = datetime.combine(today, datetime.min.time()) + timedelta(
+                hours=trade_time[0], minutes=trade_time[1] + min(25, RUN_SCHEDULE['window_minutes'] - 1))
+            if self.time < deadline:
                 return
             if missing_held:
                 raise RuntimeError("Cannot safely rebalance stale or halted existing holdings")
@@ -316,6 +326,8 @@ class TechProfitMomentumAlgorithm(QCAlgorithm):
         self.log("RESEARCH_CONFIG " + json.dumps({"sha256": digest(_RUN_CONFIG), "configuration": _RUN_CONFIG}))
         self.set_runtime_statistic("Research start", datetime(*START).date().isoformat())
         self.set_runtime_statistic("Research end", datetime(*END).date().isoformat())
-        self.set_runtime_statistic("Monthly rebalances", str(self._completed))
+        self.set_runtime_statistic("Rebalances", str(self._completed))
+        self.set_runtime_statistic("Schedule", RUN_SCHEDULE['cadence'] + ' ' + RUN_SCHEDULE['trade_time'])
+        self.set_runtime_statistic("First entry", RUN_SCHEDULE['initial_entry'])
         self.set_runtime_statistic("Strategy mode", MODE)
         self.set_runtime_statistic("Costs", f"${FEE_PER_ORDER}/order + {SLIPPAGE_BPS}bps slippage")

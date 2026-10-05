@@ -49,7 +49,7 @@ test('schedule comparison handles browser number input strings without dropping 
   const draft = { ...automationSchedule(config), day: '3' };
   assert.equal(scheduleChanged(draft, config), false);
   assert.equal(scheduleChanged({ ...draft, trade_time: '10:10' }, config), true);
-  assert.deepEqual(automationSchedule(config), { cadence: 'monthly', day: 3, weekday: 0, prepare_time: '05:30', trade_time: '10:05' });
+  assert.deepEqual(automationSchedule(config), { cadence: 'monthly', day: 3, weekday: 0, prepare_time: '05:30', trade_time: '10:05', initial_entry:'immediate', window_minutes:60, timezone:'America/New_York', poll_seconds:30 });
 });
 
 test('initial account check and first portfolio have distinct visible statuses', () => {

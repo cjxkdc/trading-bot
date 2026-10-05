@@ -135,6 +135,37 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     def orders():
         return service.orders()
 
+    @app.get('/api/performance')
+    def performance():
+        return service.performance()
+
+    @app.post('/api/performance/cash-event')
+    async def cash_event(request: Request):
+        return service.performance_cash_event(await body(request))
+
+    @app.post('/api/performance/review')
+    async def review_performance(request: Request):
+        return service.performance_review(await body(request))
+
+    @app.post('/api/performance/cash-event/remove')
+    async def remove_cash_event(request: Request):
+        return service.performance_remove_event(await body(request))
+
+    @app.get('/api/monitoring/events')
+    def monitoring_events():
+        return service.monitor.events.recent()
+
+    @app.post('/api/monitoring/config')
+    async def monitoring_config(request: Request):
+        return service.monitoring_configure(await body(request))
+
+    @app.post('/api/monitoring/test')
+    async def monitoring_test(request: Request):
+        if await body(request):
+            raise PortalError('测试通知不接受消息内容。')
+        with service.lock:
+            return service.monitor.test_notification()
+
     @app.post('/api/automation/config')
     async def automation_config(request: Request):
         return service.automation_configure(await body(request))

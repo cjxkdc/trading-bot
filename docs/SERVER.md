@@ -187,6 +187,8 @@ sudo loginctl enable-linger "$(id -un)"
 
 ## 运维
 
+账户历史、故障通知和独立监控见 [账户表现与监控](OBSERVABILITY.md)。升级不覆盖凭据或已有运行记录；新建的统计从首次成功查询开始。关闭自动交易仍可监控账户，整个服务器停机告警需单独配置外部心跳。
+
 ```bash
 systemctl --user status trading-bot
 journalctl --user -u trading-bot --since today

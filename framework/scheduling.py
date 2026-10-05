@@ -3,13 +3,15 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 DEFAULT_SCHEDULE = dict(cadence='monthly', day=1, weekday=0, prepare_time='06:00', trade_time='09:35',
-                        window_minutes=60, timezone='America/New_York', poll_seconds=30)
+                        window_minutes=60, timezone='America/New_York', poll_seconds=30, initial_entry='immediate')
 
 
 def schedule_config(value):
     if not isinstance(value, dict) or set(value) - DEFAULT_SCHEDULE.keys():
         raise ValueError('Unknown schedule fields')
     cfg = dict(DEFAULT_SCHEDULE, **value)
+    if cfg['initial_entry'] not in {'immediate', 'scheduled'}:
+        raise ValueError('Invalid initial entry rule')
     if cfg['cadence'] not in {'daily', 'weekly', 'monthly'} or cfg['timezone'] != 'America/New_York':
         raise ValueError('Unsupported US equity schedule')
     for key, low, high in [('day', 1, 28), ('weekday', 0, 4), ('window_minutes', 5, 120), ('poll_seconds', 15, 300)]:
@@ -80,6 +82,11 @@ def period_window(day, sessions, cfg):
 def initial_window(now, sessions, cfg):
     """The first portfolio starts at the next usable regular session, independent of cadence."""
     local = now.astimezone(ZoneInfo(cfg['timezone']))
+    if cfg.get('initial_entry', 'immediate') == 'scheduled':
+        start = next_window(now, sessions, cfg)
+        if start is None:
+            raise ValueError('Exchange calendar does not cover initial schedule')
+        return max(start, local), start + timedelta(minutes=cfg['window_minutes'])
     for day in sorted(s for s in sessions if s >= local.date()):
         opening, close = instant(day, '09:35', cfg), instant(day, '16:00', cfg)
         start = max(opening, local) if day == local.date() else opening
@@ -88,6 +95,16 @@ def initial_window(now, sessions, cfg):
             continue
         return start, min(start + timedelta(minutes=cfg['window_minutes']), close)
     raise ValueError('Exchange calendar does not cover the initial portfolio')
+
+
+def selection_period(day, sessions, cfg, *, first=False):
+    """Shared completed-session trigger for QC and the broker calendar scheduler."""
+    start, _, key = period_window(day, sessions, cfg)
+    if day not in sessions:
+        return None
+    if first and cfg.get('initial_entry', 'immediate') == 'immediate':
+        return key
+    return key if start.date() == day else None
 
 
 def next_window(now, sessions, cfg):

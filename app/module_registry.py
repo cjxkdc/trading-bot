@@ -94,7 +94,8 @@ class ModuleRegistry:
                         'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',)}
                        if kind == 'data' else {'inspect': ('inspect',), 'execute': ('session',),
                                              'prepare': ('observe_account', 'observe_quotes'),
-                                             'calendar': ('trading_sessions',), 'reconcile': ('reconciliation_session',)})
+                                             'calendar': ('trading_sessions',), 'reconcile': ('reconciliation_session',),
+                                             'observe': ('financial_observation', 'financial_account_reference')})
             for capability in control.get('capabilities', []):
                 if any(not callable(getattr(cls, method, None)) for method in methods.get(capability, ())):
                     raise ControlError('模块声明了尚未实现的操作，请修复其控制接口。')

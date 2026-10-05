@@ -26,7 +26,9 @@ export function automationView(automation, { online = true, runtimeRunning = tru
 
 export function automationSchedule(config = {}) {
   return { cadence: config.cadence || 'monthly', day: config.day ?? 1, weekday: config.weekday ?? 0,
-    prepare_time: config.prepare_time || '06:00', trade_time: config.trade_time || '09:35' };
+    prepare_time: config.prepare_time || '06:00', trade_time: config.trade_time || '09:35',
+    initial_entry: config.initial_entry || 'immediate', window_minutes: config.window_minutes ?? 60,
+    timezone: config.timezone || 'America/New_York', poll_seconds: config.poll_seconds ?? 30 };
 }
 
 export function scheduleChanged(draft, config) {

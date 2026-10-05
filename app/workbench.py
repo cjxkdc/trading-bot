@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import threading
+import time
 from uuid import uuid4
 
 from backtests.experiments import (compare_results, import_result, read_json,
@@ -22,6 +23,7 @@ from app.broker_session import BrokerSession
 from app.broker_authorization import BrokerAuthorization
 from framework.journal_reader import JournalReader, JournalReadError
 from app.automation import Automation
+from app.monitoring import Monitoring
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
@@ -46,7 +48,7 @@ def public(value, secret_fields=(), secret_values=()):
     # Worker capabilities and credentials are never sent to the browser or disk log.
     hidden = {'api_key', 'preview_token', 'account_id', 'login_user_id',
               'access_token', 'refresh_token', 'code_verifier', 'authorization_code',
-              'account_fingerprint', 'snapshot_path', 'config_dir', *secret_fields}
+              'account_fingerprint', 'account_ref', 'telegram_token', 'telegram_chat_id', 'heartbeat_url', 'snapshot_path', 'config_dir', *secret_fields}
     if isinstance(value, dict):
         return {k: public(v, secret_fields, secret_values) for k, v in value.items() if k not in hidden}
     if isinstance(value, (tuple, list)):
@@ -108,6 +110,7 @@ class PortalService:
                 continue
         self.jobs.sort(key=lambda j: j.get('started_at', ''), reverse=True)
         self.automation = Automation(self.root, self.registry)
+        self.monitor = Monitoring(self.root, self.registry)
         self.scheduler_stop = threading.Event()
         self.scheduler_wake = threading.Event()
         self.scheduler_thread = None
@@ -227,6 +230,8 @@ class PortalService:
             self.switch_issues()
             self.disconnect_authorization()
             self.broker_id = broker_id
+            self.monitor.next_observation = 0
+            self.monitor.last_check = self.monitor.last_success = self.monitor.error = None
             self.account = None
             self.clear_preview()
             self._save_preferences()
@@ -304,6 +309,7 @@ class PortalService:
             if self.automation.data['enabled']:
                 self.automation.disable()
             self.disconnect_authorization()
+            self.monitor.configure({'enabled':False})
             return {'message': '当前账户在本程序中已停用；官方客户端登录和券商端授权需分别退出或撤销。'}
 
     def snapshot(self, sources=None):
@@ -346,6 +352,93 @@ class PortalService:
             return JournalReader(path).recent()
         except JournalReadError as exc:
             return {'items': [], 'message': str(exc)}
+
+    def performance(self):
+        with self.lock:
+            try:
+                scope = self.monitor.scope(self.broker_id)
+                report = self.monitor.performance.report(scope)
+                try:
+                    orders = self.orders()['items']
+                    for cycle in report['cycles']:
+                        cycle['fills'] = [o for o in orders if o.get('cycle') == cycle['decision_id']]
+                except (ValueError, OSError):
+                    pass
+                report['broker_id'] = self.broker_id
+                report['view_token'] = self._performance_token(scope,report.get('latest'))
+                return self._public(report)
+            except ControlError as exc:
+                return dict(latest=None,curve=[],cycles=[],positions=[],cash_events=[],metrics={},
+                            message=str(exc), broker_id=self.broker_id)
+
+    def performance_cash_event(self, value):
+        with self.lock:
+            value = dict(value)
+            scope = self._check_performance_token(value.pop('view_token',None))
+            self.monitor.performance.cash_event(scope,value)
+            return {'message':'资金事件已记录，请重新核对统计区间。'}
+
+    def performance_review(self, value):
+        if set(value) != {'through','view_token'}:
+            raise PortalError('请核对最新账户记录。')
+        with self.lock:
+            scope = self._check_performance_token(value['view_token'])
+            self.monitor.performance.review_cash(scope,value['through'])
+            return {'message':'已记录本次资金流水核对。'}
+
+    def _performance_token(self, scope, latest):
+        return sha256((scope+self.broker_id+str((latest or {}).get('as_of'))).encode()).hexdigest()
+
+    def _check_performance_token(self, token):
+        scope = self.monitor.scope(self.broker_id)
+        latest = self.monitor.performance.report(scope).get('latest')
+        if not latest or token != self._performance_token(scope,latest):
+            raise PortalError('账户或观测记录已变化，请刷新后重新核对。')
+        return scope
+
+    def performance_remove_event(self,value):
+        if set(value) != {'id','view_token'}:
+            raise PortalError('资金记录参数无效。')
+        with self.lock:
+            scope = self._check_performance_token(value['view_token'])
+            self.monitor.performance.remove_cash_event(scope,value['id'])
+            return {'message':'错误记录已移除，请重新核对统计区间。'}
+
+    def monitoring_configure(self, value):
+        with self.lock:
+            return self.monitor.configure(value)
+
+    def _record_observation(self, action, broker, result, scope=None):
+        # Reporting failure must not change an already confirmed execution result.
+        try:
+            if action == 'observe':
+                self.monitor.observed(broker,result,scope)
+            if (result.get('decision_id') and 'targets' in result
+                    and 'observe' in self.registry.descriptor('broker',broker)['capabilities']):
+                self.monitor.cycle(broker,result,self.config()[0]['strategy'])
+            if action in {'execute','recover','reconcile'}:
+                self.monitor.next_observation = 0
+        except Exception:
+            self.monitor.error = '账户表现记录未通过校验，已有交易结果与历史记录已保留。'
+            self.monitor.emit('reporting:'+broker+now(),self.monitor.error,'error','positions')
+
+    def monitoring_poll(self):
+        with self.lock:
+            if self.closing:
+                return
+            self.monitor.automation_events(list(self.automation.data['events']))
+            self.monitor.pump()
+            if self.active or not self.monitor.settings.config['enabled'] or time.time() < self.monitor.next_observation:
+                return
+            self.monitor.next_observation = time.time()+self.monitor.settings.config['interval_seconds']
+            try:
+                if 'observe' not in self.registry.descriptor('broker',self.broker_id)['capabilities']:
+                    return
+                self.start('observe')
+            except Exception:
+                self.monitor.error = '尚未取得账户监控数据，请检查所选券商配置。'
+                self.monitor.events.transition('monitor-config:'+self.broker_id,False,self.monitor.error,'broker',
+                    notify=self.monitor.settings.config['channel']!='none')
 
     def state(self):
         with self.lock:
@@ -398,6 +491,7 @@ class PortalService:
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
+                'monitoring': self.monitor.public(),
                 'data_requirements': requirements, 'broker': broker, 'brokers': brokers,
                 'inventory': self.registry.inventory(), 'compatibility_issue': compatibility,
                 'module_issue': context_issue, 'actions': actions,
@@ -412,6 +506,10 @@ class PortalService:
 
     def _save_job(self, job):
         atomic_json(self.folder / 'jobs' / (job['id'] + '.json'), self._public(job))
+        if job.get('finished_at') and job['action'] != 'observe':
+            failed = job['status'] in {'blocked','paused','interrupted'}
+            if failed or job['action'] in {'refresh','execute','reconcile','automation'}:
+                self.monitor.emit('job:'+job['id'],job['message'],'error' if failed else 'info','logs',at=job['finished_at'])
 
     def start(self, action, credentials=None):
         with self.lock:
@@ -445,6 +543,7 @@ class PortalService:
             if action == 'prepare' and 'prepare' not in broker_spec['capabilities']:
                 raise PortalError('当前账户模块没有模拟订单准备能力。')
             context = context_for(self.registry, action, broker_id, source)
+            financial_scope = self.monitor.scope(broker_id) if action == 'observe' else None
             operation_cap = DATA_CAPABILITIES
             if action in operation_cap and operation_cap[action] not in source_spec['capabilities']:
                 raise PortalError('所选数据模块没有声明这项能力。')
@@ -496,6 +595,7 @@ class PortalService:
                     if credentials is not None:
                         credentials.clear()
                 with self.lock:
+                    self._record_observation(action,broker_id,result,financial_scope)
                     safe_result = self._public(result, secret_values)
                     job.update(status=safe_result['status'], message=safe_result['message'], finished_at=now(),
                                result=safe_result, cancel_available=False)
@@ -582,6 +682,10 @@ class PortalService:
                     with self.lock:
                         if not self.automation.corrupt:
                             self.automation.pause('自动服务遇到异常并已暂停，请查看运行记录。')
+                try:
+                    self.monitoring_poll()
+                except Exception:
+                    self.monitor.error = '监控服务暂不可用，请检查运行日志。'
                 self.scheduler_wake.wait(5)
                 self.scheduler_wake.clear()
         self.scheduler_thread = threading.Thread(target=loop, name='paper-scheduler', daemon=True)
@@ -615,7 +719,12 @@ class PortalService:
             def work():
                 result = None
                 try:
-                    result = self.automation.tick(self.worker, progress)
+                    def observed_worker(root, action, *args, **kwargs):
+                        value = self.worker(root,action,*args,**kwargs)
+                        with self.lock:
+                            self._record_observation(action,binding['broker_id'],value)
+                        return value
+                    result = self.automation.tick(observed_worker, progress)
                 except Exception:
                     result = {'status':'paused','message':'自动任务未完成，已停止新委托；请先核对订单。'}
                     if not self.automation.corrupt:
@@ -684,7 +793,7 @@ class PortalService:
             ident = 'exp-' + uuid4().hex[:16]
             out = self.folder / 'experiments' / ident
             export_backtest(self.root / 'configs/portfolio_config.json', out, start=start, end=end,
-                            slippage_bps=slippage_bps, note=note)
+                            slippage_bps=slippage_bps, note=note, schedule=self.automation.data['config'])
             return {'id': ident, 'message': '代码已导出；请在 QuantConnect 中运行。'}
 
     def import_backtest(self, ident, content):

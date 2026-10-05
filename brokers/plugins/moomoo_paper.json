@@ -14,7 +14,8 @@
       "execute",
       "prepare",
       "calendar",
-      "reconcile"
+      "reconcile",
+      "observe"
     ],
     "path_fields": [
       "config_dir",

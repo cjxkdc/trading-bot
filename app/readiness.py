@@ -28,7 +28,7 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
         if needs_broker:
             if not broker.get('enabled'):
                 block('broker_unavailable', broker.get('reason') or '券商模块不可用。', 'broker')
-            capability = ('reconcile' if action == 'resolve-remainder' else action if action in {'calendar', 'reconcile'}
+            capability = ('reconcile' if action == 'resolve-remainder' else action if action in {'calendar', 'reconcile', 'observe'}
                           else 'inspect' if action in BROKER_CHECKS else action)
             if capability not in broker.get('capabilities', []):
                 block('broker_capability', '当前券商不支持此操作。', 'broker')

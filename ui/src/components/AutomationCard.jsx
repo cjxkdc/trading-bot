@@ -38,7 +38,7 @@ export function AutomationCard({ state, online, runtimeRunning, pending, busy, a
   return <section className="card automation-card" aria-labelledby="automation-title">
     <div className="card-heading"><div><h2 id="automation-title">自动建仓与调仓</h2><p>{scheduleSummary(automation?.config)}</p></div><span className={'tag ' + view.tone}>{view.label}</span></div>
     <div className="automation-binding"><span className="tag blue">仅模拟盘</span><span>{binding.strategy_name || '未选择策略'}</span><span aria-hidden="true">/</span><span>{binding.broker_name || '未选择账户'}</span><span aria-hidden="true">/</span><span>{binding.source_name || '未选择数据源'}</span></div>
-    {view.enabled || view.status === 'paused' ? <p className="automation-message" role="status">{view.message}</p> : <p className="automation-message">开启后先检查并建仓，之后按计划调仓。</p>}
+    {view.enabled || view.status === 'paused' ? <p className="automation-message" role="status">{view.message}</p> : <p className="automation-message">{automation?.config?.initial_entry === 'scheduled' ? '开启后先检查，首次建仓与后续调仓都遵循已保存计划。' : '开启后先检查，在下个可用交易时段建仓，之后按计划调仓。'}</p>}
     <div className="automation-timing"><div><span>{view.enabled && automation?.startup?.status === 'checked' ? '首次建仓时间' : '下次调仓时间'} · 本地时间</span><strong>{view.enabled && automation?.next_run ? time(automation.next_run) : view.enabled ? '检查后显示' : '尚未开启'}</strong></div><div><span>最近一次运行</span><strong>{time(automation?.last_run?.started_at || automation?.last_run?.at || automation?.last_run?.time)}</strong>{automation?.last_run?.message && <small>{automation.last_run.message}</small>}</div></div>
     <form onSubmit={save}>
       <details className="automation-settings" open={compact ? undefined : true}><summary>调仓设置{dirty ? ' · 未保存' : ''}</summary>
@@ -48,8 +48,9 @@ export function AutomationCard({ state, online, runtimeRunning, pending, busy, a
         {draft.cadence === 'weekly' && <label>每周哪一天<select value={draft.weekday} disabled={!controls.canEdit} onChange={event => setDraft({ ...draft, weekday: Number(event.target.value) })}>{['周一','周二','周三','周四','周五'].map((day, i) => <option key={day} value={i}>{day}</option>)}</select></label>}
         <label>每日更新数据<input type="time" required value={draft.prepare_time} disabled={!controls.canEdit} onChange={event => setDraft({ ...draft, prepare_time: event.target.value })}/></label>
         <label>调仓时间<input type="time" required value={draft.trade_time} disabled={!controls.canEdit} onChange={event => setDraft({ ...draft, trade_time: event.target.value })}/></label>
+        <label>首次建仓<select value={draft.initial_entry} disabled={!controls.canEdit} onChange={event=>setDraft({...draft,initial_entry:event.target.value})}><option value="immediate">下个可用交易时段</option><option value="scheduled">等待计划调仓日</option></select></label>
       </div>
-      <p className="small muted automation-schedule-note">以上为美东时间，自动处理夏令时；休市顺延。首次建仓按当前可用时段开始，后续使用此计划。</p>
+      <p className="small muted automation-schedule-note">以上为美东时间，自动处理夏令时；休市顺延。回测导出使用同一份已保存计划。</p>
       {!view.enabled && <p className="small muted">更换周期后，请按相同周期重新回测。</p>}
       {view.enabled && <p className="small muted">关闭自动运行后可修改计划。</p>}
       {!view.enabled && <button className="button" type="submit" disabled={!controls.canEdit || !dirty}>保存计划</button>}

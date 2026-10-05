@@ -88,6 +88,29 @@ class CurrentResearchControl(SnapshotControl):
 
 
 class MassiveControl(CurrentResearchControl):
+    def benchmark_observation(self, symbol, *, clock):
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        from data.common import collection_lock
+        from data.massive import MassiveClient, settings
+        from framework.performance import number
+        local = clock.astimezone(ZoneInfo('America/New_York'))
+        # Use completed prior days. Today's delayed/partial aggregate is never a close.
+        end = local.date() - timedelta(days=1)
+        cache = project_path(self.root, self.profile['cache_dir'], under='runs')
+        with collection_lock(cache):
+            client = MassiveClient(settings(project_path(self.root, self.profile['config_dir'])), cache, max_requests=2)
+            saved = client.daily(symbol, str(end-timedelta(days=10)), str(end))
+        rows = saved['data'].get('results', [])
+        if not rows:
+            raise ControlError('基准没有可用的已完成日线。')
+        row = max(rows, key=lambda r: r['t'])
+        day = datetime.fromtimestamp(row['t']/1000, ZoneInfo('America/New_York')).date()
+        if day > end:
+            raise ControlError('基准日线尚未完成。')
+        return dict(symbol=symbol, price=number(row['c'], positive=True), session_day=str(day),
+                    source='Massive', return_type='split_adjusted_price', observed_at=saved['observed_at'])
+
     def configuration_status(self):
         from data.massive import configuration_status
         return configuration_status(project_path(self.root, self.profile['config_dir']))

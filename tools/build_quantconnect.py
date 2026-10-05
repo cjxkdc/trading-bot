@@ -21,6 +21,9 @@ def backtest_configuration(config):
         raise ValueError("A portfolio backtest configuration is required")
     if float(cfg["fees"].get("bps", 0)) != 0:
         raise ValueError("This QC adapter supports fixed per-order fees only")
+    from framework.scheduling import schedule_config
+    cfg.setdefault('schedule', schedule_config({'initial_entry': 'scheduled'}))
+    cfg.setdefault('benchmark', 'QQQ')
     return {k: v for k, v in cfg.items() if k not in {"data", "broker"}}
 
 
@@ -34,7 +37,7 @@ def build(config=None):
     runner.engine.strategy.history_requirements  # Enforce the history request contract before export.
     plugins = {k: v for k, v in strategy_catalog().items()
                if v["kind"] == "portfolio" and v.get("input_schema") == runner.input_schema}
-    sources = ["framework/portfolio.py", "framework/decisions.py", "framework/collection.py"]
+    sources = ["framework/portfolio.py", "framework/decisions.py", "framework/collection.py", "framework/scheduling.py"]
     sources += sorted({v["entrypoint"].split(":")[0].replace(".", "/") + ".py" for v in plugins.values()})
     sources.append("backtests/quantconnect/adapter.py")
     parts = []
