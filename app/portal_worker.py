@@ -79,11 +79,19 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
     clock = clock or datetime.now(timezone.utc)
     progress = progress or (lambda message: None)
     before_submit = None
+    if action in {'execute', 'resolve-remainder'}:
+        from app.strategy_instances import require_unmanaged
+        require_unmanaged(root, registry, broker_id)
+        before_submit = lambda: require_unmanaged(root, registry, broker_id)
     if automation is not None:
         from app.automation import submission_guard
         if not isinstance(automation, dict) or set(automation) != {'generation', 'context', 'window_start', 'window_end'}:
             raise ControlError('自动运行授权格式无效。')
-        before_submit = lambda: submission_guard(root, automation)
+        manual_guard = before_submit
+        def before_submit():
+            if manual_guard:
+                manual_guard()
+            submission_guard(root, automation)
     if action == 'observe':
         if 'observe' not in registry.descriptor('broker', broker_id)['capabilities']:
             raise ControlError('当前账户模块尚未提供估值接口。')

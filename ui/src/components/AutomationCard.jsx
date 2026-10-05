@@ -12,6 +12,7 @@ export function AutomationCard({ state, online, runtimeRunning, pending, busy, a
   const [confirming, setConfirming] = useState(false);
   useEffect(() => { setDraft(JSON.parse(savedConfig)); }, [savedConfig]);
   useEffect(() => { setConfirming(false); }, [state.strategy_name, state.broker?.id, state.source]);
+  if (state.managed_account) return null;
   const dirty = scheduleChanged(draft, automation?.config);
   const controls = automationControls(automation, { online, runtimeRunning, pending, busy, dirty,
     brokerVerified: state.broker_verified === true, reconcileReady: state.actions?.reconcile?.enabled,

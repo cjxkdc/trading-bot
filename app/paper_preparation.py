@@ -56,7 +56,7 @@ def prepare(*, root, source, loaded, runner, control, path, context, clock, prog
     mapping, account = mapping_for(stocks,control.observe_account())
     preliminary = market_snapshot(stocks,account,mapping,{},datetime.now(timezone.utc),loaded.schema)
     decision = runner.plan(preliminary)
-    if not decision.targets:
+    if not decision.targets and not getattr(runner, 'allow_cash_target', False):
         raise ControlError('本轮没有可交易的目标组合；请先核对选股结果。')
     wanted = {t.asset_id for t in decision.targets} | {s for s,q in account.positions if q}
     progress('读取目标股票与现有持仓的券商行情，核对交易时段和价格日期…')
@@ -75,6 +75,8 @@ def prepare(*, root, source, loaded, runner, control, path, context, clock, prog
     if not orders:
         desired = {t.asset_id: int((account.cash + sum(q*quotes[s].mark for s,q in account.positions))
                                    * Decimal(str(t.weight)) / quotes[t.asset_id].ask) for t in decision.targets}
+        if 'desired_positions' in decision.record:
+            desired = {s: int(q) for s, q in decision.record['desired_positions'].items()}
         held = dict(account.positions)
         if any(desired.get(s, 0) != held.get(s, 0) for s in set(desired) | set(held)):
             raise ControlError('目标仍有整股差额，但现金或仓位限制不允许下单；本轮已暂停。')

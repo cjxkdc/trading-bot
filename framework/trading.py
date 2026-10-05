@@ -148,6 +148,16 @@ def plan_orders(decision, account, quotes, now, policy, fees, *, split_orders=Fa
     equity = account.cash + sum((q * quotes[s].mark for s, q in positions.items()), D(0))
     desired = {s: (equity * w / quotes[s].ask).to_integral_value(rounding=ROUND_FLOOR)
                for s, w in targets.items()}
+    # Managed portfolios freeze integer ownership before the net account batch.
+    # The decision is recomputed by its runner before submission and recovery.
+    if 'desired_positions' in decision.record:
+        frozen = decision.record['desired_positions']
+        if not isinstance(frozen, dict) or set(frozen) != set(targets):
+            raise ValueError('Invalid managed quantity targets')
+        desired = {s: amount(q, True) for s, q in frozen.items()}
+        if any(q != q.to_integral_value() or q * quotes[s].ask > equity * targets[s] + D('0.000001')
+               for s, q in desired.items()):
+            raise ValueError('Managed quantities exceed frozen weight targets')
     orders, projected = [], account
     # Reductions precede increases. Each order is checked again at transmission.
     for side in ("SELL", "BUY"):

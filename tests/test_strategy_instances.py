@@ -1,0 +1,413 @@
+"""Shared-account ownership, lifecycle, isolated selection and owner-only APIs."""
+from copy import deepcopy
+from contextlib import contextmanager, closing
+from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal as D
+import io
+import json
+from pathlib import Path
+import shutil
+import tempfile
+import threading
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+import zipfile
+
+from fastapi.testclient import TestClient
+from app.automation import save
+from app.control_contracts import ControlError
+from app.module_registry import ModuleRegistry
+from app.strategy_instances import StrategyInstances, managed_guard
+from app.strategy_worker import ManagedRunner, SCHEMA, selection, run_cycle
+from app.control_contracts import SnapshotInput
+from framework.contracts import OrderState
+from framework.journal import Journal
+from framework.order_capabilities import US_EQUITY_LIMIT_ORDERS
+from app.workbench import PortalService
+from framework.configuration import normalize_config
+from framework.portfolio import StockSnapshot, StockTarget, EquitySnapshot
+from framework.runtime import MarketSnapshot
+from framework.strategy_book import owner_plan, reconcile_ownership, settle_ownership
+from framework.trading import Account, Quote, ExecutionPolicy, Fees, plan_orders, check_order
+from portal.app import create_app
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class OwnershipTests(unittest.TestCase):
+    def test_only_due_owners_resize_and_external_shares_are_preserved(self):
+        old = {'A': {'XYZ': '10'}, 'B': {'XYZ': '6', 'ZZZ': '2'}}
+        planned, net = owner_plan(old, {'EXT': '3'}, {'A': {'XYZ': .6}}, {'A': '.5'}, D('1000'), {'XYZ': D('10')})
+        self.assertEqual(planned['A'], {'XYZ': '30'})
+        self.assertEqual(planned['B'], old['B'])
+        self.assertEqual(net, {'EXT': '3', 'XYZ': '36', 'ZZZ': '2'})
+
+    def test_opposing_owner_changes_become_one_net_account_target(self):
+        planned, net = owner_plan({'A': {'XYZ': '5'}, 'B': {'XYZ': '25'}}, {},
+                                 {'A': {'XYZ': .5}, 'B': {'XYZ': .1}}, {'A': '.5', 'B': '.5'}, D('1000'), {'XYZ': D('10')})
+        self.assertEqual(planned, {'A': {'XYZ': '25'}, 'B': {'XYZ': '5'}})
+        self.assertEqual(net, {'XYZ': '30'})
+
+    def test_cash_constrained_fill_allocation_keeps_other_owners_exact(self):
+        actual = settle_ownership({'A': {'XYZ': '30'}, 'B': {'XYZ': '6'}},
+                                 {'A': {}, 'B': {'XYZ': '6'}}, {}, {'XYZ': '34'}, ['A'])
+        self.assertEqual(actual, {'A': {'XYZ': '28'}, 'B': {'XYZ': '6'}})
+
+    def test_shared_symbol_rounding_is_deterministic_and_conserves_shares(self):
+        actual = settle_ownership({'A': {'XYZ': '5'}, 'B': {'XYZ': '5'}}, {}, {}, {'XYZ': '7'}, ['B', 'A'])
+        self.assertEqual(actual, {'B': {'XYZ': '3'}, 'A': {'XYZ': '4'}})
+
+    def test_unexplained_loss_of_attributed_shares_blocks(self):
+        with self.assertRaises(ValueError):
+            reconcile_ownership({'A': {'XYZ': '10'}}, {'XYZ': '9'})
+        self.assertEqual(reconcile_ownership({'A': {'XYZ': '10'}}, {'XYZ': '13'}), {'XYZ': '3'})
+
+    def test_settlement_cannot_take_stopped_or_external_shares(self):
+        with self.assertRaises(ValueError):
+            settle_ownership({'A': {}, 'B': {'XYZ': '6'}}, {'B': {'XYZ': '6'}}, {'XYZ': '2'}, {'XYZ': '7'}, ['A'])
+
+    def test_explicit_partial_closure_preserves_unfilled_reductions(self):
+        result = settle_ownership({'A': {}}, {'A': {'XYZ': '10'}}, {}, {'XYZ': '4'}, ['A'], partial=True)
+        self.assertEqual(result, {'A': {'XYZ': '4'}})
+
+
+class ProjectTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        for name in ('app', 'configs', 'strategies', 'framework'):
+            shutil.copytree(ROOT / name, self.root / name, ignore=shutil.ignore_patterns('__pycache__'))
+        for name in ('brokers', 'data'):
+            shutil.copytree(ROOT / name / 'plugins', self.root / name / 'plugins')
+        self.patch = patch('app.assembly.ROOT', self.root)
+        self.patch.start()
+        self.registry = ModuleRegistry(self.root)
+        self.clock = datetime(2026, 10, 5, 13, 40, tzinfo=timezone.utc)
+        self.manager = StrategyInstances(self.root, self.registry, clock=lambda: self.clock)
+        self.strategy = json.loads((ROOT / 'tests/fixtures/portfolio_default.json').read_text(encoding='utf-8'))['strategy']
+        self.broker = self.registry.default('broker')
+        self.source = 'massive'
+
+    def tearDown(self):
+        self.patch.stop()
+        self.temp.cleanup()
+
+    def create(self, name='First', budget='.5'):
+        value = dict(name=name, strategy=deepcopy(self.strategy), budget=budget, broker_id=self.broker,
+                     source_id=self.source, schedule={})
+        ident = self.manager.create(value)['id']
+        return self.manager.get(ident)
+
+    def fake_worker(self, root, action, **kwargs):
+        if action == 'calendar':
+            days = [self.clock.date() + timedelta(days=i) for i in range(100)]
+            return {'status': 'ready', 'sessions': [str(d) for d in days if d.weekday() < 5]}
+        if action == 'strategy-check':
+            return {'status': 'complete', 'message': 'Checked', 'account_ref': 'fixture-account'}
+        if action == 'strategy-refresh':
+            path = self.root / 'runs/fixture-data.json'
+            save(path, {})
+            return {'status': 'complete', 'snapshot_path': str(path)}
+        if action == 'strategy-cycle':
+            cycle = json.loads(Path(kwargs['cycle_path']).read_text(encoding='utf-8'))
+            managed_guard(self.root, cycle, clock=lambda: self.clock)
+            return {'status': 'complete', 'message': 'Fixture executed',
+                    'book': {'owners': {i: {} for i in cycle['due_ids']}, 'unmanaged': {}, 'account_ref': 'fixture-account'}}
+        raise AssertionError(action)
+
+    def test_independent_parameters_and_schedules_do_not_change_global_config(self):
+        before = (self.root / 'configs/portfolio_config.json').read_bytes()
+        first, second = self.create(), self.create('Second')
+        self.assertNotEqual(first['id'], second['id'])
+        value = {k: deepcopy(second[k]) for k in ('name', 'strategy', 'budget', 'broker_id', 'source_id', 'schedule')}
+        value['schedule']['cadence'] = 'weekly'
+        self.manager.update(second['id'], value)
+        self.assertEqual(first['schedule']['cadence'], 'monthly')
+        self.assertEqual((self.root / 'configs/portfolio_config.json').read_bytes(), before)
+
+    def test_stopping_one_shot_clears_request_before_restart(self):
+        item = self.create()
+        self.manager.run_once(item['id'])
+        self.manager.stop(item['id'])
+        self.assertFalse(item['force_run'])
+        self.manager.start(item['id'])
+        self.assertFalse(item['one_shot'])
+
+    def test_stop_during_network_check_does_not_resume_or_execute(self):
+        item = self.create()
+        self.manager.start(item['id'])
+        started, stopped = threading.Event(), threading.Event()
+        def stop():
+            started.wait(5)
+            with self.manager.lock:
+                self.manager.stop(item['id'])
+            stopped.set()
+        thread = threading.Thread(target=stop)
+        thread.start()
+        def worker(root, action, **kwargs):
+            if action == 'strategy-check':
+                started.set()
+                self.assertTrue(stopped.wait(5))
+            return self.fake_worker(root, action, **kwargs)
+        result = self.manager.tick(worker)
+        thread.join(5)
+        self.assertFalse(item['enabled'])
+        self.assertEqual(item['status'], 'stopped')
+        self.assertFalse(self.manager.data['pending'])
+
+    def test_complete_managed_cycle_uses_real_preparation_execution_and_journal(self):
+        stamp = datetime(2026, 10, 5, 13, 40, tzinfo=timezone.utc)
+        self.clock = stamp
+        item, held = self.create('Due', '.5'), self.create('Stopped', '.4')
+        item['strategy'] = {'type': 'equal_weight', 'count': 1, 'weight': .18}
+        self.manager.data['books'][self.broker] = {
+            'owners': {held['id']: {'AAA': '6'}}, 'unmanaged': {}, 'account_ref': None}
+        self.manager.start(item['id'])
+        actual = [Account('fixture-paper', 'USD', D('910'), (('AAA', D('6')), ('EXT', D('3'))), stamp)]
+        stock = StockSnapshot('original:AAA', 'AAA', date(2026, 10, 2), date(2026, 10, 2), 'Tech', 1, (10.,)*253, (1e8,)*20)
+        sent, saved = [], {}
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None): return stamp if tz else stamp.replace(tzinfo=None)
+        class Source:
+            directory = self.root / 'runs/data/fixture'
+            def validate_request(self): pass
+            def collect(self, target, **kwargs):
+                path = Path(str(target) + '.json'); save(path, {'fixture': True}); return path
+            def load(self, raw):
+                return SnapshotInput('fixture-input', True, raw, (stock,), {}, {}, order_requirements=US_EQUITY_LIMIT_ORDERS)
+            def paper_signal(self, raw, clock): return (stock,), []
+        source = Source()
+        registry = self.registry
+        entry = registry.catalog('broker')[registry.descriptor('broker', self.broker)['type']]
+        test = self
+        class Control:
+            def observe_account(self): return actual[0]
+            def observe_quotes(self, mapping, max_age):
+                return {s: Quote(s, D(10), D(10), stamp) for s in mapping}, date(2026, 10, 2), stamp
+            @contextmanager
+            def session(self, cfg, snapshot, fees):
+                class Broker:
+                    mode = 'broker_paper'
+                    def account(self):
+                        reverse = {ticker: asset for asset, ticker in snapshot.instruments.items()}
+                        return replace(actual[0], positions=tuple(sorted((reverse[t], q) for t, q in actual[0].positions)))
+                    def execution_time(self): return stamp
+                    def open_orders(self): return ()
+                    def query(self, ident): return saved[ident]
+                    def submit(self, order):
+                        sent.append(order)
+                        mapped = check_order(order, self.account(), snapshot.quotes, stamp,
+                                             test_runner_policy(cfg), fees)
+                        actual[0] = replace(mapped, positions=tuple((snapshot.instruments[s], q) for s, q in mapped.positions))
+                        saved[order.client_id] = OrderState(order.client_id, 'fixture-' + order.client_id,
+                                                           'filled', order.quantity, order.limit_price)
+                        return saved[order.client_id]
+                with closing(Journal(test.root / 'runs/fixture-journal.sqlite')) as journal:
+                    yield Broker(), journal
+        from framework.configuration import policy_from_config as test_runner_policy
+        control = Control(); control.entry = entry
+        def worker(root, action, **kwargs):
+            if action != 'strategy-cycle': return self.fake_worker(root, action, **kwargs)
+            with patch('app.strategy_worker.ModuleRegistry', return_value=registry), \
+                 patch.object(registry, 'control', side_effect=lambda kind, *a, **k: control if kind == 'broker' else source), \
+                 patch('app.strategy_worker.datetime', FixedDateTime), \
+                 patch('app.paper_preparation.datetime', FixedDateTime), \
+                 patch('app.strategy_worker.managed_guard', side_effect=lambda r, c: managed_guard(r, c, clock=lambda: stamp)):
+                return run_cycle(root, kwargs['cycle_path'], lambda message: None)
+        result = self.manager.tick(worker)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual([(o.side, o.quantity) for o in sent], [('BUY', D(9))])
+        book = self.manager.data['books'][self.broker]
+        self.assertEqual(book['owners'][held['id']], {'AAA': '6'})
+        self.assertEqual(book['owners'][item['id']], {'AAA': '9'})
+        self.assertEqual(book['unmanaged'], {'EXT': '3'})
+        self.manager.tick(self.fake_worker)
+        self.assertEqual(len(sent), 1)
+
+    def test_overbooked_capital_is_rejected_even_after_owner_is_stopped(self):
+        first, second = self.create(budget='.7'), self.create('Second', '.4')
+        self.manager.start(first['id'])
+        with self.assertRaises(ControlError):
+            self.manager.start(second['id'])
+        self.manager.data['books'][self.broker] = {'owners': {first['id']: {'XYZ': '5'}}}
+        self.manager.stop(first['id'])
+        with self.assertRaises(ControlError):
+            self.manager.start(second['id'])
+
+    def test_shared_account_runs_one_batch_and_restart_does_not_repeat_period(self):
+        first, second = self.create(), self.create('Second')
+        self.manager.start(first['id']); self.manager.start(second['id'])
+        calls = []
+        def worker(root, action, **kwargs):
+            calls.append(action)
+            return self.fake_worker(root, action, **kwargs)
+        self.assertEqual(self.manager.tick(worker)['status'], 'complete')
+        self.assertEqual(calls.count('strategy-cycle'), 1)
+        restored = StrategyInstances(self.root, self.registry, clock=lambda: self.clock)
+        restored.tick(worker)
+        self.assertEqual(calls.count('strategy-cycle'), 1)
+        self.assertTrue(all(x['initialized'] for x in restored.data['instances']))
+
+    def test_stop_revokes_a_frozen_batch_before_new_submission(self):
+        item = self.create(); self.manager.start(item['id'])
+        def worker(root, action, **kwargs):
+            if action == 'strategy-cycle':
+                cycle = json.loads(Path(kwargs['cycle_path']).read_text(encoding='utf-8'))
+                self.manager.stop(item['id'])
+                with self.assertRaises(ControlError):
+                    managed_guard(root, cycle, clock=lambda: self.clock)
+                return {'status': 'paused', 'message': 'Stopped'}
+            return self.fake_worker(root, action, **kwargs)
+        self.manager.tick(worker)
+        self.assertFalse(item['enabled'])
+        self.assertFalse(self.manager.data['pending'])
+
+    def test_interrupted_submitted_batch_survives_and_pauses_restart(self):
+        item = self.create(); self.manager.start(item['id'])
+        path = self.root / 'runs/strategy_manager/cycles/cycle-interrupted.json'
+        save(path, {'execution_attempted': True})
+        self.manager.data['pending'][self.broker] = str(path); self.manager.persist()
+        restored = StrategyInstances(self.root, self.registry)
+        self.assertFalse(restored.get(item['id'])['enabled'])
+        self.assertEqual(restored.get(item['id'])['status'], 'paused')
+        self.assertEqual(restored.pending_cycle(item['id']), {'execution_attempted': True})
+        with self.assertRaises(ControlError):
+            restored.start(item['id'])
+
+    def test_one_shot_returns_to_stopped_after_one_batch(self):
+        item = self.create()
+        self.manager.run_once(item['id']); self.manager.tick(self.fake_worker)
+        self.assertFalse(item['enabled'])
+        self.assertEqual(item['status'], 'stopped')
+        self.assertIsNotNone(item['last_run'])
+
+    def test_closed_market_sets_future_run_without_executing(self):
+        self.clock = datetime(2026, 10, 10, 13, 40, tzinfo=timezone.utc)
+        item = self.create(); self.manager.start(item['id'])
+        calls = []
+        def worker(root, action, **kwargs):
+            calls.append(action); return self.fake_worker(root, action, **kwargs)
+        self.manager.tick(worker)
+        self.assertNotIn('strategy-cycle', calls)
+        self.assertNotIn('strategy-refresh', calls)
+        self.assertIn('2026-10-12', item['next_run'])
+
+    def test_code_change_pauses_bound_instances(self):
+        item = self.create(); self.manager.start(item['id'])
+        (self.root / 'strategies/new_file.py').write_text('# changed')
+        result = self.manager.tick(self.fake_worker)
+        self.assertEqual(result['status'], 'paused')
+        self.assertFalse(item['enabled'])
+
+    def test_running_instance_cannot_be_edited_or_deleted(self):
+        item = self.create(); self.manager.start(item['id'])
+        with self.assertRaises(ControlError):
+            self.manager.update(item['id'], {})
+        with self.assertRaises(ControlError):
+            self.manager.remove(item['id'])
+
+    def test_invalid_state_is_fail_closed_and_never_overwritten(self):
+        path = self.root / 'runs/strategy_manager/state.json'; path.parent.mkdir(parents=True)
+        path.write_text('{broken')
+        manager = StrategyInstances(self.root, self.registry)
+        self.assertTrue(manager.public()['corrupt']); self.assertFalse(manager.due())
+        with self.assertRaises(ControlError):
+            manager.persist()
+        self.assertEqual(path.read_text(), '{broken')
+
+    def test_selection_runs_in_an_actual_separate_process(self):
+        item = {'name': 'Control', 'strategy': self.strategy}
+        targets = selection(self.root, item, (), self.clock.date(), (), ExecutionPolicy(), 10)
+        self.assertEqual(targets, ())
+
+    def test_momentum_selection_transports_missing_optional_fundamentals(self):
+        item = {'name': 'MOM8', 'strategy': {'type': 'mom8'}}
+        stock = EquitySnapshot('fixture:AAA', 'AAA', date(2026,10,2), date(2026,10,2), 'Tech', float('nan'),
+            tuple(100.+i for i in range(253)), (), 3e9, 352., (2e6,)*20)
+        targets = selection(self.root, item, (stock,), date(2026,10,5), (), ExecutionPolicy(), 10)
+        self.assertEqual([t.asset_id for t in targets], ['fixture:AAA'])
+
+    def test_selection_timeout_terminates_only_the_calculation_process(self):
+        path = self.root / 'strategies/slow_fixture.py'
+        path.write_text('''from framework.portfolio import HistoryRequirements\nimport time\nclass Slow:\n history_requirements=HistoryRequirements(1,1)\n def select(self, stocks):\n  time.sleep(5)\n  return ()\n''')
+        save(self.root / 'strategies/plugins/slow_fixture.json',
+             {'type': 'slow_fixture', 'kind': 'portfolio', 'entrypoint': 'strategies.slow_fixture:Slow', 'version': '1'})
+        with self.assertRaisesRegex(ControlError, '超过 1 秒'):
+            selection(self.root, {'name': 'Slow', 'strategy': {'type': 'slow_fixture'}}, (), self.clock.date(), (), ExecutionPolicy(), 1)
+
+    def test_http_mutations_are_authenticated_and_do_not_start_instances_on_creation(self):
+        service = PortalService(self.root, worker=lambda *a, **k: {'status': 'complete', 'message': 'Fixture'})
+        client = TestClient(create_app(self.root, service=service), base_url='http://127.0.0.1:8765')
+        value = dict(name='API', strategy=self.strategy, budget='.5', broker_id=self.broker, source_id=self.source, schedule={})
+        self.assertEqual(client.post('/api/strategy-instances', json=value).status_code, 403)
+        client.headers['X-Portal-Token'] = client.get('/api/session').json()['token']
+        result = client.post('/api/strategy-instances', json=value)
+        self.assertEqual(result.status_code, 200)
+        ident = result.json()['id']
+        self.assertFalse(service.strategy_instances.get(ident)['enabled'])
+        self.assertEqual(client.post(f'/api/strategy-instances/{ident}/start', json={}).status_code, 409)
+        self.assertEqual(client.post(f'/api/strategy-instances/{ident}/start', json={'confirmation': ident}).status_code, 200)
+        self.assertEqual(client.post(f'/api/strategy-instances/{ident}/stop', json={}).status_code, 200)
+        client.close()
+
+    def test_strategy_bundle_roundtrip_and_traversal_are_checked(self):
+        service = PortalService(self.root)
+        original = service.strategy_files.bundle('equal_weight')
+        with zipfile.ZipFile(io.BytesIO(original)) as package:
+            code = package.read('strategy.py'); entry = json.loads(package.read('manifest.json'))
+        entry['type'] = 'uploaded_control'
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, 'w') as package:
+            package.writestr('strategy.py', code); package.writestr('manifest.json', json.dumps(entry))
+        uploaded = service.upload_strategy(out.getvalue())
+        self.assertEqual(uploaded['type'], 'uploaded_control')
+        self.assertIn('uploaded_control', self.registry.catalog('strategy'))
+        with self.assertRaises(ControlError):
+            service.upload_strategy(out.getvalue())
+        bad = io.BytesIO()
+        with zipfile.ZipFile(bad, 'w') as package:
+            package.writestr('../strategy.py', code); package.writestr('manifest.json', '{}')
+        with self.assertRaises(ControlError):
+            service.upload_strategy(bad.getvalue())
+
+    def test_online_edit_checks_revision_syntax_and_makes_backup(self):
+        service = PortalService(self.root)
+        original = service.strategy_source('equal_weight')
+        with self.assertRaises(ControlError):
+            service.strategy_source('equal_weight', {'content': 'invalid (', 'revision': original['revision']})
+        with self.assertRaises(ControlError):
+            service.strategy_source('equal_weight', {'content': original['content'], 'revision': 'wrong'})
+        result = service.strategy_source('equal_weight', {'content': original['content'] + '\n# edited\n', 'revision': original['revision']})
+        self.assertNotEqual(result['revision'], original['revision'])
+        backup = list((self.root / 'runs/strategy_manager/source-history').glob('*.py'))
+        self.assertEqual(len(backup), 1)
+        self.assertEqual(backup[0].read_text(encoding='utf-8'), original['content'])
+
+
+class CombinedRunnerTests(unittest.TestCase):
+    def test_net_plan_and_frozen_integer_positions_survive_quote_refresh(self):
+        stamp = datetime(2026, 10, 5, 14, tzinfo=timezone.utc)
+        stock = StockSnapshot('MANAGED:US:AAA', 'AAA', date(2026, 10, 2), date(2026, 10, 2), 'Tech', 1, (10.,), (10.,))
+        source = SimpleNamespace(parts={'A': {'stocks': (stock,)}}, rows=(stock,))
+        cycle = {'id': 'fixture', 'due_ids': ['A'], 'limits': {'selection_timeout_seconds': 10},
+                 'instances': [{'id': 'A', 'name': 'A', 'budget': '.5', 'strategy': {}, 'generation': 'a'},
+                               {'id': 'B', 'name': 'B', 'budget': '.5', 'strategy': {}, 'generation': 'b'}],
+                 'book': {'owners': {'B': {'AAA': '6'}}, 'unmanaged': {}, 'account_ref': None}}
+        cfg = json.loads((ROOT / 'tests/fixtures/portfolio_default.json').read_text(encoding='utf-8'))
+        cfg['limits']['max_weight'] = '.7'
+        account = Account('paper', 'USD', D('860'), (('AAA', D('6')), ('CCC', D('4'))), stamp)
+        selector = lambda *args: (StockTarget('MANAGED:US:AAA', .6, 1.),)
+        runner = ManagedRunner(ROOT, source, cycle, normalize_config(cfg), account=account, selector=selector)
+        quotes = {'MANAGED:US:AAA': Quote('MANAGED:US:AAA', D('10'), D('10'), stamp),
+                  'HELD:US:CCC': Quote('HELD:US:CCC', D('20'), D('20'), stamp)}
+        snapshot = MarketSnapshot(SCHEMA, (stock,), quotes, stamp, instruments={'MANAGED:US:AAA': 'AAA', 'HELD:US:CCC': 'CCC'})
+        decision = runner.plan(snapshot)
+        self.assertEqual(decision.record['desired_positions'], {'MANAGED:US:AAA': '36', 'HELD:US:CCC': '4'})
+        changed = dict(quotes, **{'MANAGED:US:AAA': replace(quotes['MANAGED:US:AAA'], ask=D('10.01'))})
+        self.assertEqual(runner.plan(replace(snapshot, quotes=changed)), decision)
+        mapped_account = replace(account, positions=(('MANAGED:US:AAA', D('6')), ('HELD:US:CCC', D('4'))))
+        orders = plan_orders(decision, mapped_account, quotes, stamp, runner.policy, Fees())
+        self.assertEqual([(o.symbol, o.side, o.quantity) for o in orders], [('MANAGED:US:AAA', 'BUY', D('30'))])

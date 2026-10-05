@@ -8,9 +8,11 @@ from app.launcher import external_dll_search, external_environment
 from app.portal_worker import ACTIONS
 
 
-def run_worker(root, action, snapshot=None, token=None, progress=None, *, source_id, broker_id,
-               expected_context=None, credentials=None, automation=None):
+def run_worker(root, action, snapshot=None, token=None, progress=None, *, source_id=None, broker_id=None,
+               expected_context=None, credentials=None, automation=None, instance=None, cycle_path=None):
     root = Path(root).resolve()
+    if action.startswith('strategy-'):
+        return run_strategy_worker(root, action, instance=instance, cycle_path=cycle_path, progress=progress)
     request = {'action': action, 'source_id': source_id, 'broker_id': broker_id,
                'expected_context': expected_context, 'snapshot_path': str(snapshot) if snapshot else None,
                'preview_token': token, 'credentials': credentials, 'automation': automation}
@@ -57,3 +59,41 @@ def run_worker(root, action, snapshot=None, token=None, progress=None, *, source
     except (OSError, ValueError, AttributeError):
         return {'portal_protocol': 1, 'action': action, 'status': 'paused' if action == 'execute' else 'blocked',
                 'message': '模块进程未返回有效结果，请检查项目环境；不会自动重试。', 'automatic_retry': False}
+
+
+def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progress=None):
+    if action not in {'strategy-check', 'strategy-refresh', 'strategy-cycle', 'strategy-reconcile', 'strategy-resolve'}:
+        raise ValueError('Unknown managed operation')
+    python = Path(root) / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
+    request = {'action': action}
+    if instance is not None:
+        request['instance'] = instance
+    if cycle_path is not None:
+        request['cycle_path'] = str(cycle_path)
+    try:
+        with external_dll_search():
+            process = subprocess.Popen([str(python), '-u', '-m', 'app.strategy_worker'], cwd=root,
+                env=external_environment(), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace',
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        process.stdin.write(json.dumps(request, ensure_ascii=True, allow_nan=False))
+        process.stdin.close()
+        result = None
+        # Do not kill a process that may have submitted orders. Selection processes
+        # inside it have their own wall-time and server memory/CPU limits.
+        for line in process.stdout:
+            try:
+                value = json.loads(line)
+            except ValueError:
+                continue
+            if value.get('portal_progress') == 1 and progress:
+                progress(value.get('message', ''))
+            if value.get('portal_protocol') == 1:
+                result = value
+        process.wait()
+        if process.returncode or not isinstance(result, dict) or result.get('action') != action or result.get('status') not in {'complete', 'paused', 'blocked', 'ready'}:
+            raise ValueError()
+        return result
+    except (OSError, ValueError, AttributeError):
+        return {'status': 'paused', 'action': action,
+                'message': '策略进程未返回有效结果，请核对订单与归属；不会自动重试。'}

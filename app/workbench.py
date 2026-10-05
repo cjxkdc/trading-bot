@@ -24,6 +24,8 @@ from app.broker_authorization import BrokerAuthorization
 from framework.journal_reader import JournalReader, JournalReadError
 from app.automation import Automation
 from app.monitoring import Monitoring
+from app.strategy_instances import StrategyInstances
+from app.strategy_files import StrategyFiles
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
@@ -111,6 +113,8 @@ class PortalService:
         self.jobs.sort(key=lambda j: j.get('started_at', ''), reverse=True)
         self.automation = Automation(self.root, self.registry)
         self.monitor = Monitoring(self.root, self.registry)
+        self.strategy_instances = StrategyInstances(self.root, self.registry, lock=self.lock)
+        self.strategy_files = StrategyFiles(self.root, self.registry)
         self.scheduler_stop = threading.Event()
         self.scheduler_wake = threading.Event()
         self.scheduler_thread = None
@@ -135,6 +139,156 @@ class PortalService:
 
     def strategies(self):
         return self.registry.strategies()
+
+    def strategy_instance_action(self, action, value, ident=None):
+        with self.lock:
+            manager = self.strategy_instances
+            if action == 'stop':
+                if value:
+                    raise PortalError('停止实例不接受交易参数。')
+                return manager.stop(ident)
+            self.idle()
+            if action == 'create':
+                return manager.create(value)
+            if action == 'update':
+                return manager.update(ident, value)
+            if action == 'limits':
+                return manager.configure_limits(value)
+            if action == 'remove':
+                if value:
+                    raise PortalError('删除实例不接受交易参数。')
+                return manager.remove(ident)
+            if action in {'start', 'once'}:
+                item = manager.get(ident)
+                if value != {'confirmation': ident}:
+                    raise PortalError('请确认所选策略实例和模拟账户。')
+                if self.automation.data['enabled'] and self.same_account_profile(self.automation.data['binding']['broker_id'], item['broker_id']):
+                    raise PortalError('此账户的旧自动计划仍在运行，请先关闭，再启动策略实例。')
+                result = manager.start(ident) if action == 'start' else manager.run_once(ident)
+                self.scheduler_wake.set()
+                return result
+            raise PortalError('未知策略实例操作。')
+
+    def same_account_profile(self, first, second):
+        if first == second:
+            return True
+        a = getattr(self.registry.control('broker', first), 'state_dir', None)
+        b = getattr(self.registry.control('broker', second), 'state_dir', None)
+        return a is not None and a == b
+
+    def managed_account(self, broker_id):
+        if self.strategy_instances.corrupt:
+            return True
+        if self.strategy_instances.owns_account(broker_id):
+            return True
+        try:
+            return any(self.strategy_instances.owns_account(x['broker_id'])
+                and self.same_account_profile(broker_id, x['broker_id'])
+                for x in self.strategy_instances.data['instances'])
+        except Exception:
+            return False
+
+    def _editable_strategy(self, strategy_type):
+        self.idle()
+        if self.automation.data['enabled'] or any(x['enabled'] for x in self.strategy_instances.data['instances']) or self.strategy_instances.data['pending']:
+            raise PortalError('停止自动运行和所有实例，并核对未完成批次后再修改策略代码。')
+
+    def strategy_source(self, strategy_type, value=None):
+        with self.lock:
+            if value is None:
+                return self.strategy_files.read(strategy_type)
+            self._editable_strategy(strategy_type)
+            result = self.strategy_files.write(strategy_type, value)
+            self.clear_preview()
+            return result
+
+    def upload_strategy(self, content):
+        with self.lock:
+            self._editable_strategy(None)
+            return self.strategy_files.install(content)
+
+    def export_instance(self, ident, value):
+        with self.lock:
+            self.idle()
+            if not isinstance(value, dict) or set(value) != {'start', 'end', 'slippage_bps'}:
+                raise PortalError('请填写回测区间和滑点。')
+            item = self.strategy_instances.get(ident)
+            cfg = load_config(self.root / 'configs/portfolio_config.json')
+            cfg['strategy'] = deepcopy(item['strategy'])
+            instance_file = self.folder / 'instance-configs' / (uuid4().hex + '.json')
+            atomic_json(instance_file, cfg)
+            experiment = 'exp-' + uuid4().hex[:16]
+            try:
+                export_backtest(instance_file, self.folder / 'experiments' / experiment,
+                    start=value['start'], end=value['end'], slippage_bps=value['slippage_bps'],
+                    note='策略实例：' + item['name'] + '。资金比例 ' + item['budget'] + '，本文件单独测试该策略。',
+                    schedule=item['schedule'])
+            finally:
+                instance_file.unlink(missing_ok=True)
+            return {'id': experiment, 'message': '已按此实例参数和计划导出 QuantConnect 回测代码。'}
+
+    def strategy_instance_job(self, ident, action):
+        with self.lock:
+            self.idle()
+            item = self.strategy_instances.get(ident)
+            cycle = self.strategy_instances.pending_cycle(ident) if action in {'strategy-reconcile', 'strategy-resolve'} else None
+            if action in {'strategy-reconcile', 'strategy-resolve'} and cycle is None:
+                raise PortalError('此实例没有未核对的账户批次。')
+            if action not in {'strategy-check', 'strategy-reconcile', 'strategy-resolve'}:
+                raise PortalError('未知策略实例检查。')
+            if action == 'strategy-resolve' and any(x['enabled'] for x in self.strategy_instances.data['instances'] if x['broker_id'] == item['broker_id']):
+                raise PortalError('先停止此账户的所有实例，再结束未提交余单。')
+            return self._managed_job(action, ident=ident, cycle=cycle)
+
+    def _managed_job(self, action, *, ident=None, cycle=None):
+        job = dict(id=datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-')+uuid4().hex[:8],
+                   action=action, status='running', started_at=now(), message='检查策略运行…',
+                   events=[], cancel_available=False, instance_id=ident)
+        self.active = job
+        def progress(message):
+            with self.lock:
+                job['message'] = str(message)[:800]
+                job['events'] = [*job['events'], dict(at=now(), message=job['message'])][-60:]
+        def worker(root, op, *args, **kwargs):
+            return self.worker(root, op, *args, **kwargs)
+        def work():
+            try:
+                if action == 'strategy-cycle':
+                    result = self.strategy_instances.tick(worker, progress)
+                elif action == 'strategy-check':
+                    item = deepcopy(self.strategy_instances.get(ident))
+                    result = worker(self.root, action, instance=item, progress=progress)
+                    with self.lock:
+                        self.strategy_instances.event(self.strategy_instances.get(ident), result['message'],
+                                                      'error' if result['status'] != 'complete' else 'info')
+                        self.strategy_instances.persist()
+                else:
+                    result = worker(self.root, action, cycle_path=cycle['path'], progress=progress)
+                    with self.lock:
+                        result = self.strategy_instances.finish_cycle(cycle, result)
+            except Exception:
+                result = {'status': 'paused', 'message': '策略任务遇到异常，请先核对订单与归属。'}
+                with self.lock:
+                    for record in self.strategy_instances.data['instances']:
+                        if record['enabled']:
+                            self.strategy_instances.pause_account(record['broker_id'], result['message'])
+            with self.lock:
+                safe = self._public(result)
+                job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())
+                self.jobs = [job, *self.jobs][:40]
+                self._save_job(job)
+                self.clear_preview()
+                self.account = None
+                self.broker_session.clear()
+                self.active = None
+        self.thread = threading.Thread(target=work, name='managed-strategy-worker', daemon=False)
+        self.thread.start()
+        return {'job_id': job['id']}
+
+    def strategy_instances_poll(self):
+        with self.lock:
+            if not self.closing and not self.active and self.strategy_instances.due():
+                self._managed_job('strategy-cycle')
 
     def change_strategy(self, strategy, expected_version):
         with self.lock:
@@ -488,10 +642,16 @@ class PortalService:
             if self.automation.data['enabled']:
                 actions['execute'] = {'enabled': False, 'blockers': [], 'message': '自动运行已开启；手动下单前请先关闭自动运行。', 'next_action': None}
                 actions['resolve-remainder'] = {'enabled': False, 'blockers': [], 'message': '请先关闭自动运行，再处理未提交余单。', 'next_action': None}
+            managed = self.managed_account(self.broker_id)
+            if managed:
+                for action in ('execute', 'resolve-remainder'):
+                    actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
                 'monitoring': self.monitor.public(),
+                'strategy_manager': self.strategy_instances.public(),
+                'managed_account': managed,
                 'data_requirements': requirements, 'broker': broker, 'brokers': brokers,
                 'inventory': self.registry.inventory(), 'compatibility_issue': compatibility,
                 'module_issue': context_issue, 'actions': actions,
@@ -508,7 +668,7 @@ class PortalService:
         atomic_json(self.folder / 'jobs' / (job['id'] + '.json'), self._public(job))
         if job.get('finished_at') and job['action'] != 'observe':
             failed = job['status'] in {'blocked','paused','interrupted'}
-            if failed or job['action'] in {'refresh','execute','reconcile','automation'}:
+            if failed or job['action'] in {'refresh','execute','reconcile','automation','strategy-cycle','strategy-reconcile','strategy-resolve'}:
                 self.monitor.emit('job:'+job['id'],job['message'],'error' if failed else 'info','logs',at=job['finished_at'])
 
     def start(self, action, credentials=None):
@@ -658,6 +818,8 @@ class PortalService:
     def automation_enable(self):
         with self.lock:
             self.idle()
+            if self.managed_account(self.broker_id):
+                raise PortalError('此账户由策略实例管理，请在「策略运行」启动或停止实例。')
             verified = self.broker_session.valid(self.broker_id, self.registry.connection_context(self.broker_id))
             self.clear_preview()
             result = self.automation.enable(self.broker_id, self.source, verified, initialize=True)
@@ -676,6 +838,7 @@ class PortalService:
         def loop():
             while not self.scheduler_stop.is_set():
                 try:
+                    self.strategy_instances_poll()
                     self.automation_poll()
                 except Exception:
                     # Never allow the scheduling thread to die silently or log SDK secrets.

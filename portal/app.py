@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
@@ -130,6 +130,56 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     @app.get('/api/state')
     def state():
         return service.state()
+
+    @app.post('/api/strategy-instances')
+    async def create_instance(request: Request):
+        return await run_in_threadpool(service.strategy_instance_action, 'create', await body(request))
+
+    @app.post('/api/strategy-instances/limits')
+    async def strategy_limits(request: Request):
+        return service.strategy_instance_action('limits', await body(request))
+
+    @app.post('/api/strategy-instances/{ident}')
+    async def update_instance(ident: str, request: Request):
+        return await run_in_threadpool(service.strategy_instance_action, 'update', await body(request), ident)
+
+    @app.get('/api/strategy-instances/{ident}/logs')
+    def instance_logs(ident: str):
+        return service._public({'items': service.strategy_instances.logs(ident)})
+
+    @app.post('/api/strategy-instances/{ident}/export')
+    async def instance_export(ident: str, request: Request):
+        return await run_in_threadpool(service.export_instance, ident, await body(request))
+
+    @app.post('/api/strategy-instances/{ident}/{action}')
+    async def instance_action(ident: str, action: str, request: Request):
+        value = await body(request)
+        if action == 'resolve':
+            if value != {'confirmation': ident}:
+                raise PortalError('请确认结束未提交余单；已成交持仓会保留。')
+            return service.strategy_instance_job(ident, 'strategy-resolve')
+        if action in {'check', 'reconcile'}:
+            if value:
+                raise PortalError('检查不接受订单参数。')
+            return service.strategy_instance_job(ident, 'strategy-check' if action == 'check' else 'strategy-reconcile')
+        return await run_in_threadpool(service.strategy_instance_action, action, value, ident)
+
+    @app.post('/api/strategy-plugins/upload')
+    async def upload_strategy(request: Request):
+        return await run_in_threadpool(service.upload_strategy, await request.body())
+
+    @app.get('/api/strategy-plugins/{strategy_type}/source')
+    def strategy_source(strategy_type: str):
+        return service.strategy_source(strategy_type)
+
+    @app.post('/api/strategy-plugins/{strategy_type}/source')
+    async def save_strategy_source(strategy_type: str, request: Request):
+        return await run_in_threadpool(service.strategy_source, strategy_type, await body(request))
+
+    @app.get('/api/strategy-plugins/{strategy_type}/bundle')
+    def strategy_bundle(strategy_type: str):
+        return Response(service.strategy_files.bundle(strategy_type), media_type='application/zip',
+                        headers={'Content-Disposition': 'attachment; filename="strategy.zip"'})
 
     @app.get('/api/orders')
     def orders():
