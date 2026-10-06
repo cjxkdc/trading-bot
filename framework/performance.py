@@ -130,6 +130,57 @@ class PerformanceStore:
                 raise ValueError('Cash event not found in this account')
             db.execute('DELETE FROM reviews WHERE scope=?',(scope,))
 
+    def candles(self, scope, interval='1h', limit=96, *, now=None):
+        """OHLC from every stored observation, independent of daily return metrics.
+
+        SQL reads just scalar equity and aggregates before returning rows. Account
+        scope, resets and real observation gaps are retained; no forward filling.
+        """
+        from framework.account_candles import KEY_SQL, bounds, validate_period, window_start
+        validate_period(interval, limit)
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            raise ValueError('Candle clock requires a timezone')
+        result = dict(interval=interval, timezone='America/New_York', currency='USD',
+                      basis='account_equity', sampling_only=True, as_of=None, bars=[])
+        with closing(self.connect()) as db:
+            latest = db.execute('SELECT MAX(as_of) FROM observations WHERE scope=?', (scope,)).fetchone()[0]
+            if latest is None:
+                return result
+            result['as_of'] = latest
+            lower = window_start(stamp(latest), interval, limit).isoformat()
+            reset = db.execute("SELECT MAX(as_of) FROM cash_events WHERE scope=? AND kind='reset'", (scope,)).fetchone()[0]
+            if reset:
+                lower = max(lower, reset)
+            # SQL fragment comes only from the validated constant whitelist.
+            rows = db.execute(f'''
+                WITH points AS (
+                    SELECT as_of, json_extract(body,'$.equity') AS equity,
+                           {KEY_SQL[interval]} AS bucket
+                    FROM observations WHERE scope=? AND as_of>=?
+                ), grouped AS (
+                    SELECT bucket, MIN(as_of) AS first_at, MAX(as_of) AS last_at,
+                           MAX(equity) AS high, MIN(equity) AS low, COUNT(*) AS samples
+                    FROM points GROUP BY bucket
+                )
+                SELECT g.first_at,g.last_at,g.high,g.low,g.samples,
+                       json_extract(f.body,'$.equity'),json_extract(l.body,'$.equity')
+                FROM grouped g
+                JOIN observations f ON f.scope=? AND f.as_of=g.first_at
+                JOIN observations l ON l.scope=? AND l.as_of=g.last_at
+                ORDER BY g.first_at
+            ''', (scope,lower,scope,scope)).fetchall()
+        for first,last,high,low,samples,opened,closed in rows:
+            start,end = bounds(stamp(first), interval)
+            values = [number(v, positive=True) for v in (opened,high,low,closed)]
+            if not values[2] <= min(values[0],values[3]) <= max(values[0],values[3]) <= values[1]:
+                raise ValueError('Invalid stored equity candle')
+            result['bars'].append(dict(start=start.isoformat(), end=end.isoformat(),
+                open=values[0], high=values[1], low=values[2], close=values[3],
+                sample_count=samples, first_observation=first, last_observation=last,
+                in_progress=now.astimezone(timezone.utc) < end))
+        return result
+
     def report(self, scope):
         with closing(self.connect()) as db:
             rows = db.execute('''SELECT o.body FROM observations o JOIN

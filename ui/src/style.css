@@ -1677,25 +1677,41 @@ input[type=checkbox] {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   padding-left: 0;
 }
-.equity-chart {
-  overflow-x: auto;
-  margin: 24px 0;
-}
-.equity-chart svg {
-  width: 100%;
-  min-width: 640px;
-  max-height: none;
-}
-.equity-chart text {
-  font-size: 14px;
-  fill: var(--secondary);
-}
-.equity-chart figcaption {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--secondary);
-  gap: 16px;
+.account-candles { margin: 24px 0 12px; border-top: 1px solid var(--border); padding-top: 20px; min-width: 0; }
+.candle-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.candle-toolbar h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.candle-toolbar h3 span { font-size: 13px; font-weight: 400; margin-left: 8px; color: var(--secondary); }
+.candle-periods { display: flex; gap: 4px; flex-wrap: wrap; }
+.candle-periods button { border: 0; border-radius: 6px; padding: 7px 10px; background: transparent; font-size: 13px; min-height: 36px; }
+.candle-periods button:hover { background: var(--surface-inset); }
+.candle-periods button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.candle-readout { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-height: 64px; }
+.candle-readout > strong { font-size: 13px; font-weight: 500; }
+.candle-readout > span { color: var(--secondary); font-size: 12px; }
+.candle-readout dl { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 6px 20px; margin: 0; }
+.candle-readout dl > div { display: flex; gap: 6px; align-items: baseline; }
+.candle-readout dt { color: var(--secondary); font-size: 12px; }
+.candle-readout dd { margin: 0; color: var(--ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+.candle-chart { display: block; width: 100%; overflow: visible; margin: 8px 0 4px; touch-action: pan-y; }
+.candle-grid { stroke: var(--border); stroke-width: 1; }
+.candle-axis { fill: var(--secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.candle-selection { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 4; }
+.candle { stroke-width: 1.25; }
+.candle.up { stroke: var(--success); fill: var(--success); }
+.candle.down { stroke: var(--danger); fill: var(--danger); }
+.candle.flat { stroke: var(--secondary); fill: var(--secondary); }
+.candle.forming { opacity: .7; }
+.candle-note { color: var(--secondary); font-size: 12px; margin-top: 6px; }
+.candle-data { font-size: 12px; margin: 4px 0 10px; }
+.candle-data summary { cursor: pointer; color: var(--secondary); padding: 6px 0; }
+.candle-data .table-wrap { margin: 8px 0; max-height: 300px; }
+.candle-empty { display: grid; place-items: center; min-height: 220px; color: var(--secondary); font-size: 14px; }
+@media (max-width: 600px) {
+  .candle-toolbar { gap: 8px; }
+  .candle-periods { width: 100%; justify-content: space-between; gap: 2px; }
+  .candle-periods button { flex: 1; padding: 7px 5px; min-height: 40px; }
+  .candle-readout dl { gap: 4px 16px; }
+  .candle-readout dl > div { flex-basis: calc(50% - 8px); }
 }
 .monitor-form {
   display: flex;

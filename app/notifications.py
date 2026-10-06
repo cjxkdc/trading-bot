@@ -70,8 +70,8 @@ class NotificationSettings:
     def validate(cfg):
         if set(cfg) != set(DEFAULTS) or type(cfg['enabled']) is not bool:
             raise ControlError('监控配置字段无效。')
-        if type(cfg['interval_seconds']) is not int or not 300 <= cfg['interval_seconds'] <= 3600:
-            raise ControlError('账户检查间隔应为 5–60 分钟。')
+        if type(cfg['interval_seconds']) is not int or not 60 <= cfg['interval_seconds'] <= 3600:
+            raise ControlError('账户检查间隔应为 1–60 分钟。')
         if cfg['channel'] not in {'none', *TRANSPORTS}:
             raise ControlError('通知渠道尚未注册。')
         if cfg['channel'] != 'none':

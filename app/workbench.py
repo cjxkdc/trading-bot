@@ -534,11 +534,31 @@ class PortalService:
                 except (ValueError, OSError):
                     pass
                 report['broker_id'] = self.broker_id
+                report['account_key'] = sha256(scope.encode()).hexdigest()
                 report['view_token'] = self._performance_token(scope,report.get('latest'))
                 return self._public(report)
             except ControlError as exc:
                 return dict(latest=None,curve=[],cycles=[],positions=[],cash_events=[],metrics={},
                             message=str(exc), broker_id=self.broker_id)
+
+    def performance_candles(self, interval='1h', limit=96, account_key=None):
+        from framework.account_candles import validate_period
+        try:
+            validate_period(interval, limit)
+        except ValueError:
+            raise PortalError('K 线周期或数量无效。') from None
+        with self.lock:
+            try:
+                scope = self.monitor.scope(self.broker_id)
+            except ControlError as exc:
+                return dict(bars=[], interval=interval, broker_id=self.broker_id, message=str(exc))
+            current_key = sha256(scope.encode()).hexdigest()
+            if account_key is not None and account_key != current_key:
+                raise PortalError('账户绑定已变化，请刷新账户表现。')
+            report = self.monitor.performance.candles(scope, interval, limit)
+            report.update(broker_id=self.broker_id, account_key=current_key,
+                          interval_seconds=self.monitor.settings.config['interval_seconds'])
+            return self._public(report)
 
     def performance_cash_event(self, value):
         with self.lock:

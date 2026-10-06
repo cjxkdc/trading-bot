@@ -190,6 +190,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     def performance():
         return service.performance()
 
+    @app.get('/api/performance/candles')
+    def performance_candles(interval: str = '1h', limit: int = 96, account_key: str | None = None):
+        return service.performance_candles(interval, limit, account_key)
+
     @app.post('/api/performance/cash-event')
     async def cash_event(request: Request):
         return service.performance_cash_event(await body(request))
