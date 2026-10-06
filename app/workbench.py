@@ -113,7 +113,7 @@ class PortalService:
         self.jobs.sort(key=lambda j: j.get('started_at', ''), reverse=True)
         self.automation = Automation(self.root, self.registry)
         self.monitor = Monitoring(self.root, self.registry)
-        self.strategy_instances = StrategyInstances(self.root, self.registry, lock=self.lock)
+        self.strategy_instances = StrategyInstances(self.root, self.registry, lock=self.lock, recover_pending=True)
         self.strategy_files = StrategyFiles(self.root, self.registry)
         self.scheduler_stop = threading.Event()
         self.scheduler_wake = threading.Event()
@@ -234,8 +234,10 @@ class PortalService:
             cycle = self.strategy_instances.pending_cycle(ident) if action in {'strategy-reconcile', 'strategy-resolve'} else None
             if action in {'strategy-reconcile', 'strategy-resolve'} and cycle is None:
                 raise PortalError('此实例没有未核对的账户批次。')
-            if action not in {'strategy-check', 'strategy-reconcile', 'strategy-resolve'}:
+            if action not in {'strategy-check', 'strategy-preview', 'strategy-reconcile', 'strategy-resolve'}:
                 raise PortalError('未知策略实例检查。')
+            if action == 'strategy-preview' and item['broker_id'] in self.strategy_instances.data['pending']:
+                raise PortalError('先核对未完成批次，再按已确认的持仓预览。')
             if action == 'strategy-resolve' and any(x['enabled'] for x in self.strategy_instances.data['instances'] if x['broker_id'] == item['broker_id']):
                 raise PortalError('先停止此账户的所有实例，再结束未提交余单。')
             return self._managed_job(action, ident=ident, cycle=cycle)
@@ -255,8 +257,12 @@ class PortalService:
             try:
                 if action == 'strategy-cycle':
                     result = self.strategy_instances.tick(worker, progress)
-                elif action == 'strategy-check':
+                elif action in {'strategy-check', 'strategy-preview'}:
                     item = deepcopy(self.strategy_instances.get(ident))
+                    if action == 'strategy-preview':
+                        item['_held_positions'] = deepcopy(self.strategy_instances.data['books'].get(
+                            item['broker_id'], {}).get('owners', {}).get(ident, {}))
+                        item['_selection_timeout_seconds'] = self.strategy_instances.data['limits']['selection_timeout_seconds']
                     result = worker(self.root, action, instance=item, progress=progress)
                     with self.lock:
                         self.strategy_instances.event(self.strategy_instances.get(ident), result['message'],
@@ -267,11 +273,20 @@ class PortalService:
                     with self.lock:
                         result = self.strategy_instances.finish_cycle(cycle, result)
             except Exception:
-                result = {'status': 'paused', 'message': '策略任务遇到异常，请先核对订单与归属。'}
+                read_only = action in {'strategy-check', 'strategy-preview'}
+                result = {'status': 'blocked' if read_only else 'paused', 'message':
+                    '本次只读检查未完成，请检查连接、数据和日志后重试。' if read_only else
+                    '策略任务遇到异常，请先核对订单与归属。'}
                 with self.lock:
-                    for record in self.strategy_instances.data['instances']:
-                        if record['enabled']:
-                            self.strategy_instances.pause_account(record['broker_id'], result['message'])
+                    if read_only:
+                        self.strategy_instances.event(self.strategy_instances.get(ident), result['message'], 'error')
+                        self.strategy_instances.persist()
+                    else:
+                        broker_id = cycle['broker_id'] if cycle else self.strategy_instances.active_broker_id
+                        affected = {broker_id} if broker_id else {record['broker_id'] for record in
+                            self.strategy_instances.data['instances'] if record['enabled']}
+                        for broker_id in affected:
+                            self.strategy_instances.pause_account(broker_id, result['message'])
             with self.lock:
                 safe = self._public(result)
                 job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())

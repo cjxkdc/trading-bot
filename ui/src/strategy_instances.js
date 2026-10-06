@@ -24,7 +24,14 @@ export function instancePayload(draft, fields = []) {
 
 export function instanceStatus(item) {
   const labels = { stopped: '已停止', checking: '检查中', running: '执行中', waiting: '按计划等待', paused: '需要处理' };
-  return { label: labels[item.status] || '状态待核对', tone: item.pending || item.status === 'paused' ? 'amber' : item.enabled ? 'blue' : 'muted' };
+  return { label: item.pending ? '待核对订单' : labels[item.status] || '状态待核对', tone: item.pending || item.status === 'paused' ? 'amber' : item.enabled ? 'blue' : 'muted' };
+}
+
+export function latestInstancePreview(jobs, item) {
+  const latest = jobs?.find(x => x.action === 'strategy-preview' && x.instance_id === item.id && x.finished_at);
+  const value = latest?.result;
+  return value?.status === 'complete' && value.instance_revision === item.revision &&
+    value.research_only === true && value.execution_ready === false ? value : null;
 }
 
 export function budgetSummary(items, brokerId) {

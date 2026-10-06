@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { api, downloadCode } from '../api';
 import { scheduleSummary } from '../automation';
-import { budgetSummary, instanceDraft, instancePayload, instanceStatus, runnableBroker } from '../strategy_instances';
+import { budgetSummary, instanceDraft, instancePayload, instanceStatus, runnableBroker, latestInstancePreview } from '../strategy_instances';
+import '../strategy_runs.css';
 import { ModuleFields } from './ModuleFields';
 import { StrategyReadme } from './StrategyReadme';
 
@@ -45,11 +46,16 @@ function InstanceDetails({ state, item, busy, act }) {
   const [logs, setLogs] = useState(null), [exporting, setExporting] = useState(false);
   const [range, setRange] = useState({ start: state.backtest_config?.start || '2020-01-01', end: state.backtest_config?.end || '2025-12-31', slippage_bps: state.backtest_config?.slippage_bps ?? 10 });
   const strategy = state.strategies.find(x => x.type === item.strategy.type);
+  const preview = latestInstancePreview(state.jobs, item);
   async function exportCode(event) {
     event.preventDefault();
     await act(async () => { const result = await api(`strategy-instances/${item.id}/export`, range); await downloadCode(result.id); return result; });
   }
   return <div className="instance-details"><div className="instance-facts"><div><span>最近启动</span><strong>{time(item.started_at)}</strong></div><div><span>最近停止</span><strong>{time(item.stopped_at)}</strong></div><div><span>最近执行</span><strong>{time(item.last_run?.at)}</strong></div></div>
+    {state.active?.action === 'strategy-preview' && state.active.instance_id === item.id && <p className="small muted" role="status">正在用已有数据预览选股…</p>}
+    {preview && <section className="selection-preview"><div className="card-heading"><h3>最近一次选股预览</h3><span className="tag muted">研究预览</span></div><p className="small muted">数据截至 {preview.data_as_of || '—'} · {preview.candidate_count} 个候选 · 预览于 {time(preview.created_at)}</p>
+      {preview.targets.length ? <div className="table-wrap"><table><thead><tr><th>股票</th><th>得分</th><th>策略内比例</th><th>账户目标比例</th></tr></thead><tbody>{preview.targets.map(x => <tr key={x.ticker}><td>{x.ticker}</td><td>{Number(x.score).toFixed(3)}</td><td>{percent(x.weight)}</td><td>{percent(x.account_weight)}</td></tr>)}</tbody></table></div> : <p className="small muted">当前数据下没有选中股票。</p>}
+      <p className="small muted">本实例目标股票仓位 {percent(preview.account_target_gross)}。只计算选股和比例，未读取券商报价；整股数量与订单在运行时重新计算。</p></section>}
     <details className="details"><summary>参数与策略说明</summary><pre className="instance-json">{JSON.stringify(item.strategy, null, 2)}</pre><StrategyReadme content={strategy?.readme?.content} filename={strategy?.readme?.path} issue={strategy?.readme_issue}/></details>
     <details className="details"><summary>持仓归属 · {item.positions.length} 只</summary>{item.positions.length ? <div className="table-wrap"><table><thead><tr><th>股票</th><th>内部归属股数</th></tr></thead><tbody>{item.positions.map(x => <tr key={x.ticker}><td>{x.ticker}</td><td>{x.quantity}</td></tr>)}</tbody></table></div> : <p className="small muted">尚无已确认的实例持仓。</p>}<p className="small muted">同一股票可属于多份实例；券商展示合并持仓，内部归属在确认成交后更新。</p></details>
     <details className="details"><summary>运行日志</summary>{item.events.map((event, i) => <div className="log-line" key={i}><time>{time(event.at)}</time><span>{event.message}</span></div>)}<button className="button" disabled={busy} onClick={() => act(async () => { const result = await api(`strategy-instances/${item.id}/logs`); setLogs(result.items); return null; })}>读取执行记录</button>{logs?.map(log => <details className="details" key={log.cycle_id}><summary>{time(log.created_at)} · {log.message}</summary><pre className="instance-json">{JSON.stringify(log, null, 2)}</pre></details>)}</details>
@@ -72,12 +78,17 @@ export function StrategyRuns({ state, busy, pending, act }) {
     {manager.corrupt && <div className="alert error">运行状态无法核对，实例已停用；原文件保留供检查。</div>}
     {editing && <InstanceForm key={editing.id || 'new'} state={state} item={editing.id ? editing : null} busy={busy} act={act} close={() => setEditing(null)}/>}
     {!items.length && !editing && <section className="card instance-empty"><h2>创建第一份策略实例</h2><p>选一套策略，设置账户资金比例与调仓计划，后台会按计划运行。</p><p className="small muted">可以用同一策略创建不同参数的实例；共用账户时先合并目标，再提交一批净订单。</p></section>}
+    <div className="instance-accounts">{manager.accounts?.map(account => <section className="card account-budget" key={account.broker_id}><div className="card-heading"><h3>{state.brokers.find(x => x.id === account.broker_id)?.name || account.broker_id}</h3>{account.pending && <span className="tag amber">有待核对批次</span>}</div>
+      <div className="budget-facts"><div><span>已预留资金比例</span><strong>{percent(account.reserved_budget)}</strong></div><div><span>可分配比例</span><strong>{percent(account.available_budget)}</strong></div></div>
+      <div className="budget-meter" role="progressbar" aria-label="已预留账户资金" aria-valuenow={Number(account.reserved_budget) * 100} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${Math.min(100, Number(account.reserved_budget) * 100)}%` }}/></div>
+      <p className="small muted">{account.running_count} 份运行 · {account.stopped_holding_count} 份停止并保留持仓。无持仓的停止实例不预留资金。</p></section>)}</div>
     <div className="instance-list">{items.map(item => { const view = instanceStatus(item); return <article className="card instance-card" key={item.id}>
       <div className="card-heading"><div><h2>{item.name}</h2><p>{state.strategies.find(s => s.type === item.strategy.type)?.name || item.strategy.type} · {state.brokers.find(b => b.id === item.broker_id)?.name || item.broker_id} · {state.sources.find(s => s.id === item.source_id)?.name || item.source_id}</p></div><span className={'tag ' + view.tone}>{view.label}</span></div>
       <div className="instance-facts"><div><span>资金比例</span><strong>{percent(item.budget)}</strong></div><div><span>运行计划</span><strong>{scheduleSummary(item.schedule)}</strong></div><div><span>下次执行 · 本地时间</span><strong>{time(item.next_run)}</strong></div></div>
       <p className={'small ' + (item.status === 'paused' ? 'inline-warning' : 'muted')} role="status">{item.message}</p>
       <div className="button-row instance-buttons">{item.enabled ? <button className="button" disabled={pending} onClick={() => act(() => api(`strategy-instances/${item.id}/stop`, {}))}>停止</button> : <button className="button primary" disabled={busy || item.pending || manager.corrupt} onClick={() => setConfirm({ item, action: 'start' })}>启动</button>}
         <button className="button" disabled={busy || item.pending} onClick={() => setConfirm({ item, action: 'once' })}>执行一轮</button>
+        <button className="button" disabled={busy || item.pending || manager.corrupt} title={item.pending ? '先核对未完成批次' : '使用已有数据，休市时也可预览'} onClick={() => { setExpanded(item.id); act(() => api(`strategy-instances/${item.id}/preview`, {})); }}>预览选股</button>
         <button className="button" disabled={busy} onClick={() => act(() => api(`strategy-instances/${item.id}/check`, {}))}>检查连接</button>
         {item.pending && <button className="button" disabled={busy} onClick={() => act(() => api(`strategy-instances/${item.id}/reconcile`, {}))}>核对订单与归属</button>}
         {item.pending && !item.enabled && <button className="button" disabled={busy} onClick={() => setConfirm({ item, action: 'resolve' })}>结束未提交余单</button>}

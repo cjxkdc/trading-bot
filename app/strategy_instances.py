@@ -27,6 +27,11 @@ def identity(item):
     return {k: item[k] for k in ('id', 'strategy', 'budget', 'schedule', 'broker_id', 'source_id', 'generation')}
 
 
+def preview_revision(root, item, positions, *, code=None):
+    return digest(dict(instance=identity(item), positions=positions,
+                       code=code_revision(Path(root)) if code is None else code))
+
+
 def managed_guard(root, cycle, *, clock=utcnow):
     """Every new net order requires unchanged instances and an unrevoked window."""
     from app.module_registry import ModuleRegistry
@@ -62,7 +67,7 @@ def instance_binding(registry, item):
 
 def require_unmanaged(root, registry, broker_id):
     """Keep legacy/manual submissions out of an instance-owned account ledger."""
-    manager = StrategyInstances(root, registry)
+    manager = StrategyInstances(root, registry, recover_pending=False)
     if manager.corrupt:
         raise ControlError('策略持仓归属状态无法核对，请先检查策略运行记录。')
     if manager.owns_account(broker_id):
@@ -75,7 +80,7 @@ def require_unmanaged(root, registry, broker_id):
 
 
 class StrategyInstances:
-    def __init__(self, root, registry, *, clock=utcnow, lock=None):
+    def __init__(self, root, registry, *, clock=utcnow, lock=None, recover_pending=False):
         self.root, self.registry, self.clock = Path(root).resolve(), registry, clock
         self.lock = lock or threading.RLock()
         self.folder = self.root / 'runs/strategy_manager'
@@ -83,6 +88,7 @@ class StrategyInstances:
         self.data = dict(schema=1, instances=[], books={}, pending={}, calendar={},
                          limits={'selection_timeout_seconds': 60, 'log_retention_runs': 100})
         self.corrupt = False
+        self.active_broker_id = None
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text(encoding='utf-8'))
@@ -100,12 +106,13 @@ class StrategyInstances:
                         raise ValueError()
                 self.data.update(raw)
                 # A restarted account batch is never silently replayed.
-                for broker_id in self.data['pending']:
+                for broker_id in self.data['pending'] if recover_pending else ():
                     for item in self.data['instances']:
                         if item['broker_id'] == broker_id:
-                            item.update(enabled=False, status='paused', next_run=None,
+                            item.update(enabled=False, status='paused', next_run=None, next_check=None,
+                                        generation=uuid4().hex, force_run=False, one_shot=False,
                                         message='上次账户批次被中断；请先核对订单与持仓归属。')
-                if self.data['pending']:
+                if recover_pending and self.data['pending']:
                     self.persist()  # Revoke any old batch guard on disk as well.
             except Exception:
                 self.corrupt = True
@@ -127,6 +134,16 @@ class StrategyInstances:
         book = self.data['books'].get(broker_id, {}).get('owners', {})
         return any(item['broker_id'] == broker_id and (item['enabled'] or book.get(item['id']))
                    for item in self.data['instances']) or broker_id in self.data['pending']
+
+    def reserved_budget(self, broker_id, *, exclude=None):
+        book = self.data['books'].get(broker_id, {}).get('owners', {})
+        return sum((amount(x['budget']) for x in self.data['instances']
+                    if x['broker_id'] == broker_id and x['id'] != exclude
+                    and (x['enabled'] or book.get(x['id']))), amount(0))
+
+    def require_budget(self, broker_id, ident, budget):
+        if self.reserved_budget(broker_id, exclude=ident) + amount(budget) > 1:
+            raise ControlError('运行及保留持仓的实例资金比例合计超过 100%，请调整分配。')
 
     def validate(self, value, ident=None):
         allowed = {'name', 'strategy', 'broker_id', 'source_id', 'budget', 'schedule'}
@@ -176,6 +193,8 @@ class StrategyInstances:
         if positions and (value.get('broker_id') != item['broker_id']):
             raise ControlError('实例仍有持仓，无法转移到另一个账户。')
         clean = self.validate(value, ident)
+        if positions:
+            self.require_budget(clean['broker_id'], ident, clean['budget'])
         item.update(clean, generation=uuid4().hex, initialized=False, last_period=None,
                     next_run=None, next_check=None, binding=None, message='设置已保存，重新启动后检查。')
         self.persist()
@@ -188,12 +207,7 @@ class StrategyInstances:
             raise ControlError('此实例已开启。')
         if item['broker_id'] in self.data['pending']:
             raise ControlError('此账户仍有未核对批次，请先核对订单与归属。')
-        book = self.data['books'].get(item['broker_id'], {}).get('owners', {})
-        reserved = sum((amount(x['budget']) for x in self.data['instances']
-                        if x['broker_id'] == item['broker_id'] and x['id'] != ident
-                        and (x['enabled'] or book.get(x['id']))), amount(0))
-        if reserved + amount(item['budget']) > 1:
-            raise ControlError('运行及保留持仓的实例资金比例合计超过 100%，请调整分配。')
+        self.require_budget(item['broker_id'], ident, item['budget'])
         item.update(enabled=True, status='checking', started_at=self.clock().isoformat(), stopped_at=None,
                     generation=uuid4().hex, next_check=None, next_run=None, check_pending=True,
                     initial_window=None, force_run=False, one_shot=False,
@@ -261,6 +275,7 @@ class StrategyInstances:
 
     def public(self):
         items = []
+        code = code_revision(self.root) if self.data['instances'] else None
         for record in self.data['instances']:
             value = {k: record.get(k) for k in ('id', 'name', 'strategy', 'budget', 'broker_id', 'source_id',
                 'schedule', 'enabled', 'status', 'message', 'started_at', 'stopped_at', 'next_run', 'last_run')}
@@ -268,9 +283,21 @@ class StrategyInstances:
             value['positions'] = [{'ticker': s, 'quantity': q} for s, q in
                 self.data['books'].get(record['broker_id'], {}).get('owners', {}).get(record['id'], {}).items()]
             value['pending'] = record['broker_id'] in self.data['pending']
+            positions = self.data['books'].get(record['broker_id'], {}).get('owners', {}).get(record['id'], {})
+            value['revision'] = preview_revision(self.root, record, positions, code=code)
             items.append(value)
+        accounts = []
+        for broker_id in sorted({x['broker_id'] for x in items}):
+            group = [x for x in items if x['broker_id'] == broker_id]
+            reserved = self.reserved_budget(broker_id)
+            accounts.append(dict(broker_id=broker_id, reserved_budget=str(reserved),
+                available_budget=str(max(amount(0), 1 - reserved)), instance_count=len(group),
+                running_count=sum(x['enabled'] for x in group),
+                stopped_holding_count=sum(not x['enabled'] and bool(x['positions']) for x in group),
+                pending=broker_id in self.data['pending']))
         return dict(instances=items, limits=self.data['limits'], corrupt=self.corrupt,
                     running_count=sum(x['enabled'] for x in items), max_instances=MAX_INSTANCES,
+                    accounts=accounts,
                     unmanaged={b: book.get('unmanaged', {}) for b, book in self.data['books'].items()})
 
     def tick(self, worker, progress=lambda message: None):
@@ -287,6 +314,7 @@ class StrategyInstances:
             return self._tick(unlocked_worker, progress)
 
     def _tick(self, worker, progress):
+        self.active_broker_id = None
         now = self.clock()
         enabled = [x for x in self.data['instances'] if x['enabled']]
         for item in enabled:
@@ -299,7 +327,11 @@ class StrategyInstances:
                 return {'status': 'paused', 'message': '策略配置变化，已暂停相关账户。'}
         if not enabled:
             return {'status': 'complete', 'message': '没有开启的策略实例。'}
-        broker_id = next(x['broker_id'] for x in enabled if not x.get('next_check') or now >= datetime.fromisoformat(x['next_check']))
+        ready = [x for x in enabled if not x.get('next_check') or now >= datetime.fromisoformat(x['next_check'])]
+        if not ready:
+            return {'status': 'complete', 'message': '等待下一次策略检查。'}
+        broker_id = ready[0]['broker_id']
+        self.active_broker_id = broker_id
         group = [x for x in enabled if x['broker_id'] == broker_id]
         calendar = self.data['calendar'].get(broker_id)
         if not calendar or calendar['day'] != str(now.astimezone(NY).date()):
@@ -312,6 +344,7 @@ class StrategyInstances:
         from datetime import date
         sessions = tuple(date.fromisoformat(day) for day in calendar['sessions'])
         due, starts, ends = [], [], []
+        shared_prepared = {}
         for item in group:
             if not item['enabled']:
                 continue
@@ -339,10 +372,17 @@ class StrategyInstances:
             now = self.clock()
             local = now.astimezone(NY)
             prepared = item.get('prepared')
+            configured = self.registry.configuration(broker_id)
+            configured['strategy'] = deepcopy(item['strategy'])
+            data_key = (item['source_id'], self.registry.data_requirements(configured).fingerprint)
+            if prepared and prepared.get('day') == str(local.date()):
+                shared_prepared[data_key] = prepared
             if local.date() in sessions and local.strftime('%H:%M') >= item['schedule']['prepare_time'] and (
                     not prepared or prepared.get('day') != str(local.date())):
                 progress('提前更新 ' + item['name'] + ' 的策略数据…')
-                refreshed = worker(self.root, 'strategy-refresh', instance=deepcopy(item), progress=progress)
+                reusable = shared_prepared.get(data_key)
+                refreshed = {'status': 'complete', 'snapshot_path': reusable['path']} if reusable else \
+                    worker(self.root, 'strategy-refresh', instance=deepcopy(item), progress=progress)
                 if not item['enabled']:
                     continue
                 if refreshed.get('status') != 'complete':
@@ -350,7 +390,8 @@ class StrategyInstances:
                     self.event(item, item['message'], 'error')
                     continue
                 item['prepared'] = {'day': str(local.date()), 'path': refreshed['snapshot_path']}
-                self.event(item, '今日策略数据已更新。')
+                shared_prepared[data_key] = item['prepared']
+                self.event(item, '已复用本轮相同需求的数据。' if reusable else '今日策略数据已更新。')
             if not item['enabled']:
                 continue
             now = self.clock()

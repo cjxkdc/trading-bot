@@ -158,10 +158,11 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
             if value != {'confirmation': ident}:
                 raise PortalError('请确认结束未提交余单；已成交持仓会保留。')
             return service.strategy_instance_job(ident, 'strategy-resolve')
-        if action in {'check', 'reconcile'}:
+        if action in {'check', 'preview', 'reconcile'}:
             if value:
                 raise PortalError('检查不接受订单参数。')
-            return service.strategy_instance_job(ident, 'strategy-check' if action == 'check' else 'strategy-reconcile')
+            return service.strategy_instance_job(ident, {'check':'strategy-check', 'preview':'strategy-preview',
+                                                        'reconcile':'strategy-reconcile'}[action])
         return await run_in_threadpool(service.strategy_instance_action, action, value, ident)
 
     @app.post('/api/strategy-plugins/upload')

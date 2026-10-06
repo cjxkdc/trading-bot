@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from app.automation import save
 from app.control_contracts import ControlError
 from app.module_registry import ModuleRegistry
-from app.strategy_instances import StrategyInstances, managed_guard
+from app.strategy_instances import StrategyInstances, managed_guard, require_unmanaged
 from app.strategy_worker import ManagedRunner, SCHEMA, selection, run_cycle
 from app.control_contracts import SnapshotInput
 from framework.contracts import OrderState
@@ -237,6 +237,172 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaises(ControlError):
             self.manager.start(second['id'])
 
+    def test_reading_pending_state_and_legacy_guard_do_not_revoke_live_batch(self):
+        item = self.create(); self.manager.start(item['id'])
+        path = self.root / 'runs/strategy_manager/cycles/cycle-live.json'
+        save(path, {'execution_attempted': True})
+        self.manager.data['pending'][self.broker] = str(path); self.manager.persist()
+        before = self.manager.path.read_bytes()
+        reader = StrategyInstances(self.root, self.registry)
+        self.assertTrue(reader.get(item['id'])['enabled'])
+        with self.assertRaises(ControlError):
+            require_unmanaged(self.root, self.registry, self.broker)
+        self.assertEqual(self.manager.path.read_bytes(), before)
+
+    def test_stopped_owner_cannot_increase_reserved_budget_past_account_limit(self):
+        first, second = self.create(budget='.5'), self.create('Second', '.4')
+        self.manager.data['books'][self.broker] = {'owners': {first['id']: {'XYZ': '5'}}}
+        self.manager.start(second['id'])
+        value = {k: deepcopy(first[k]) for k in ('name','strategy','broker_id','source_id','budget','schedule')}
+        value['budget'] = '.7'
+        before = self.manager.path.read_bytes()
+        with self.assertRaisesRegex(ControlError, '100%'):
+            self.manager.update(first['id'], value)
+        self.assertEqual(first['budget'], '0.5')
+        self.assertEqual(self.manager.path.read_bytes(), before)
+
+    def test_read_only_check_failure_does_not_stop_other_instances(self):
+        first, second = self.create(), self.create('Second')
+        self.manager.start(first['id']); self.manager.start(second['id'])
+        def worker(*args, **kwargs): raise RuntimeError('Fixture read-only failure')
+        service = PortalService(self.root, worker=worker)
+        with service.lock:
+            service.strategy_instance_job(first['id'], 'strategy-check')
+        service.thread.join(5)
+        self.assertFalse(service.thread.is_alive())
+        self.assertTrue(service.strategy_instances.get(first['id'])['enabled'])
+        self.assertTrue(service.strategy_instances.get(second['id'])['enabled'])
+        self.assertEqual(service.jobs[0]['status'], 'blocked')
+
+    def test_account_overview_counts_running_and_stopped_ownership_but_not_empty_drafts(self):
+        held, running, draft = self.create(budget='.3'), self.create('Running', '.4'), self.create('Draft', '.8')
+        self.manager.data['books'][self.broker] = {'owners': {held['id']: {'AAA':'6'}}}
+        self.manager.start(running['id'])
+        account = self.manager.public()['accounts'][0]
+        self.assertEqual(D(account['reserved_budget']), D('.7'))
+        self.assertEqual(D(account['available_budget']), D('.3'))
+        self.assertEqual(account['running_count'], 1)
+        self.assertEqual(account['stopped_holding_count'], 1)
+        self.assertEqual(account['instance_count'], 3)
+
+    def test_preview_revision_changes_when_confirmed_holdings_or_code_change(self):
+        item = self.create()
+        before = self.manager.public()['instances'][0]['revision']
+        self.manager.data['books'][self.broker] = {'owners': {item['id']: {'AAA':'6'}}}
+        held = self.manager.public()['instances'][0]['revision']
+        self.assertNotEqual(before, held)
+        (self.root/'strategies/equal_weight.py').write_text('# fixture changed')
+        self.assertNotEqual(held, self.manager.public()['instances'][0]['revision'])
+
+    def test_equal_data_requirements_share_one_refresh_but_different_requirements_do_not(self):
+        first, second = self.create(), self.create('Second')
+        self.manager.start(first['id']); self.manager.start(second['id'])
+        calls = []
+        def worker(root, action, **kwargs):
+            calls.append(action); return self.fake_worker(root, action, **kwargs)
+        self.manager.tick(worker)
+        self.assertEqual(calls.count('strategy-refresh'), 1)
+        self.assertEqual(first['prepared'], second['prepared'])
+        self.assertEqual(calls.count('strategy-cycle'), 1)
+        self.manager.stop(first['id']); self.manager.stop(second['id'])
+        first.pop('prepared'); second.pop('prepared')
+        second['strategy']['lookback'] = second['strategy'].get('lookback', 252) + 1
+        self.manager.start(first['id']); self.manager.start(second['id'])
+        calls.clear(); self.manager.tick(worker)
+        self.assertEqual(calls.count('strategy-refresh'), 2)
+
+    def test_execution_exception_pauses_only_the_active_account(self):
+        first, second = self.create(), self.create('Other account')
+        second['broker_id'] = next(x['id'] for x in self.registry.descriptors('broker')
+            if x['enabled'] and x['mode'] == 'broker_paper' and x['id'] != self.broker)
+        self.manager.start(first['id']); self.manager.start(second['id'])
+        def worker(*args, **kwargs): raise RuntimeError('Fixture account failure')
+        service = PortalService(self.root, worker=worker)
+        with service.lock: service._managed_job('strategy-cycle')
+        service.thread.join(5)
+        self.assertFalse(service.thread.is_alive())
+        self.assertFalse(service.strategy_instances.get(first['id'])['enabled'])
+        self.assertTrue(service.strategy_instances.get(second['id'])['enabled'])
+
+    def preview_fixture(self):
+        item = self.create()
+        item['strategy'] = {'type':'equal_weight', 'count':1, 'weight':.18}
+        self.manager.persist()
+        stock = StockSnapshot('fixture:AAA', 'AAA', date(2026,10,2), date(2026,10,2), 'Tech', 1,
+                              (10.,)*253, (1e8,)*20)
+        class Source:
+            directory = self.root/'runs/data/preview'
+            def validate_request(self): pass
+            def load(self, raw): return SnapshotInput('fixture-input', True, raw, (stock,), {}, {})
+            def collect(self, *a, **k): raise AssertionError('Preview must not download')
+            def inspect(self, *a, **k): raise AssertionError('Preview must not inspect live permissions')
+            def paper_signal(self, *a, **k): raise AssertionError('Preview must not prepare trading data')
+        source = Source()
+        save(source.directory/'snapshot.json', {'fixture':True})
+        save(source.directory/'latest.json', {'path':str(source.directory/'snapshot.json')})
+        packet = dict(deepcopy(item), _held_positions={}, _selection_timeout_seconds=10)
+        return item, source, packet
+
+    def test_cached_preview_runs_isolated_selection_off_hours_without_broker_or_state_changes(self):
+        from app.strategy_preview import preview
+        item, source, packet = self.preview_fixture()
+        before = self.manager.path.read_bytes()
+        calls = []
+        def control(kind, *args, **kwargs):
+            calls.append(kind); self.assertEqual(kind, 'data'); return source
+        with patch('app.strategy_preview.ModuleRegistry', return_value=self.registry), \
+             patch.object(self.registry, 'control', side_effect=control):
+            result = preview(self.root, packet, lambda message: None,
+                             clock=datetime(2026,10,10,13,40,tzinfo=timezone.utc))
+        self.assertEqual(set(calls), {'data'})
+        self.assertTrue(result['research_only']); self.assertFalse(result['execution_ready'])
+        self.assertEqual(result['targets'][0]['ticker'], 'AAA')
+        self.assertEqual(D(str(result['targets'][0]['account_weight'])), D('.09'))
+        self.assertEqual(result['instance_revision'], self.manager.public()['instances'][0]['revision'])
+        self.assertEqual(self.manager.path.read_bytes(), before)
+        self.assertFalse(item['enabled'])
+
+    def test_cached_preview_missing_data_or_escaped_pointer_blocks_without_download(self):
+        from app.strategy_preview import preview
+        item, source, packet = self.preview_fixture()
+        with patch('app.strategy_preview.ModuleRegistry', return_value=self.registry), \
+             patch.object(self.registry, 'control', return_value=source):
+            (source.directory/'latest.json').unlink()
+            with self.assertRaisesRegex(ControlError, '尚无匹配的数据'):
+                preview(self.root, packet, lambda message: None, clock=self.clock)
+            other = self.root/'runs/data/other/snapshot.json'; save(other, {})
+            save(source.directory/'latest.json', {'path':str(other)})
+            with self.assertRaisesRegex(ControlError, '不属于当前策略'):
+                preview(self.root, packet, lambda message: None, clock=self.clock)
+
+    def test_preview_http_requires_owner_and_accepts_no_order_parameters(self):
+        item = self.create()
+        service = PortalService(self.root, worker=lambda *a, **k: {'status':'blocked','message':'No fixture data'})
+        client = TestClient(create_app(self.root, service=service), base_url='http://127.0.0.1:8765')
+        endpoint = f'/api/strategy-instances/{item["id"]}/preview'
+        self.assertEqual(client.post(endpoint, json={}).status_code, 403)
+        client.headers['X-Portal-Token'] = client.get('/api/session').json()['token']
+        self.assertEqual(client.post(endpoint, json={'orders':[]}).status_code, 409)
+        self.assertEqual(client.post(endpoint, json={}).status_code, 200)
+        service.thread.join(5)
+        self.assertEqual(service.jobs[0]['action'], 'strategy-preview')
+        self.assertFalse(service.strategy_instances.get(item['id'])['enabled'])
+        service.strategy_instances.data['pending'][self.broker] = 'fixture'
+        self.assertEqual(client.post(endpoint, json={}).status_code, 409)
+        client.close()
+
+    def test_read_only_preview_failure_does_not_pause_running_instances(self):
+        item = self.create(); self.manager.start(item['id'])
+        from app.strategy_worker import dispatch
+        with patch('app.strategy_preview.preview', side_effect=RuntimeError('Fixture preview error')):
+            result = dispatch(self.root, 'strategy-preview', instance=item)
+        self.assertEqual(result['status'], 'blocked')
+        service = PortalService(self.root, worker=lambda *a, **k: result)
+        with service.lock: service.strategy_instance_job(item['id'], 'strategy-preview')
+        service.thread.join(5)
+        self.assertTrue(service.strategy_instances.get(item['id'])['enabled'])
+        self.assertEqual(service.jobs[0]['status'], 'blocked')
+
     def test_shared_account_runs_one_batch_and_restart_does_not_repeat_period(self):
         first, second = self.create(), self.create('Second')
         self.manager.start(first['id']); self.manager.start(second['id'])
@@ -270,7 +436,7 @@ class ProjectTests(unittest.TestCase):
         path = self.root / 'runs/strategy_manager/cycles/cycle-interrupted.json'
         save(path, {'execution_attempted': True})
         self.manager.data['pending'][self.broker] = str(path); self.manager.persist()
-        restored = StrategyInstances(self.root, self.registry)
+        restored = StrategyInstances(self.root, self.registry, recover_pending=True)
         self.assertFalse(restored.get(item['id'])['enabled'])
         self.assertEqual(restored.get(item['id'])['status'], 'paused')
         self.assertEqual(restored.pending_cycle(item['id']), {'execution_attempted': True})

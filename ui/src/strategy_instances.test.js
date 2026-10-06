@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { instanceDraft, instancePayload, instanceStatus, budgetSummary } from './strategy_instances.js';
+import { instanceDraft, instancePayload, instanceStatus, budgetSummary, latestInstancePreview } from './strategy_instances.js';
 
 test('instance capital percentages convert once and reject invalid budgets', () => {
   const draft = { budget: '50', strategy: { type: 'custom', symbols: '["AAA"]' }, schedule: {} };
@@ -16,7 +16,27 @@ test('stopped ownership still reserves capital; empty stopped templates do not',
 });
 test('pending orders stay visibly unresolved even after a strategy is stopped', () => {
   assert.equal(instanceStatus({ status: 'stopped', pending: true }).tone, 'amber');
+  assert.equal(instanceStatus({ status: 'stopped', pending: true }).label, '待核对订单');
   assert.equal(instanceStatus({ status: 'waiting', enabled: true }).label, '按计划等待');
+});
+
+test('selection previews require this instance and the current configuration revision', () => {
+  const item = { id: 'current', revision: 'new' };
+  const result = { status: 'complete', instance_revision: 'new', research_only: true, execution_ready: false };
+  const job = { action: 'strategy-preview', instance_id: 'current', finished_at: 'now', result };
+  assert.equal(latestInstancePreview([job], item), result);
+  assert.equal(latestInstancePreview([{ ...job, instance_id: 'other' }], item), null);
+  assert.equal(latestInstancePreview([job], { ...item, revision: 'changed' }), null);
+  assert.equal(latestInstancePreview([{ ...job, finished_at: null }], item), null);
+});
+
+test('a failed latest preview and execution results cannot appear as a valid preview', () => {
+  const item = { id: 'current', revision: 'new' };
+  const result = { status: 'complete', instance_revision: 'new', research_only: true, execution_ready: false };
+  const job = { action: 'strategy-preview', instance_id: 'current', finished_at: 'now', result };
+  assert.equal(latestInstancePreview([{ ...job, result: { status: 'blocked' } }, job], item), null);
+  assert.equal(latestInstancePreview([{ ...job, result: { ...result, execution_ready: true } }], item), null);
+  assert.equal(latestInstancePreview([{ ...job, action: 'strategy-cycle' }], item), null);
 });
 test('a draft chooses registered modules without assuming a vendor', () => {
   const state = { strategy_name: 'Custom', strategy: { type: 'custom' }, broker: { id: 'local', mode: 'paper' },

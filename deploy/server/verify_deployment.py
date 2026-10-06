@@ -41,9 +41,10 @@ def unit_state():
     return dict(line.split('=', 1) for line in value.stdout.splitlines() if '=' in line and line.split('=', 1)[0] in selected)
 
 
-def process_state(root, main_pid):
+def process_state(root, main_pid, *, proc=None):
+    proc = Path('/proc') if proc is None else Path(proc)
     rows = {}
-    for directory in Path('/proc').iterdir():
+    for directory in proc.iterdir():
         if not directory.name.isdigit():
             continue
         try:
@@ -62,16 +63,36 @@ def process_state(root, main_pid):
         descendants.update(found)
     workers = []
     for pid, (_, argv) in rows.items():
-        if b'app.portal_worker' not in argv:
+        if not {b'app.portal_worker', b'app.strategy_worker', b'app.strategy_select'}.intersection(argv):
             continue
         try:
-            matches_project = (Path('/proc') / str(pid) / 'cwd').resolve() == root
+            matches_project = (proc / str(pid) / 'cwd').resolve() == root
         except OSError:
             matches_project = False
         if matches_project or pid in descendants:
             workers.append(pid)
     return {'controller_present': main_pid in rows and main_pid > 0,
             'child_process_count': max(0, len(descendants) - 1), 'active_operation_process_count': len(workers)}
+
+
+def strategy_manager_state(root):
+    """Inspect counts without recovery constructors or private instance details."""
+    path = root / 'runs/strategy_manager/state.json'
+    if not path.exists():
+        return dict(state_present=False, corrupt=False, instance_count=0, running_count=0, pending_account_count=0)
+    try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError()
+        value = json.loads(path.read_text(encoding='utf-8'))
+        items, pending = value['instances'], value['pending']
+        if value.get('schema') != 1 or not isinstance(items, list) or not isinstance(pending, dict):
+            raise ValueError()
+        if any(type(item['enabled']) is not bool for item in items):
+            raise ValueError()
+        return dict(state_present=True, corrupt=False, instance_count=len(items),
+                    running_count=sum(item['enabled'] for item in items), pending_account_count=len(pending))
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(state_present=True, corrupt=True)
 
 
 def health(port, host):
@@ -157,6 +178,7 @@ def verify(root, *, baseline=None, capture=False, port=5329, host=None):
         result['automation'] = {'state_present': True, 'enabled': automation.get('enabled') is True, 'status': automation.get('status')}
     else:
         result['automation'] = {'state_present': False, 'enabled': False, 'status': 'default_off'}
+    result['strategy_manager'] = strategy_manager_state(root)
     jobs = root / 'runs/portal/jobs'
     unfinished = 0
     for path in jobs.glob('*.json'):

@@ -341,6 +341,9 @@ def dispatch(root, action, *, instance=None, cycle_path=None, progress=lambda me
     try:
         if action == 'strategy-check':
             return check(root, instance, progress)
+        if action == 'strategy-preview':
+            from app.strategy_preview import preview
+            return preview(root, instance, progress)
         if action == 'strategy-refresh':
             return refresh(root, instance, progress)
         if action == 'strategy-cycle':
@@ -351,8 +354,10 @@ def dispatch(root, action, *, instance=None, cycle_path=None, progress=lambda me
             return reconcile(root, cycle_path, progress, close=True)
         raise ControlError('未知策略运行操作。')
     except ControlError as exc:
-        return {'status': 'paused', 'message': str(exc)}
+        return {'status': 'blocked' if action in {'strategy-check', 'strategy-preview'} else 'paused', 'message': str(exc)}
     except Exception:
+        if action in {'strategy-check', 'strategy-preview'}:
+            return {'status': 'blocked', 'message': '本次检查未完成，请检查连接、数据和日志后重试。'}
         return {'status': 'paused', 'message': '策略账户批次未完成，请检查运行记录并核对订单与持仓归属。'}
 
 
