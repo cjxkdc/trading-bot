@@ -29,7 +29,7 @@ export function PortalAccess({ children }) {
   }
   if (access && (!access.enabled || access.authenticated)) return children(access, logout);
   return <div className="login-screen"><section className="card login-card">
-    <p className="eyebrow">TRADING BOT · SERVER</p><h1>服务器工作台</h1>
+    <h1>服务器工作台</h1>
     <p className="subtitle">登录后查看服务器上的 bot，管理账户连接与运行状态。</p>
     {error && <div className="alert error" role="alert">{error}</div>}
     {!access ? <button className="button" onClick={check}>重新连接</button> : <form onSubmit={submit}>
