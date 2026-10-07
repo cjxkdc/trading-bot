@@ -178,7 +178,9 @@ class BrokerObservationTests(unittest.TestCase):
         def session():yield sdk,object(),profile,None
         connector=NS(mode='broker_paper',environment='SIMULATE',_session=session)
         funds=[dict(currency='USD',total_assets=1000,us_cash=900,usd_net_cash_power=400,market_val=100)]
-        positions=[dict(code='US.AAPL',currency='USD',position_side='LONG',qty=1,market_val=100,cost_price_valid=True,cost_price=90,pl_val=10)]
+        positions=[dict(code='US.AAPL',currency='USD',position_side='LONG',qty=1,market_val=100,
+            stock_name='Apple',nominal_price=100,cost_price_valid=True,cost_price=90,pl_val=10,
+            pl_val_valid=True,pl_ratio_valid=True,pl_ratio=11.11,unrealized_pl=999)]
         def call(client,method,**kwargs):
             self.assertEqual(kwargs['trd_env'],'SIMULATE');self.assertEqual(kwargs['acc_id'],2)
             return funds if method=='accinfo_query' else positions
@@ -187,6 +189,17 @@ class BrokerObservationTests(unittest.TestCase):
             self.assertEqual(result['equity'],1000);self.assertEqual(result['cash_available'],400)
             self.assertEqual(result['open_order_count'],1)
             self.assertEqual(result['account_ref'],_identity(profile))
+            position=result['positions'][0]
+            self.assertEqual(position['position_pnl'],10)
+            self.assertEqual(position['name'],'Apple')
+            self.assertEqual(position['last_price'],100)
+            self.assertAlmostEqual(position['pnl_rate'],.1111)
+            self.assertIsNone(position['unrealized_pnl'])
+            for flag in (False,None):
+                positions[0].update(pl_val_valid=flag,pl_ratio_valid=flag,cost_price_valid=flag)
+                invalid=financial_observation(connector)['positions'][0]
+                for key in ('position_pnl','pnl_rate','cost_price'):
+                    self.assertIsNone(invalid[key])
             funds[0]['currency']='HKD'
             with self.assertRaises(ControlError):financial_observation(connector)
         connector.environment='REAL'

@@ -51,18 +51,6 @@
 .account-allocation > p { margin-top: 12px; }
 
 /* Module configuration and source files. */
-.strategy-grid { margin-bottom: 28px; border-top: 1px solid var(--border); }
-.strategy-option { min-width: 0; padding: 0 15px; border-bottom: 1px solid var(--border); }
-.strategy-option.selected { background: #f7f8fc; }
-.strategy-select { display: block; width: 100%; padding: 18px 0; border: 0; border-radius: 0; background: transparent; text-align: left; }
-.strategy-select:hover:not(:disabled) h2 { color: var(--accent); }
-.strategy-select:disabled { color: var(--secondary); }
-.strategy-select h2 { margin: 0 0 5px; font-size: 15px; }
-.strategy-select p { margin: 6px 0; font-size: 13px; color: var(--secondary); }
-.strategy-select small { color: var(--secondary); }
-.strategy-option-top { float: right; display: flex; align-items: center; gap: 12px; margin: 2px 0 10px 18px; }
-.strategy-option-top > svg { display: none; }
-.strategy-option > .strategy-readme { margin: 0; border-top: 0; padding: 0 0 17px; }
 .data-source-row { display: grid; grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); gap: 24px; align-items: end; margin: 22px 0; }
 .data-source-row > div p { margin: 5px 0 0; }
 .data-source-row > div strong { font-size: 14px; }
@@ -74,16 +62,8 @@
 .strategy-file-panel.card { margin-top: 30px; padding: 17px 0; border-top: 1px solid var(--border); }
 .strategy-file-panel > summary { font-size: 14px; }
 .strategy-file-panel .instance-export label { flex-grow: 0; flex-basis: 250px; }
-.strategy-code-action { padding-bottom: 12px; }
-.modal.strategy-editor-dialog { width: min(1120px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 20px; }
-.editor-heading, .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.editor-heading { margin-bottom: 16px; }
-.editor-heading h2 { margin: 0; font-size: 18px; }
-.editor-heading p { margin: 4px 0 0; overflow-wrap: anywhere; }
 .python-editor { height: min(58dvh, 660px); min-height: 220px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.editor-footer { margin-top: 16px; }
 .editor-buttons { display: flex; flex-shrink: 0; gap: 8px; }
-.editor-footer p { margin: 5px 0 0; }
 .editor-notice { padding: 8px 12px; background: var(--surface-inset); font-size: 13px; }
 .editor-discard { padding: 12px; margin-top: 12px; border: 1px solid var(--border-strong); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .python-editor .cm-search { flex-wrap: wrap; }
@@ -290,12 +270,8 @@
   .instance-export label, .backtest-form label, .monitor-form label { flex-basis: 100%; }
   .allocation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 14px; }
   .allocation-row > strong { grid-column: 1 / -1; }
-  .strategy-option { padding-inline: 11px; }
-  .strategy-option-top { margin-left: 10px; }
   .data-source-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .strategy-file-panel .instance-export label { flex-basis: 100%; }
-  .modal.strategy-editor-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 12px; }
-  .editor-footer { flex-wrap: wrap; }
   .summary-row strong { font-size: 15px; }
   .preflight-workflow { align-items: stretch; }
   .preflight-workflow > label { flex-basis: 100%; }

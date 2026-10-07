@@ -23,6 +23,12 @@ class PortalTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
         shutil.copytree(ROOT / 'configs', self.root / 'configs')
+        # These tests import demo_snapshot(), which uses the technology schema.
+        # Do not depend on the user's currently selected strategy (e.g. MOM8).
+        config_path = self.root / 'configs/portfolio_config.json'
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        config['strategy'] = {'type': 'tech_profit_momentum'}
+        atomic_json(config_path, config)
         for folder in ('strategies', 'framework'):
             shutil.copytree(ROOT / folder, self.root / folder, ignore=shutil.ignore_patterns('__pycache__'))
         for folder in ('data', 'brokers'):

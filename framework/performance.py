@@ -69,7 +69,8 @@ class PerformanceStore:
             if not isinstance(p.get('symbol'), str) or p['symbol'] in seen:
                 raise ValueError('Duplicate or invalid accounting position')
             seen.add(p['symbol'])
-            for key in ('quantity', 'market_value', 'cost_price', 'unrealized_pnl'):
+            for key in ('quantity', 'market_value', 'cost_price', 'unrealized_pnl',
+                        'last_price', 'position_pnl', 'pnl_rate', 'day_pnl'):
                 p[key] = number(p.get(key), optional=key != 'quantity')
             if p['quantity'] < 0:
                 raise ValueError('Short positions are not supported by this observer')
@@ -191,13 +192,19 @@ class PerformanceStore:
             flows = [dict(id=i,as_of=t,kind=k,amount=float(a),note=n) for i,t,k,a,n in db.execute(
                 'SELECT id,as_of,kind,amount,note FROM cash_events WHERE scope=? ORDER BY as_of',(scope,))]
             review = db.execute('SELECT through FROM reviews WHERE scope=?',(scope,)).fetchone()
+            review_point = db.execute('SELECT body FROM observations WHERE scope=? AND as_of=?',
+                                      (scope, review[0])).fetchone() if review else None
+            resets = [f['as_of'] for f in flows if f['kind']=='reset']
+            if resets:
+                first = db.execute('SELECT body FROM observations WHERE scope=? AND as_of>=? ORDER BY as_of LIMIT 1',
+                                   (scope, max(resets))).fetchone()
         items = list(reversed([json.loads(r[0]) for r in rows]))
-        if first and items and json.loads(first[0])['as_of'] < items[0]['as_of']:
-            items.insert(0,json.loads(first[0]))
+        if first and not any(r['as_of'] == json.loads(first[0])['as_of'] for r in items):
+            items.append(json.loads(first[0]))
+            items.sort(key=lambda r: r['as_of'])
         if not items:
             return dict(latest=None,curve=[],cycles=cycles,cash_events=flows,metrics={},flow_reviewed_through=None)
         # Resets are new measurement periods, not investment returns.
-        resets = [f['as_of'] for f in flows if f['kind']=='reset']
         if resets:
             items = [r for r in items if r['as_of'] >= max(resets)]
         if not items:
@@ -250,6 +257,14 @@ class PerformanceStore:
             row['target_weight']=targets.get(symbol,0) if last_target else None
             row['drift']=None if row['weight'] is None or row['target_weight'] is None else row['weight']-row['target_weight']
             positions.append(row)
+        from framework.performance_analytics import period_reports, position_summary
+        analytic_items = {item['as_of']: item for item in items}
+        # Preserve the exact reviewed point even after a later sample replaces
+        # that day's close. An unreviewed update must not erase verified returns.
+        if review_point and review[0] >= base['as_of']:
+            analytic_items[review[0]] = json.loads(review_point[0])
+        analytics = period_reports(sorted(analytic_items.values(), key=lambda item: item['as_of']),
+                                   flows, review[0] if review else None)
         metrics=dict(asset_change=latest['equity']/base['equity']-1,return_rate=nav-1 if reviewed else None,
                      max_drawdown=max_dd if reviewed else None,benchmark_return=benchmark_return, benchmark_period=benchmark_period,
                      return_method='Daily linked Modified Dietz; user-reviewed cash flows',flow_review_required=not reviewed)
@@ -257,4 +272,5 @@ class PerformanceStore:
             if not reviewed:
                 p['index']=None
         return dict(latest=latest,curve=curve,cycles=cycles,positions=positions,cash_events=flows,
+                    analytics=analytics, position_summary=position_summary(latest['positions']),
                     metrics=metrics,flow_reviewed_through=review[0] if review else None)

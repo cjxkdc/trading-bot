@@ -17,7 +17,14 @@ test('desktop cannot deep-link a server-only view and unknown routes are safe', 
   assert.deepEqual(resolveDestination('server', false), { page: 'system', view: 'logs' });
   assert.deepEqual(routeFromHash('#/system/server', false), { page: 'system', view: 'logs' });
   assert.deepEqual(routeFromHash('#/something/unknown'), { page: 'overview' });
-  assert.deepEqual(resolveDestination({ page: 'account', view: 'admin' }), { page: 'account', view: 'positions' });
+  assert.deepEqual(resolveDestination({ page: 'account', view: 'admin' }), { page: 'account', view: 'performance' });
+});
+
+test('strategy workspace preserves selected module and editor tab through browser navigation', () => {
+  const route = { page: 'modules', view: 'strategies', strategy: 'mom8', tab: 'code' };
+  assert.deepEqual(routeFromHash(routeHash(route)), route);
+  assert.deepEqual(routeFromHash('#/strategies?strategy=mom8&tab=code'), route);
+  assert.deepEqual(routeFromHash('#/modules/strategies?strategy=../private&tab=unknown'), { page: 'modules', view: 'strategies' });
 });
 
 test('instance deep links survive reload and browser navigation', () => {

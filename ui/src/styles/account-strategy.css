@@ -1,0 +1,151 @@
+/* Account: brokerage-style hierarchy, with detailed accounting folded away. */
+.gain { color: var(--success); }
+.loss { color: var(--danger); }
+.account-heading, .return-heading, .holdings-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.account-heading h2 { margin: 0; }
+.account-heading > div:first-child { min-width: 0; flex: 1; }
+.account-heading .account-selector { width: auto; max-width: 260px; min-height: 32px; padding: 3px 25px 3px 0; border-color: transparent; font-size: 17px; font-weight: 600; }
+.account-heading .account-selector:hover { border-color: var(--border); }
+.account-heading .button-row { column-gap: 18px; }
+.account-heading p { margin: 4px 0 0; color: var(--secondary); font-size: 12px; }
+.account-overview .asset-summary { display: grid; grid-template-columns: minmax(240px, .9fr) minmax(0, 1.4fr); padding: 30px 0; margin-top: 8px; }
+.asset-primary { display: flex; flex-direction: column; justify-content: center; gap: 5px; padding-right: 28px; }
+.asset-primary > span:first-child { color: var(--secondary); }
+.asset-primary small { margin-left: 6px; }
+.asset-primary > strong { font-size: clamp(30px, 3.2vw, 42px); letter-spacing: -.035em; font-weight: 550; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.asset-primary > .small { margin-top: 8px; }
+.asset-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 23px 36px; border-left: 1px solid var(--border); padding-left: 36px; margin: 0; }
+.asset-metrics dt { color: var(--secondary); font-size: 12px; }
+.asset-metrics dd { margin: 2px 0 0; font-size: 20px; font-weight: 500; }
+.asset-metrics small { display: block; color: var(--secondary); font-size: 11px; }
+.return-heading h2, .holdings-heading h2 { margin: 0; font-size: 16px; }
+.segmented { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--surface-inset); border-radius: 6px; }
+.segmented button { border: 1px solid transparent; background: transparent; min-height: 31px; padding: 4px 11px; font-size: 12px; color: var(--secondary); }
+.segmented button[aria-pressed='true'] { color: var(--accent); background: white; border-color: var(--border); }
+.segmented button:hover { color: var(--accent); }
+.return-stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 24px; margin-top: 26px; }
+.return-stats > div { display: flex; flex-direction: column; gap: 5px; }
+.return-stats span { font-size: 12px; color: var(--secondary); }
+.return-stats strong { font-size: 24px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.return-stats small { color: var(--secondary); font-size: 11px; font-weight: 400; }
+.range-caption { margin: 9px 0 22px; font-size: 11px; color: var(--secondary); }
+.chart-mode-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
+.line-tabs { display: flex; gap: 24px; }
+.line-tabs button, .workspace-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 10px 0; background: transparent; color: var(--secondary); font-size: 13px; }
+.line-tabs button[aria-pressed='true'], .workspace-tabs button[aria-selected='true'] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.performance-chart { padding-top: 18px; min-width: 0; }
+.performance-chart svg { display: block; width: 100%; touch-action: pan-y; }
+.performance-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.performance-dot { fill: white; stroke: var(--accent); stroke-width: 2; }
+.chart-point { display: flex; align-items: baseline; gap: 14px; min-height: 26px; }
+.chart-point time { color: var(--secondary); font-size: 12px; }
+.chart-point strong { font-weight: 500; }
+.chart-point small { color: var(--secondary); font-size: 11px; }
+.chart-no-data { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; min-height: 220px; color: var(--secondary); text-align: center; }
+.chart-no-data strong { color: var(--ink); }
+.chart-no-data span { max-width: 60ch; font-size: 13px; }
+.chart-values { margin-top: 12px; }
+.chart-values summary { color: var(--secondary); font-size: 12px; }
+.chart-values .table-wrap { max-height: 300px; }
+.cash-review-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 20px; padding: 12px 14px; margin-top: 16px; background: var(--surface-inset); border-radius: 5px; font-size: 12px; color: var(--secondary); }
+.holdings-heading { margin-bottom: 18px; }
+.holdings-heading h2 small { color: var(--secondary); margin-left: 5px; font-size: 12px; font-weight: 400; }
+.holdings-heading > div { display: flex; gap: 8px; }
+.holdings-heading input { max-width: 220px; font-size: 12px !important; }
+.holdings-heading select { width: 105px; font-size: 12px; }
+.holdings-table td { padding-top: 16px; padding-bottom: 16px; }
+.holdings-table td small { display: block; font-size: 11px; font-weight: 400; color: var(--secondary); margin-top: 3px; }
+.holdings-table td small.gain { color: var(--success); }
+.holdings-table td small.loss { color: var(--danger); }
+.table-caption { margin: 12px 0 0; font-size: 11px; }
+.empty-holdings { padding: 32px 0; text-align: center; color: var(--secondary); }
+.account-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 14px; }
+.account-details > summary::before { content: '+'; color: var(--secondary); font-weight: 400; }
+.account-details[open] > summary::before { content: '−'; }
+.account-details > summary span { margin-left: auto; color: var(--secondary); font-size: 12px; }
+.account-details .review-check { margin: 18px 0 10px; }
+.account-method { margin-top: 25px; color: var(--secondary); font-size: 12px; }
+.account-method summary { color: var(--secondary); font-size: 12px; }
+
+/* Strategy library and inline working area. Code remains a part of the page. */
+.strategy-workspace { display: grid; grid-template-columns: 215px minmax(0, 1fr); gap: 30px; min-height: 620px; }
+.strategy-library { border-right: 1px solid var(--border); padding-right: 20px; }
+.library-heading { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0 16px; }
+.library-heading h2 { margin: 0; font-size: 15px; }
+.library-heading small { margin-left: 4px; font-size: 12px; color: var(--secondary); font-weight: 400; }
+.strategy-library input { font-size: 12px !important; }
+.strategy-library nav { display: grid; gap: 6px; margin-top: 15px; }
+.library-strategy { display: flex; flex-direction: column; text-align: left; width: 100%; gap: 3px; padding: 13px 12px; border: 1px solid transparent; background: transparent; }
+.library-strategy:hover { background: var(--surface-inset); }
+.library-strategy.selected { background: var(--accent-soft); border-color: #dcdff1; }
+.library-strategy strong { font-size: 13px; overflow-wrap: anywhere; }
+.library-strategy span { font-size: 11px; color: var(--secondary); overflow-wrap: anywhere; }
+.library-strategy small { margin-top: 5px; color: var(--secondary); font-size: 11px; }
+.library-strategy i { color: var(--warning); font-size: 10px; font-style: normal; margin-left: 8px; }
+.library-help { color: var(--secondary); font-size: 11px; margin: 20px 0 0; }
+.strategy-work-area { min-width: 0; }
+.workspace-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; min-height: 76px; }
+.workspace-heading h2 { margin: 0; font-size: 21px; }
+.workspace-heading p { font-size: 12px; color: var(--secondary); margin: 5px 0 16px; }
+.workspace-heading > .button { flex-shrink: 0; }
+.workspace-tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.workspace-tabs button { position: relative; }
+.tab-draft { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--warning); margin: 0 0 2px 6px; }
+.workspace-content { min-width: 0; }
+.workspace-readme { max-width: 80ch; }
+.workspace-readme h1 { font-size: 22px; }
+.workspace-readme h2 { font-size: 17px; margin-top: 24px; }
+.workspace-readme p, .workspace-readme li { font-size: 13px; }
+.readme-empty { padding: 34px 0 50px; }
+.readme-empty p { color: var(--secondary); font-size: 13px; }
+.strategy-next { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; border-top: 1px solid var(--border); margin-top: 30px; padding-top: 18px; }
+.strategy-next span { font-size: 12px; color: var(--secondary); }
+.strategy-parameters .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; }
+.source-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+.source-toolbar > div:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; min-width: 0; }
+.source-toolbar strong { font-family: 'Cascadia Code', Consolas, monospace; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.source-toolbar span { font-size: 11px; }
+.draft-indicator { color: var(--warning); }
+.strategy-code-panel .python-editor { height: clamp(380px, 62dvh, 760px); border-radius: 5px; }
+.editor-shortcuts { font-size: 11px; color: var(--secondary); margin: 10px 0 0; }
+.strategy-code-panel .editor-discard { margin-bottom: 12px; }
+.strategy-code-panel .editor-buttons { flex-wrap: wrap; }
+@media (max-width: 1000px) {
+  .strategy-workspace { grid-template-columns: 175px minmax(0, 1fr); gap: 22px; }
+  .strategy-library { padding-right: 15px; }
+  .account-overview .asset-summary { grid-template-columns: minmax(200px, .8fr) minmax(0, 1.3fr); }
+  .asset-metrics { gap: 20px; padding-left: 22px; }
+  .asset-metrics dd { font-size: 17px; }
+  .return-heading { flex-wrap: wrap; }
+}
+@media (max-width: 680px) {
+  .account-heading .account-selector { max-width: 100%; width: 100%; font-size: 15px; }
+  .account-heading .button-row { flex-wrap: nowrap; flex-shrink: 0; gap: 10px; }
+  .account-heading .button { white-space: nowrap; }
+  .account-overview .asset-summary { grid-template-columns: minmax(0, 1fr); padding: 24px 0; }
+  .asset-primary { padding: 0 0 23px; }
+  .asset-metrics { border-left: 0; padding: 20px 0 0; border-top: 1px solid var(--border); }
+  .return-stats { grid-template-columns: 1.3fr 1fr; gap: 20px 12px; }
+  .return-stats > div:last-child { grid-column: 1 / -1; flex-direction: row; align-items: baseline; gap: 10px; }
+  .return-stats strong { font-size: 20px; }
+  .return-stats > div:last-child strong { font-size: 14px; }
+  .segmented { width: 100%; }
+  .segmented button { flex: 1; padding-inline: 7px; }
+  .chart-mode-row { gap: 4px; }
+  .chart-mode-row > span { width: 100%; padding: 5px 0 10px; }
+  .line-tabs { justify-content: space-between; width: 100%; gap: 18px; }
+  .holdings-heading { flex-wrap: wrap; }
+  .holdings-heading > div { width: 100%; }
+  .holdings-heading input { flex: 1; max-width: none; }
+  .strategy-workspace { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .strategy-library { padding: 0 0 18px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .strategy-library nav { display: flex; overflow-x: auto; margin-top: 10px; }
+  .library-strategy { flex: 0 0 175px; }
+  .library-help { display: none; }
+  .workspace-heading h2 { font-size: 18px; }
+  .workspace-heading > .button { font-size: 12px; padding: 7px 9px; }
+  .workspace-tabs { gap: 26px; margin-bottom: 18px; }
+  .strategy-parameters .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .strategy-code-panel .python-editor { height: 480px; }
+  .editor-shortcuts { line-height: 1.9; }
+}

@@ -10,7 +10,7 @@ const loaded = {};
 const sourceRoot = fileURLToPath(new URL('../..', import.meta.url));
 before(async () => {
   server = await createServer({ root: sourceRoot, configFile: false, appType: 'custom', server: { middlewareMode: true }, optimizeDeps: { noDiscovery: true } });
-  for (const name of ['pages/OverviewPage', 'pages/ManualRun', 'pages/ModuleSettings', 'pages/AccountPage', 'pages/ResearchPage', 'pages/SystemPage', 'components/StrategyRuns', 'components/AutomationCard', 'components/PerformancePanel', 'components/Dialog', 'app/PortalShell']) {
+  for (const name of ['pages/OverviewPage', 'pages/ManualRun', 'pages/ModuleSettings', 'pages/StrategyWorkspace', 'pages/AccountPage', 'pages/ResearchPage', 'pages/SystemPage', 'components/StrategyRuns', 'components/AutomationCard', 'components/PerformancePanel', 'components/Dialog', 'app/PortalShell']) {
     Object.assign(loaded, await server.ssrLoadModule(`/src/${name}.jsx`));
   }
 });
@@ -30,12 +30,12 @@ function state() {
     actions: {}, jobs: [], limits: { max_gross: 1, max_weight: 0.2 }, inventory: { data: [], broker: [] }, backtest_config: {},
   };
 }
-const common = value => ({ state: value, busy: false, pending: false, act: noop, run: noop, navigate: noop, onNavigate: noop, chooseSource: noop, chooseBroker: noop, upload: noop, selectedFile: { current: null }, submit: noop, authorize: noop, bind: noop, disconnect: noop, access: { enabled: false }, shutdown: noop, refresh: noop });
+const common = value => ({ state: value, route: {}, busy: false, pending: false, act: noop, run: noop, navigate: noop, onNavigate: noop, chooseSource: noop, chooseBroker: noop, upload: noop, selectedFile: { current: null }, submit: noop, authorize: noop, bind: noop, disconnect: noop, access: { enabled: false }, shutdown: noop, refresh: noop });
 const render = (name, props) => renderToStaticMarkup(React.createElement(loaded[name], props));
 
 test('all retained feature pages render an unconfigured module set without an account read', () => {
   const props = common(state());
-  for (const name of ['ManualRun', 'StrategyPage', 'DataPage', 'BrokerPage', 'PositionsPage', 'ResearchPage', 'PerformancePanel']) {
+  for (const name of ['ManualRun', 'StrategyWorkspace', 'DataPage', 'BrokerPage', 'PositionsPage', 'ResearchPage', 'PerformancePanel']) {
     assert.ok(render(name, props).length > 40, name);
   }
   assert.match(render('SystemPage', { ...props, view: 'logs' }), /运行与日志/);

@@ -87,10 +87,18 @@ def financial_observation(connector):
                 raise ObservationBlocked('账户包含未支持的证券或币种，暂不汇总收益。')
             qty = _number(row.get('qty'))
             if qty:
+                ratio = optional(row.get('pl_ratio')) if row.get('pl_ratio_valid') is True else None
                 positions.append(dict(symbol=code[3:], quantity=float(qty),
+                    name=str(row.get('stock_name') or '')[:200],
                     market_value=optional(row.get('market_val')),
+                    last_price=optional(row.get('nominal_price')),
                     cost_price=optional(row.get('cost_price')) if row.get('cost_price_valid') is True else None,
-                    unrealized_pnl=optional(row.get('pl_val'))))
+                    position_pnl=optional(row.get('pl_val')) if row.get('pl_val_valid') is True else None,
+                    pnl_rate=ratio / 100 if ratio is not None else None,
+                    day_pnl=optional(row.get('today_pl_val')),
+                    # OpenD does not support average-cost realized/unrealized P&L
+                    # for securities paper accounts. pl_val is broker position P&L.
+                    unrealized_pnl=None, pnl_basis='broker_position'))
         if validate:
             validate(tuple(p['symbol'] for p in positions))
         orders = _orders(sdk, client, profile)
@@ -105,6 +113,7 @@ def financial_observation(connector):
                     open_order_count=sum(STATUSES.get(r.get('order_status')) not in TERMINAL for r in orders),
                     valuation_source='broker', cash_flow_coverage='manual_review_required',
                     limitations=['手续费与出入金未由此接口核实；未知值不按零处理。',
+                                 '持仓盈亏采用券商持仓口径；模拟证券账户不提供完整已实现／未实现盈亏拆分。',
                                  '账户估值为券商查询时的估值，休市时可能沿用最近行情。'])
 
 

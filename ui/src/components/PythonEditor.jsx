@@ -25,7 +25,7 @@ export function PythonEditor({ initialValue, readOnly, onChange, onSave }) {
         EditorView.theme({ '&': { height: '100%' }, '.cm-scroller': { overflow: 'auto', fontFamily: "'Cascadia Code', Consolas, monospace", fontSize: '13px', lineHeight: '1.65' }, '.cm-content': { padding: '12px 0' }, '.cm-gutters': { backgroundColor: 'var(--surface-inset)', color: 'var(--secondary)', borderRight: '1px solid var(--border)' } }),
       ],
     }) });
-    view.current.focus();
+    view.current.contentDOM.focus({ preventScroll: true });
     return () => { view.current.destroy(); view.current = null; };
   }, []);
   useEffect(() => { view.current?.dispatch({ effects: permissions.current.reconfigure([EditorState.readOnly.of(readOnly), EditorView.contentAttributes.of({ 'aria-readonly': String(readOnly) })]) }); }, [readOnly]);
