@@ -61,3 +61,21 @@ export function automationAccountMatches(automation, brokerId) {
   // cannot safely route account-specific reconciliation from a saved plan.
   return typeof automation.binding?.broker_id === 'string' && automation.binding.broker_id === brokerId;
 }
+
+export function automationOrderCheck(automation, jobs = [], selectedBrokerId) {
+  const brokerId = (automation?.enabled || automation?.status === 'paused')
+    ? automation.binding?.broker_id : selectedBrokerId;
+  if (!brokerId) return null;
+  const checks = jobs.filter(job => job.broker === brokerId &&
+    ['reconcile', 'resolve-remainder'].includes(job.action) && job.finished_at &&
+    Number.isFinite(Date.parse(job.finished_at)));
+  const job = checks.reduce((latest, item) => !latest || Date.parse(item.finished_at) > Date.parse(latest.finished_at) ? item : latest, null);
+  if (!job) return null;
+  const recovered = ['ready', 'complete'].includes(job.status) && job.status === job.result?.recovery_state;
+  const planned = recovered ? (job.result?.details?.orders || []).filter(order => order.status === 'planned').length : null;
+  const message = recovered && job.status === 'ready' && planned > 0
+    ? `核对通过 · ${planned} 笔未提交计划`
+    : recovered && job.status === 'complete' ? '核对通过 · 无未完成委托'
+    : job.message || '核对结果待确认';
+  return { at: job.finished_at, title: job.action === 'resolve-remainder' ? '最近余单处理' : '最近订单核对', message };
+}

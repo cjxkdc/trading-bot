@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationAccountMatches, automationControls, automationSchedule, automationView, scheduleChanged, scheduleSummary } from './automation.js';
+import { automationAccountMatches, automationControls, automationOrderCheck, automationSchedule, automationView, scheduleChanged, scheduleSummary } from './automation.js';
 import { runtimeView } from './runtime.js';
 
 const ready = { enabled: false, status: 'disabled', available: true, blockers: [] };
@@ -84,4 +84,32 @@ test('saved plans require a stable matching account ID before account-specific a
   assert.equal(automationAccountMatches({ enabled: true, binding: { broker_id: 'a' } }, 'b'), false);
   assert.equal(automationAccountMatches({ enabled: false, status: 'paused', binding: { broker_name: 'Same name' } }, 'a'), false);
   assert.equal(automationAccountMatches({ enabled: false, status: 'disabled' }, 'a'), true);
+});
+
+test('a current account check is distinct from an old automatic execution failure', () => {
+  const plan = { enabled: false, status: 'paused', binding: { broker_id: 'a' },
+    last_run: { at: '2026-10-05T13:35:34Z', message: 'old failure' } };
+  const old = { action: 'reconcile', broker: 'a', status: 'blocked', finished_at: '2026-10-05T13:35:34Z', message: 'old failure' };
+  const current = { action: 'reconcile', broker: 'a', status: 'ready', finished_at: '2026-10-07T10:36:11Z',
+    result: { recovery_state: 'ready', details: { orders: [{ status: 'filled' }, ...Array.from({length: 15}, () => ({status: 'planned'}))] } } };
+  const other = { ...current, broker: 'b', status: 'complete', finished_at: '2026-10-07T10:40:00Z', result: { recovery_state: 'complete' } };
+  assert.deepEqual(automationOrderCheck(plan, [old, other, current], 'b'), {
+    at: current.finished_at, title: '最近订单核对', message: '核对通过 · 15 笔未提交计划',
+  });
+  assert.equal(plan.last_run.message, 'old failure');
+  assert.equal(automationOrderCheck({...plan, binding: {}}, [current], 'a'), null);
+});
+
+test('a later failed check or remainder resolution replaces earlier check evidence', () => {
+  const passed = { action: 'reconcile', broker: 'a', status: 'ready', finished_at: '2026-10-07T10:36:11Z',
+    result: {recovery_state: 'ready', details: {orders: [{status: 'planned'}]}} };
+  const failed = { action: 'reconcile', broker: 'a', status: 'blocked', finished_at: '2026-10-07T10:40:00Z', message: 'account unavailable' };
+  assert.equal(automationOrderCheck(ready, [passed, failed], 'a').message, failed.message);
+  const closed = {...failed, action: 'resolve-remainder', status: 'complete', finished_at: '2026-10-07T10:45:00Z', result: {recovery_state: 'complete'}};
+  assert.deepEqual(automationOrderCheck(ready, [passed, closed, failed], 'a'), {
+    at: closed.finished_at, title: '最近余单处理', message: '核对通过 · 无未完成委托',
+  });
+  const unconfirmed = {...closed, action: 'reconcile', message: 'needs verification', result: {}};
+  assert.equal(automationOrderCheck(ready, [unconfirmed], 'a').message, unconfirmed.message);
+  assert.equal(automationOrderCheck(ready, [{...passed, finished_at: null}, {...passed, finished_at: 'invalid'}], 'a'), null);
 });
