@@ -33,3 +33,19 @@ test('instance deep links survive reload and browser navigation', () => {
   assert.deepEqual(routeFromHash('#/runs/instances?create=1'), { page: 'runs', view: 'instances', create: true });
   assert.deepEqual(routeFromHash('#/data'), { page: 'modules', view: 'data' });
 });
+
+test('a stale lazy chunk reloads the page once, then surfaces the error instead of looping', async () => {
+  const { reloadOnceForStaleBuild } = await import('./stale_build.js');
+  const store = new Map(), storage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
+  let reloads = 0;
+  const location = { reload: () => ++reloads };
+  const error = new TypeError('Failed to fetch dynamically imported module');
+  const pending = reloadOnceForStaleBuild(error, storage, location);
+  assert.ok(pending instanceof Promise);
+  assert.equal(reloads, 1);
+  assert.throws(() => reloadOnceForStaleBuild(error, storage, location), TypeError);
+  assert.equal(reloads, 1);
+  const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+  reloadOnceForStaleBuild(error, blocked, location);
+  assert.equal(reloads, 2);
+});
