@@ -90,6 +90,15 @@ def create_controller(root, *, port, instance, shutdown=None, runtime=None, acce
             return JSONResponse({'message': '本地工作台没有服务器管理页面。'}, status_code=404)
         return await run_in_threadpool(server_status.status)
 
+    @app.get('/api/server/diagnostics')
+    async def server_diagnostics():
+        if server_status is None:
+            return JSONResponse({'message': '本地工作台没有服务器管理页面。'}, status_code=404)
+        from deploy.server.diagnose import inspect
+        report = await run_in_threadpool(inspect, root)
+        return JSONResponse(report, headers={
+            'Content-Disposition': 'attachment; filename="trading-bot-diagnostics.json"'})
+
     @app.post('/api/runtime/start')
     async def start(request: Request):
         if await body(request):

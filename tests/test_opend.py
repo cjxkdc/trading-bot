@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 
 from app.assembly import _build_platform, inspect_broker, inspect_market_data, open_broker_paper_session
 from framework.configuration import load_config, normalize_config
-from framework.contracts import OrderIntent
+from framework.contracts import OrderIntent, SubmissionRejected
 from platforms.opend import (ROOT, PROFILES, SDK_VERSION, Settings, OpenDError, BoundedConnection, call,
     configuration_check, connection, load_sdk, select_account, settings, trade_context_class)
 from platforms.brokers.futu_paper import FutuPaperConnector
@@ -220,6 +220,39 @@ class BrokerCases:
         self.assertTrue(restart.open_orders())
         with self.assertRaises(OpenDError):
             restart.submit(replace(self.intent, client_id='test-2'))
+        self.client.place_order.assert_called_once()
+
+    def test_missing_mapping_for_new_intent_proves_no_submission(self):
+        self.broker.symbol_map = {}
+        with self.assertRaises(SubmissionRejected):
+            self.broker.submit(self.intent)
+        self.client.place_order.assert_not_called()
+        self.assertEqual(self.broker.db.execute('SELECT COUNT(*) FROM orders').fetchone()[0], 0)
+
+    def test_existing_intent_mapping_failure_can_never_be_a_presend_rejection(self):
+        self.broker.submit(self.intent)
+        self.broker.symbol_map = {}
+        try:
+            self.broker.submit(self.intent)
+        except OpenDError as exc:
+            self.assertNotIsInstance(exc, SubmissionRejected)
+        else:
+            self.fail('Changed mapping must block')
+        self.client.place_order.assert_called_once()
+
+    def test_missing_gateway_order_fields_remain_blocked_with_names_only(self):
+        from app.diagnostics import failure_details
+        self.broker.submit(self.intent)
+        self.remote['1'].update(time_in_force='N/A', session='N/A', fill_outside_rth='N/A', remark='PRIVATE-ACCOUNT-TAG')
+        try:
+            self.broker.query(self.intent.client_id)
+        except OpenDError as exc:
+            result = failure_details(exc, 'recover')
+        else:
+            self.fail('Missing gateway identity fields must stay blocked')
+        self.assertEqual(result['mismatched_fields'], ['fill_outside_rth', 'remark', 'session', 'time_in_force'])
+        self.assertNotIn('PRIVATE-ACCOUNT-TAG', json.dumps(result))
+        self.assertNotIn('N/A', json.dumps(result))
         self.client.place_order.assert_called_once()
 
     def test_partial_fill_cancel_ack_and_final_cancellation(self):

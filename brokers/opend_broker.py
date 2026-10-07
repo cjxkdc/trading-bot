@@ -11,13 +11,26 @@ from math import isfinite
 import sqlite3
 from zoneinfo import ZoneInfo
 
-from framework.contracts import OrderState
+from framework.contracts import OrderState, SubmissionRejected
 from framework.journal import packed, unpack_order, unpack_state
 from framework.trading import Account, Fees, amount
 from platforms.opend import (ROOT, OpenDError, call, configuration_check,
                              connection, records, settings)
 
 TERMINAL = {'filled', 'cancelled', 'rejected'}
+
+
+class OpenDSubmissionRejected(SubmissionRejected, OpenDError):
+    """New intent rejected before this adapter's durable transmission claim."""
+
+
+class OpenDOrderIdentityError(OpenDError):
+    """Only mismatched field names cross the diagnostic boundary; never values."""
+    def __init__(self, fields):
+        super().__init__('OpenD order identity differs from the saved intent')
+        self.mismatched_fields = tuple(fields)
+
+
 STATUSES = {
     'UNSUBMITTED': 'pending', 'WAITING_SUBMIT': 'pending', 'SUBMITTING': 'pending',
     'SUBMITTED': 'accepted', 'FILLED_PART': 'partial', 'FILLED_ALL': 'filled',
@@ -316,17 +329,21 @@ class OpenDBroker:
         return tuple(sorted(ids))
 
     def _save(self, intent, ticker, row):
-        if (row.get('code') != _code(ticker) or row.get('trd_side') != intent.side
-                or row.get('order_type') != self.sdk.OrderType.NORMAL
-                or _number(row.get('qty')) != intent.quantity
-                or _number(row.get('price')) != intent.limit_price
-                or row.get('remark') != self._tag(intent.client_id)
-                or row.get('trd_env', _scope(self.sdk, self.profile)['trd_env']) != _scope(self.sdk, self.profile)['trd_env']
-                or row.get('currency') != self.sdk.Currency.USD
-                or row.get('time_in_force') != self.sdk.TimeInForce.DAY
-                or row.get('fill_outside_rth') not in (False, 0)
-                or row.get('session') != self.sdk.Session.RTH):
-            raise OpenDError('OpenD order identity differs from the saved intent')
+        matches = {
+            'code': row.get('code') == _code(ticker),
+            'trd_side': row.get('trd_side') == intent.side,
+            'order_type': row.get('order_type') == self.sdk.OrderType.NORMAL,
+            'qty': _number(row.get('qty')) == intent.quantity,
+            'price': _number(row.get('price')) == intent.limit_price,
+            'remark': row.get('remark') == self._tag(intent.client_id),
+            'trd_env': row.get('trd_env', _scope(self.sdk, self.profile)['trd_env']) == _scope(self.sdk, self.profile)['trd_env'],
+            'currency': row.get('currency') == self.sdk.Currency.USD,
+            'time_in_force': row.get('time_in_force') == self.sdk.TimeInForce.DAY,
+            'fill_outside_rth': row.get('fill_outside_rth') in (False, 0),
+            'session': row.get('session') == self.sdk.Session.RTH,
+        }
+        if not all(matches.values()):
+            raise OpenDOrderIdentityError(field for field, matched in matches.items() if not matched)
         fill, average = _number(row.get('dealt_qty')), _number(row.get('dealt_avg_price'))
         status = STATUSES.get(row.get('order_status'), 'unknown')
         # Order responses contain no commission. Cash is authoritative; zero here means unavailable.
@@ -369,27 +386,22 @@ class OpenDBroker:
     def submit(self, intent):
         if self.read_only:
             raise OpenDError('Read-only reconciliation cannot transmit orders')
-        ticker = self._ticker(intent.symbol)
-        code = _code(ticker)
-        body = packed(dict(asdict(intent), broker_symbol=ticker))
         prior = self.db.execute('SELECT body FROM orders WHERE client_id=?', (intent.client_id,)).fetchone()
         if prior:
+            ticker = self._ticker(intent.symbol)
+            body = packed(dict(asdict(intent), broker_symbol=ticker))
             if prior[0] != body:
                 raise OpenDError('Client ID was reused for a different order')
             return self.query(intent.client_id)
-        qty, price = _number(intent.quantity, True), _number(intent.limit_price, True)
-        if (not intent.client_id or intent.side not in {'BUY', 'SELL'} or qty != qty.to_integral_value()
-                or qty * price > 100000 or price != price.quantize(Decimal('0.001'))):
-            raise OpenDError('Only whole-share US limit orders up to USD 100000 and three price decimals are supported')
-        if self.open_orders():
-            raise OpenDError('Account has unresolved orders')
-        if self.instrument_check is not None:
-            self.instrument_check((ticker,))
-        account, sellable = _account(self.sdk, self.client, self.profile, self.clock, self.instrument_check)
-        if intent.side == 'BUY' and qty * price + self.fees.estimate(qty, price) > account.cash:
-            raise OpenDError('Insufficient USD cash including estimated fees')
-        if intent.side == 'SELL' and qty > sellable.get(ticker, Decimal(0)):
-            raise OpenDError('Cannot sell unowned or unavailable shares')
+        try:
+            ticker, code, body, qty, price = self._prepare_submission(intent)
+        except OpenDError as exc:
+            # No record for this intent and no transmission has been attempted.
+            # Keep the original cause for safe allowlisted diagnostics only.
+            # Preserve the adapter's internal exception contract. Public/persisted
+            # diagnostics use an exact reason allowlist, never these raw args.
+            reason = exc.args[0] if len(exc.args) == 1 and type(exc.args[0]) is str else 'Broker rejected a new intent before transmission'
+            raise OpenDSubmissionRejected(reason) from exc
         # Commit a transmission claim before calling the SDK. Crashes/timeout never trigger resends.
         self.db.execute('BEGIN IMMEDIATE')
         try:
@@ -416,6 +428,26 @@ class OpenDBroker:
             # Includes uncertain rejection/error replies: only a subsequent query can resolve them.
             return OrderState(intent.client_id, None, 'unknown', Decimal(0))
         return self.query(intent.client_id)
+
+    def _prepare_submission(self, intent):
+        """Validate one new intent; this method cannot place or cancel an order."""
+        ticker = self._ticker(intent.symbol)
+        code = _code(ticker)
+        body = packed(dict(asdict(intent), broker_symbol=ticker))
+        qty, price = _number(intent.quantity, True), _number(intent.limit_price, True)
+        if (not intent.client_id or intent.side not in {'BUY', 'SELL'} or qty != qty.to_integral_value()
+                or qty * price > 100000 or price != price.quantize(Decimal('0.001'))):
+            raise OpenDError('Only whole-share US limit orders up to USD 100000 and three price decimals are supported')
+        if self.open_orders():
+            raise OpenDError('Account has unresolved orders')
+        if self.instrument_check is not None:
+            self.instrument_check((ticker,))
+        account, sellable = _account(self.sdk, self.client, self.profile, self.clock, self.instrument_check)
+        if intent.side == 'BUY' and qty * price + self.fees.estimate(qty, price) > account.cash:
+            raise OpenDError('Insufficient USD cash including estimated fees')
+        if intent.side == 'SELL' and qty > sellable.get(ticker, Decimal(0)):
+            raise OpenDError('Cannot sell unowned or unavailable shares')
+        return ticker, code, body, qty, price
 
     def cancel(self, broker_id):
         if self.read_only:

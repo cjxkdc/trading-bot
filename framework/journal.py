@@ -34,6 +34,7 @@ class Journal:
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.exists()
         self.db = sqlite3.connect(path, timeout=10)
+        self._submission_claims = {}
         self.lock_path = path.with_suffix(path.suffix + ".lock")
         self.db.execute("PRAGMA synchronous=FULL")
         if existing:
@@ -87,6 +88,7 @@ class Journal:
                 self._exclusive_held = True
                 yield
             finally:
+                self._submission_claims.clear()
                 self._exclusive_held = False
                 handle.seek(0)
                 if os.name == "nt":
@@ -122,16 +124,53 @@ class Journal:
                                 (order.client_id, cycle, packed(asdict(order)), "planned"))
 
     def claim(self, order):
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Submission claim requires the exclusive journal lock')
         with self.transaction():
             cursor = self.db.execute("UPDATE intents SET status='unknown' WHERE id=? AND status='planned'",
                                      (order.client_id,))
-            return cursor.rowcount == 1
+            claimed = cursor.rowcount == 1
+        if not claimed:
+            return None
+        token = object()
+        self._submission_claims[order.client_id] = token
+        return token
+
+    def release_claim(self, order, token):
+        """Forget the in-process proof after this one submission attempt."""
+        if self._submission_claims.get(order.client_id) is token:
+            self._submission_claims.pop(order.client_id, None)
 
     def status(self, order):
         row = self.db.execute("SELECT status,state FROM intents WHERE id=?", (order.client_id,)).fetchone()
         if row is None:
             raise ValueError("Missing intent")
         return row[0], unpack_state(row[1]) if row[1] else None
+
+    def reject_unsubmitted(self, order, token):
+        """Record proof supplied only by the current adapter submission call.
+
+        This is not a migration/recovery operation. The exclusive executor has
+        just claimed this exact new intent; no historical unknown is changed.
+        """
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Pre-submit rejection requires the exclusive journal lock')
+        if token is None or self._submission_claims.get(order.client_id) is not token:
+            raise ValueError('Pre-submit rejection requires this process current submission claim')
+        state = OrderState(order.client_id, None, 'rejected', Decimal(0))
+        with self.transaction():
+            row = self.db.execute('SELECT body,status,state FROM intents WHERE id=?',
+                                  (order.client_id,)).fetchone()
+            if row != (packed(asdict(order)), 'unknown', None):
+                raise ValueError('Pre-submit rejection requires the unchanged new claim')
+            self.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, action TEXT NOT NULL, body TEXT NOT NULL)''')
+            self.db.execute('INSERT INTO execution_audit(recorded_at,action,body) VALUES(?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), 'reject_before_transmission',
+                             packed({'client_id': order.client_id, 'error_code': 'broker_pre_submit_rejected',
+                                     'transmission_started': False})))
+            self.db.execute('UPDATE intents SET status=?,state=? WHERE id=?',
+                            ('rejected', packed(asdict(state)), order.client_id))
 
     def unfinished_orders(self, limit=1000):
         """Return durable incomplete intents without leaking database layout to callers."""

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationControls, automationSchedule, automationView, scheduleChanged, scheduleSummary } from './automation.js';
+import { automationAccountMatches, automationControls, automationSchedule, automationView, scheduleChanged, scheduleSummary } from './automation.js';
 import { runtimeView } from './runtime.js';
 
 const ready = { enabled: false, status: 'disabled', available: true, blockers: [] };
@@ -77,4 +77,11 @@ test('closing unsubmitted remainders requires both server permissions and automa
     assert.equal(automationControls(ready, { ...options, ...blocked }).canResolveRemainder, false);
   }
   assert.equal(automationControls(ready).canResolveRemainder, false);
+});
+
+test('saved plans require a stable matching account ID before account-specific actions', () => {
+  assert.equal(automationAccountMatches({ enabled: true, binding: { broker_id: 'a' } }, 'a'), true);
+  assert.equal(automationAccountMatches({ enabled: true, binding: { broker_id: 'a' } }, 'b'), false);
+  assert.equal(automationAccountMatches({ enabled: false, status: 'paused', binding: { broker_name: 'Same name' } }, 'a'), false);
+  assert.equal(automationAccountMatches({ enabled: false, status: 'disabled' }, 'a'), true);
 });

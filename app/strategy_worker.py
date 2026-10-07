@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from app.automation import save
 from app.control_contracts import ControlError, SnapshotInput, project_path
+from app.diagnostics import failure_details
 from app.module_registry import ModuleRegistry
 from app.strategy_instances import managed_guard, instance_binding
 from framework.configuration import fees_from_config, policy_from_config
@@ -354,11 +355,11 @@ def dispatch(root, action, *, instance=None, cycle_path=None, progress=lambda me
             return reconcile(root, cycle_path, progress, close=True)
         raise ControlError('未知策略运行操作。')
     except ControlError as exc:
-        return {'status': 'blocked' if action in {'strategy-check', 'strategy-preview'} else 'paused', 'message': str(exc)}
-    except Exception:
+        return dict(failure_details(exc, action), status='blocked' if action in {'strategy-check', 'strategy-preview'} else 'paused', message=str(exc))
+    except Exception as exc:
         if action in {'strategy-check', 'strategy-preview'}:
-            return {'status': 'blocked', 'message': '本次检查未完成，请检查连接、数据和日志后重试。'}
-        return {'status': 'paused', 'message': '策略账户批次未完成，请检查运行记录并核对订单与持仓归属。'}
+            return dict(failure_details(exc, action, fallback='本次检查未完成，请检查连接、数据和日志后重试。'), status='blocked')
+        return dict(failure_details(exc, action, fallback='策略账户批次未完成，请检查运行记录并核对订单与持仓归属。'), status='paused')
 
 
 def main():

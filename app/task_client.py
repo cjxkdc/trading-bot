@@ -6,6 +6,7 @@ import subprocess
 
 from app.launcher import external_dll_search, external_environment
 from app.portal_worker import ACTIONS
+from app.diagnostics import failure_details
 
 
 def run_worker(root, action, snapshot=None, token=None, progress=None, *, source_id=None, broker_id=None,
@@ -56,9 +57,9 @@ def run_worker(root, action, snapshot=None, token=None, progress=None, *, source
                 or process.returncode not in (0, 2)):
             raise ValueError('没有取得可核对的结果，请检查记录；不会自动重试。')
         return result
-    except (OSError, ValueError, AttributeError):
-        return {'portal_protocol': 1, 'action': action, 'status': 'paused' if action == 'execute' else 'blocked',
-                'message': '模块进程未返回有效结果，请检查项目环境；不会自动重试。', 'automatic_retry': False}
+    except (OSError, ValueError, AttributeError) as exc:
+        return dict(failure_details(exc, 'worker-transport', fallback='模块进程未返回有效结果，请检查项目环境；不会自动重试。'),
+                    portal_protocol=1, action=action, status='paused' if action == 'execute' else 'blocked', automatic_retry=False)
 
 
 def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progress=None):
@@ -94,6 +95,6 @@ def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progres
         if process.returncode or not isinstance(result, dict) or result.get('action') != action or result.get('status') not in {'complete', 'paused', 'blocked', 'ready'}:
             raise ValueError()
         return result
-    except (OSError, ValueError, AttributeError):
-        return {'status': 'paused', 'action': action,
-                'message': '策略进程未返回有效结果，请核对订单与归属；不会自动重试。'}
+    except (OSError, ValueError, AttributeError) as exc:
+        return dict(failure_details(exc, 'worker-transport', fallback='策略进程未返回有效结果，请核对订单与归属；不会自动重试。'),
+                    status='paused', action=action)

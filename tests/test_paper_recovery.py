@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from app.control_contracts import ControlError
 from app.paper_recovery import reconcile_orders
 from brokers.opend_observation import trading_sessions
-from framework.contracts import OrderState
+from framework.contracts import OrderState, SubmissionRejected
 from framework.execution import Executor, ExecutionBlocked
 from framework.journal import Journal, packed
 from framework.journal_reader import JournalReader
@@ -134,6 +134,45 @@ class RecoveryTests(unittest.TestCase):
             self.run_batch(before_submit=guard)
         self.assertEqual(self.proxy.submit.call_count, 1)
         self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+
+    def test_proven_presend_rejection_is_audited_and_never_retried(self):
+        self.proxy.submit.side_effect = SubmissionRejected('Do not persist this private text')
+        with self.assertRaises(SubmissionRejected):
+            self.run_batch()
+        state = self.journal.status(self.orders[0])[1]
+        self.assertEqual((state.status, state.broker_id, state.filled_quantity), ('rejected', None, D(0)))
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+        audit = self.journal.db.execute('SELECT action,body FROM execution_audit').fetchall()
+        self.assertEqual(audit[0][0], 'reject_before_transmission')
+        self.assertNotIn('private text', str(audit))
+        self.journal.close()
+        self.journal = Journal(self.jpath)
+        report = Executor(self.proxy, self.journal, self.policy, self.fees).reconcile()
+        self.assertEqual(report['recovery_state'], 'blocked')
+        self.proxy.query.assert_not_called()
+        with self.assertRaises(ExecutionBlocked):
+            self.run_batch(recover=True)
+        self.proxy.submit.assert_called_once()
+
+    def test_unknown_legacy_intent_is_never_reclassified_by_presend_rejection(self):
+        self.pending('unknown')
+        self.proxy.submit.side_effect = SubmissionRejected('not reached')
+        with self.assertRaises(ExecutionBlocked):
+            self.run_batch(recover=True)
+        self.assertEqual(self.journal.status(self.orders[0])[0], 'unknown')
+        self.proxy.submit.assert_called_once()
+        self.assertIsNone(self.journal.db.execute("SELECT name FROM sqlite_master WHERE name='execution_audit'").fetchone())
+
+    def test_restart_cannot_forge_fresh_claim_proof_for_unknown_without_state(self):
+        self.proxy.submit.side_effect = ConnectionError('lost before acknowledgement')
+        with self.assertRaises(ConnectionError):
+            self.run_batch()
+        self.assertEqual(self.journal.status(self.orders[0]), ('unknown', None))
+        self.journal.close()
+        self.journal = Journal(self.jpath)
+        with self.journal.exclusive(), self.assertRaisesRegex(ValueError, 'current submission claim'):
+            self.journal.reject_unsubmitted(self.orders[0], object())
+        self.assertEqual(self.journal.status(self.orders[0]), ('unknown', None))
 
     def test_reconcile_application_uses_only_readonly_session(self):
         self.pending('accepted')

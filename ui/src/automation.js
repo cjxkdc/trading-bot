@@ -54,3 +54,10 @@ export function scheduleSummary(config = {}) {
     `每月 ${cfg.day} 日起的首个交易日`;
   return `${cadence} · ${cfg.trade_time} 美东时间`;
 }
+
+export function automationAccountMatches(automation, brokerId) {
+  if (!automation?.enabled && automation?.status !== 'paused') return true;
+  // Display names can collide. Older servers without the stable binding ID
+  // cannot safely route account-specific reconciliation from a saved plan.
+  return typeof automation.binding?.broker_id === 'string' && automation.binding.broker_id === brokerId;
+}

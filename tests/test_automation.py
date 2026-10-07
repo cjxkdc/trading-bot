@@ -111,6 +111,18 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(self.auto.path.exists())
         self.assertIsNone(self.auto.tick(self.worker))
         self.assertEqual(self.calls,[])
+
+    def test_public_binding_keeps_actual_plan_ids_when_other_account_selected(self):
+        self.enable()
+        original = dict(self.auto.data['binding'])
+        original.update(account_id='PRIVATE-ACCOUNT', token='PRIVATE-TOKEN')
+        self.auto.data['binding'] = original
+        view = self.auto.public('different-broker', 'different-source')
+        self.assertEqual(view['binding']['broker_id'], 'paper-broker')
+        self.assertEqual(view['binding']['source_id'], 'data-provider')
+        self.assertEqual(set(view['binding']), {'strategy_name', 'broker_name', 'source_name', 'broker_id', 'source_id'})
+        self.assertNotIn('PRIVATE', json.dumps(view))
+        self.assertEqual(self.auto.data['binding'], original)
     def test_enable_requires_verified_paper_account(self):
         with self.assertRaises(ControlError):self.auto.enable('b','s',False)
         self.registry.mode='live'

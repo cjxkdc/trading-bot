@@ -15,6 +15,7 @@ from backtests.quantconnect.results import parse_result
 from bot import export_backtest
 from framework.configuration import load_config, normalize_config
 from app.control_contracts import ControlError
+from app.diagnostics import failure_details
 from app.operations import WORKBENCH_ACTIONS, BROKER_CHECKS, DATA_CAPABILITIES, context_for
 from app.readiness import operation_states
 from app.module_registry import ModuleRegistry
@@ -516,9 +517,15 @@ class PortalService:
 
     def orders(self):
         with self.lock:
-            path = self.registry.control('broker', self.broker_id).journal_path
+            control = self.registry.control('broker', self.broker_id)
+            path = control.journal_path
+            # Connector construction supplies the canonical filename only; no
+            # settings, account binding, broker inspection or session is opened.
+            connector = control.connector()
+            ledger_path = control.state_dir / connector.state_files[0]
         try:
-            return JournalReader(path).recent()
+            return JournalReader(path, broker_ledger_path=ledger_path,
+                                 envelope_dir=self.folder / 'execution').recent()
         except JournalReadError as exc:
             return {'items': [], 'message': str(exc)}
 
@@ -782,10 +789,10 @@ class PortalService:
                 try:
                     result = self.worker(self.root, action, snapshot_path, token, progress,
                                          source_id=source, broker_id=broker_id, expected_context=context, credentials=credentials)
-                except Exception:
+                except Exception as exc:
                     # Vendor exceptions can contain credentials. Never log their raw text.
-                    result = {'status': 'paused' if action == 'execute' else 'blocked',
-                              'message': '操作未取得有效结果，请检查本地配置；程序不会自动重试。'}
+                    result = dict(failure_details(exc, action, fallback='操作未取得有效结果，请检查本地配置；程序不会自动重试。'),
+                                  status='paused' if action == 'execute' else 'blocked')
                 finally:
                     if credentials is not None:
                         credentials.clear()
@@ -923,8 +930,8 @@ class PortalService:
                             self._record_observation(action,binding['broker_id'],value)
                         return value
                     result = self.automation.tick(observed_worker, progress)
-                except Exception:
-                    result = {'status':'paused','message':'自动任务未完成，已停止新委托；请先核对订单。'}
+                except Exception as exc:
+                    result = dict(failure_details(exc, 'automation', fallback='自动任务未完成，已停止新委托；请先核对订单。'), status='paused')
                     if not self.automation.corrupt:
                         self.automation.pause(result['message'])
                 finally:

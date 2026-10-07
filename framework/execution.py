@@ -4,6 +4,7 @@ from decimal import Decimal
 import time
 from zoneinfo import ZoneInfo
 from framework.decisions import digest
+from framework.contracts import SubmissionRejected
 from framework.journal import packed, unpack_order
 from framework.trading import amount, check_order, plan_orders
 
@@ -216,9 +217,18 @@ class Executor:
             check_order(order, current_account, quotes, now, self.policy, self.fees)
             if before_submit is not None:
                 before_submit()
-            if not self.journal.claim(order):
+            claim = self.journal.claim(order)
+            if claim is None:
                 # Another worker owns the transmission. Do not race its query/save.
                 raise ExecutionBlocked("Intent already claimed by another execution")
-            result = self.broker.submit(order)  # Any exception leaves durable unknown.
+            try:
+                result = self.broker.submit(order)
+            except SubmissionRejected:
+                # Only an explicit adapter proof from this new submission call
+                # can classify a rejection. Every other exception stays unknown.
+                self.journal.reject_unsubmitted(order, claim)
+                raise
+            finally:
+                self.journal.release_claim(order, claim)
             self._settle(order, result)
         return {"status": "complete", "decision_id": decision.decision_id, "orders": len(orders)}

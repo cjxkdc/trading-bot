@@ -115,6 +115,18 @@ class ServerStatusTests(unittest.TestCase):
         self.assertEqual(self.runtime.requests,[])
         self.assertEqual(value['links'],{'console':None,'terminal':None})
 
+    def test_diagnostics_require_login_and_token_and_do_not_start_backend(self):
+        self.assertEqual(self.client.get('/api/server/diagnostics').status_code,401)
+        self.login()
+        self.assertEqual(self.client.get('/api/server/diagnostics',headers={'X-Portal-Token':''}).status_code,403)
+        reply=self.client.get('/api/server/diagnostics')
+        self.assertEqual(reply.status_code,200)
+        self.assertTrue(reply.json()['read_only'])
+        self.assertFalse(reply.json()['broker_queries'])
+        self.assertIn('attachment',reply.headers['content-disposition'])
+        self.assertFalse(self.runtime.running)
+        self.assertEqual(self.runtime.requests,[])
+
     def test_running_backend_is_projected_bounded_cached_and_never_leaks_secrets(self):
         self.login();self.runtime.running=True
         result=self.status();value=result.json()

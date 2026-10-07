@@ -11,10 +11,12 @@ from app.assembly import build_portfolio_runner
 from app.control_contracts import ControlError, project_path
 from data.common import DataIssue, write_json
 from framework.decisions import digest
+from framework.contracts import SubmissionRejected
 from framework.execution import ExecutionBlocked
 from framework.order_capabilities import order_capability_issues
 from framework.trading import fresh
 from app.module_registry import ModuleRegistry
+from app.diagnostics import failure_details
 
 ROOT = Path(__file__).resolve().parents[1]
 from app.operations import ACTIONS, context_for
@@ -238,13 +240,14 @@ def dispatch(action, **kwargs):
     try:
         result = perform(action, **kwargs)
     except (ControlError, DataIssue) as exc:
-        result = {'status': 'paused' if action == 'execute' else 'blocked', 'message': str(exc)[:1200]}
-    except ExecutionBlocked:
-        result = {'status': 'paused', 'message': '执行暂停，请保留账本并核对订单；不会自动重试。'}
-    except Exception:
+        result = dict(failure_details(exc, action), status='paused' if action == 'execute' else 'blocked', message=str(exc)[:1200])
+    except ExecutionBlocked as exc:
+        result = dict(failure_details(exc, action), status='paused', message='执行暂停，请保留账本并核对订单；不会自动重试。')
+    except Exception as exc:
         # Third-party exceptions may contain credentials. Do not echo arbitrary SDK output.
-        result = {'status': 'paused' if action == 'execute' else 'blocked',
-                  'message': '模块操作未通过检查，请核对当前模块的配置、数据格式和账户绑定。'}
+        result = dict(failure_details(exc, action), status='paused' if action == 'execute' else 'blocked')
+        if isinstance(exc, SubmissionRejected):
+            result['recovery_state'] = 'blocked'
     if action == 'recover' and result.get('status') in {'blocked', 'paused'} and 'recovery_state' not in result:
         # Known pending/partial results carry waiting; every other recovery failure
         # requires inspection, rather than a repeated attempt with unsafe inputs.

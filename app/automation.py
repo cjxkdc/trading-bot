@@ -9,6 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.control_contracts import ControlError, project_path
+from app.diagnostics import diagnostic_fields, failure_details
 from framework.scheduling import DEFAULT_SCHEDULE, schedule_config, instant, period_window, next_window, period_key, initial_window
 
 
@@ -107,6 +108,13 @@ class Automation:
             self.event('自动运行已关闭。已提交的委托仍可能成交，可继续核对订单；不会自动撤单。')
             self.persist()
             return {'message': self.data['message']}
+
+    def _pause_after_result(self, message, result):
+        self.pause(message)
+        evidence = diagnostic_fields(result)
+        self.data['last_run'] = dict(at=self.clock().isoformat(), status='paused', message=message, **evidence)
+        self.persist()
+        return dict(status='paused', message=message, **evidence)
 
     def reconciled(self, broker_id, result):
         """Close paused orchestration records only after the ledger has no unfinished intents.
@@ -226,7 +234,7 @@ class Automation:
         startup = self.data.get('startup')
         value['startup'] = {k: startup[k] for k in ('status', 'requested_at', 'checked_at', 'window_start') if k in startup} if startup else None
         b = self.data.get('binding')
-        value['binding'] = {k:b[k] for k in ('strategy_name', 'broker_name', 'source_name')} if b else None
+        value['binding'] = {k:b[k] for k in ('strategy_name', 'broker_name', 'source_name', 'broker_id', 'source_id') if k in b} if b else None
         value.update(available=not issues, blockers=issues, events=list(reversed(self.data['events'][-30:])))
         return value
 
@@ -295,13 +303,18 @@ class Automation:
         today = local.date()
         self.data['next_check'] = (now + timedelta(seconds=cfg['poll_seconds'])).isoformat()
 
+        last_failure = None
         def call(action, snapshot=None, token=None, permit=None):
+            nonlocal last_failure
             if not self.data['enabled']:
                 raise ControlError('自动运行已关闭。')
             expected = (self.registry.connection_context(b['broker_id']) if action in {'status', 'calendar', 'reconcile'}
                         else b['context'])
-            return worker(self.root, action, snapshot, token, progress, source_id=b['source_id'],
-                          broker_id=b['broker_id'], expected_context=expected, automation=permit)
+            result = worker(self.root, action, snapshot, token, progress, source_id=b['source_id'],
+                            broker_id=b['broker_id'], expected_context=expected, automation=permit)
+            if result.get('status') in {'blocked', 'paused'}:
+                last_failure = result
+            return result
 
         try:
             calendar = self.data.get('calendar')
@@ -345,8 +358,7 @@ class Automation:
                     self.data['status'] = 'waiting' if self.data['enabled'] else 'disabled'
                     self.persist()
                     return result
-                self.pause('上一轮调仓仍未完成；已核对订单，本轮不会另建订单。')
-                return {'status':'paused','message':self.data['message']}
+                return self._pause_after_result('上一轮调仓仍未完成；已核对订单，本轮不会另建订单。', result)
             if today not in sessions:
                 self.data.update(status='waiting', next_check=instant(today+timedelta(days=1),'00:05',cfg).isoformat())
                 self.persist()
@@ -370,8 +382,7 @@ class Automation:
                         self.persist()
                         return {'status':'complete','message':self.data['message']}
                     cycle['status'] = 'blocked'
-                    self.pause('执行窗口已结束，已只读核对订单；未完成部分不会在窗口外补单。')
-                    return {'status':'paused','message':self.data['message']}
+                    return self._pause_after_result('执行窗口已结束，已只读核对订单；未完成部分不会在窗口外补单。', result)
                 return self._execute(call, cycle, start, end, recovering=True)
 
             day_key = b['broker_id'] + ':' + str(today)
@@ -447,7 +458,12 @@ class Automation:
         except Exception as exc:
             message = str(exc) if isinstance(exc, ControlError) else '自动检查未取得可靠结果，请检查模块连接与运行记录。'
             self.pause(message)
-            return {'status':'paused','message':message}
+            evidence = (diagnostic_fields(last_failure) if last_failure and isinstance(exc, ControlError)
+                        and exc.args == (last_failure.get('message'),) else
+                        diagnostic_fields(failure_details(exc, 'automation')))
+            self.data['last_run'] = dict(at=self.clock().isoformat(), status='paused', message=message, **evidence)
+            self.persist()
+            return dict(status='paused', message=message, **evidence)
 
     def _execute(self, call, cycle, start, end, *, recovering):
         permit = dict(generation=self.data['generation'], context=cycle['context'],
@@ -455,7 +471,8 @@ class Automation:
         self.data['status'] = 'running'
         self.persist()
         result = call('recover' if recovering else 'execute', cycle['snapshot'], cycle['token'], permit)
-        self.data['last_run'] = dict(at=self.clock().isoformat(), status=result['status'], message=result['message'])
+        self.data['last_run'] = dict(at=self.clock().isoformat(), status=result['status'], message=result['message'],
+                                    **diagnostic_fields(result))
         if result['status'] == 'complete':
             cycle['status'] = 'complete'
             self._finish_initial(cycle)

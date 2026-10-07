@@ -7,6 +7,15 @@ from typing import Literal, Protocol, Sequence
 History = Sequence[tuple[date, float]]
 
 
+class SubmissionRejected(RuntimeError):
+    """Adapter proves this new intent failed before its transmission claim.
+
+    Never raise this for an existing adapter record or after a send might have
+    happened. Unknown historical orders cannot be reclassified with this type.
+    """
+    error_code = 'broker_pre_submit_rejected'
+
+
 class Strategy(Protocol):
     @property
     def warmup(self) -> int: ...
