@@ -378,6 +378,55 @@ class RecoveryTests(unittest.TestCase):
         self.proxy.query.return_value = OrderState(self.orders[0].client_id, 'order-1', 'unknown', D(0))
         self.assertNotIn('关闭已撤单/拒单', reconcile_orders(control=control, policy=self.policy, fees=self.fees)['message'])
 
+    def test_close_terminal_requires_recorded_presend_proof_when_no_broker_id_exists(self):
+        self.freeze_without_transmission()
+        for status in ('rejected', 'cancelled'):
+            state = OrderState(self.orders[0].client_id, None, status, D(0))
+            self.journal.save(state)
+            with self.subTest(status=status), self.assertRaisesRegex(ExecutionBlocked, 'proof'):
+                Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+            self.assertEqual(self.journal.status(self.orders[0])[0], status)
+            self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+        self.proxy.submit.assert_not_called()
+        self.proxy.query.assert_not_called()
+
+    def test_close_terminal_presend_proof_survives_restart_but_missing_proof_blocks(self):
+        self.proxy.submit.side_effect = SubmissionRejected('pre-send')
+        with self.assertRaises(SubmissionRejected): self.run_batch()
+        self.journal.close()
+        self.journal = Journal(self.jpath)
+        self.proxy.read_only = True
+        self.assertTrue(self.journal.rejected_before_transmission(self.orders[0]))
+        self.journal.db.execute("DELETE FROM execution_audit WHERE action='reject_before_transmission'")
+        self.journal.db.commit()
+        with self.assertRaisesRegex(ExecutionBlocked, 'proof'):
+            Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual(self.journal.status(self.orders[0])[0], 'rejected')
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+
+    def test_close_terminal_checks_price_fees_and_fill_before_retiring(self):
+        saved = self.terminal('cancelled', D(2))
+        for changed in (replace(saved, average_price=D(99)), replace(saved, fees=D(1)),
+                        replace(saved, filled_quantity=D(3))):
+            self.proxy.query.return_value = changed
+            with self.subTest(state=changed), self.assertRaisesRegex(ExecutionBlocked, 'no longer confirms'):
+                Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual(self.journal.status(self.orders[0]), ('cancelled', saved))
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+        self.assertEqual(self.proxy.submit.call_count, 1)
+
+    def test_close_terminal_accepts_another_order_just_confirmed_filled(self):
+        saved = self.terminal('cancelled')
+        order = self.orders[1]
+        self.journal.save(OrderState(order.client_id, 'order-2', 'unknown', D(0)))
+        filled = OrderState(order.client_id, 'order-2', 'filled', order.quantity, D(100))
+        self.proxy.query.side_effect = lambda client_id: saved if client_id == saved.client_id else filled
+        result = Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual((result['newly_closed'], result['newly_abandoned']), (1, 0))
+        self.assertEqual(result['recovery_state'], 'complete')
+        self.assertEqual(self.journal.status(order), ('filled', filled))
+        self.assertEqual(self.proxy.submit.call_count, 1)
+
 
 class CalendarTests(unittest.TestCase):
     def setUp(self):

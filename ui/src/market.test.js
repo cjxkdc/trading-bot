@@ -56,3 +56,28 @@ test('order views flag terminal and ambiguous orders and summarise the batch', (
   assert.deepEqual(orderSummary([{ side: 'SELL', notional: '1000.5' }, { side: 'BUY', quantity: '3', limit_price: '10' }, { side: 'BUY', notional: 20 }]),
     { buy: 50, sell: 1000.5, buyCount: 2, sellCount: 1 });
 });
+
+
+test('a throwing localStorage getter cannot prevent the initial page from rendering', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+  try {
+    assert.equal(readPreference('theme'), 'dark');
+    assert.equal(savePreference('theme', 'light'), 'light');
+    const root = { dataset: {} };
+    applyPreferences(root);
+    assert.deepEqual(root.dataset, { theme: 'dark', updown: 'us' });
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'localStorage', original);
+    else delete globalThis.localStorage;
+  }
+});
+
+test('display toggles still work together when storing settings is blocked', () => {
+  const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+  const root = { dataset: { theme: 'dark', updown: 'us' } };
+  applyPreferences(root, blocked, { ...root.dataset, theme: savePreference('theme', 'light', blocked) });
+  assert.deepEqual(root.dataset, { theme: 'light', updown: 'us' });
+  applyPreferences(root, blocked, { ...root.dataset, updown: savePreference('updown', 'cn', blocked) });
+  assert.deepEqual(root.dataset, { theme: 'light', updown: 'cn' });
+});

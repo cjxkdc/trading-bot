@@ -123,7 +123,7 @@ class Executor:
         with self.journal.exclusive():
             report = self._reconcile_locked()
             statuses = {item['status'] for item in report['orders']}
-            if statuses - {'planned', 'cancelled', 'rejected'} or self.broker.open_orders():
+            if statuses - {'filled', 'planned', 'cancelled', 'rejected'} or self.broker.open_orders():
                 raise ExecutionBlocked('Unknown, pending or partial orders must be reconciled before closing')
             if not statuses & {'cancelled', 'rejected'}:
                 raise ExecutionBlocked('No cancelled or rejected order needs closing')
@@ -131,12 +131,17 @@ class Executor:
                 if status not in {'cancelled', 'rejected'}:
                     continue
                 _, saved = self.journal.status(order)
-                if saved is None or not saved.broker_id:
+                if saved is None or saved.status != status:
+                    raise ExecutionBlocked('Terminal order has no consistent recorded broker state')
+                if not saved.broker_id:
+                    if not self.journal.rejected_before_transmission(order):
+                        raise ExecutionBlocked('Terminal order lacks broker acknowledgement or pre-transmission proof')
                     continue  # Proven pre-transmission rejection; the broker never received it.
                 result = self.broker.query(order.client_id)
                 if (result.client_id != order.client_id or result.status != saved.status
                         or amount(result.filled_quantity) != saved.filled_quantity
-                        or result.broker_id != saved.broker_id):
+                        or result.broker_id != saved.broker_id
+                        or result.average_price != saved.average_price or result.fees != saved.fees):
                     raise ExecutionBlocked('Broker no longer confirms the recorded terminal order state')
             counts = self.journal.close_terminal(self.broker.account().account_id)
             report = self._reconcile_locked()

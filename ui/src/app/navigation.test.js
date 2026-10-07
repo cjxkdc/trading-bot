@@ -46,6 +46,29 @@ test('a stale lazy chunk reloads the page once, then surfaces the error instead 
   assert.throws(() => reloadOnceForStaleBuild(error, storage, location), TypeError);
   assert.equal(reloads, 1);
   const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
-  reloadOnceForStaleBuild(error, blocked, location);
-  assert.equal(reloads, 2);
+  assert.throws(() => reloadOnceForStaleBuild(error, blocked, location), TypeError);
+  assert.equal(reloads, 1);
+});
+
+
+test('missing, getter-blocked or write-blocked storage uses manual retry without reloading', async () => {
+  const { reloadOnceForStaleBuild } = await import('./stale_build.js');
+  const error = new TypeError('Failed to fetch dynamically imported module');
+  let reloads = 0;
+  const location = { reload: () => ++reloads };
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+  Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
+  try {
+    assert.throws(() => reloadOnceForStaleBuild(error, undefined, location), failure => failure === error);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'sessionStorage', original);
+    else delete globalThis.sessionStorage;
+  }
+  const noWrite = { getItem: () => null, setItem() { throw new Error('QuotaExceededError'); } };
+  for (const storage of [null, noWrite]) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.throws(() => reloadOnceForStaleBuild(error, storage, location), failure => failure === error);
+    }
+  }
+  assert.equal(reloads, 0);
 });

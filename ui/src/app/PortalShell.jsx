@@ -16,7 +16,11 @@ function useNow(interval = 1000) {
 
 function PreferenceToggle({ name, label, options }) {
   const [value, setValue] = useState(() => readPreference(name));
-  function choose(next) { setValue(savePreference(name, next)); applyPreferences(); }
+  function choose(next) {
+    setValue(savePreference(name, next));
+    const root = document.documentElement;
+    applyPreferences(root, undefined, { ...root.dataset, [name]: next });
+  }
   return <span className="pref-toggle" role="group" aria-label={label}>
     {options.map(([id, text, className]) => <button key={id} type="button" aria-pressed={value === id} className={className} onClick={() => choose(id)}>{text}</button>)}
   </span>;

@@ -172,6 +172,18 @@ class Journal:
             self.db.execute('UPDATE intents SET status=?,state=? WHERE id=?',
                             ('rejected', packed(asdict(state)), order.client_id))
 
+    def rejected_before_transmission(self, order):
+        """Only the durable adapter rejection proof permits skipping a broker query."""
+        expected = OrderState(order.client_id, None, 'rejected', Decimal(0))
+        if self.status(order) != ('rejected', expected):
+            return False
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_audit'").fetchone():
+            return False
+        proof = packed({'client_id': order.client_id, 'error_code': 'broker_pre_submit_rejected',
+                        'transmission_started': False})
+        return self.db.execute('SELECT 1 FROM execution_audit WHERE action=? AND body=? LIMIT 1',
+                               ('reject_before_transmission', proof)).fetchone() is not None
+
     def unfinished_orders(self, limit=1000):
         """Return durable incomplete intents without leaking database layout to callers."""
         if type(limit) is not int or not 1 <= limit <= 10000:
