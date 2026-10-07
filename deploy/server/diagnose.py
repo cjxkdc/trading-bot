@@ -89,7 +89,7 @@ def inspect(root):
             action = value.get('action')
             action = action if action in {'observe','status','offline','preview','preflight','execute','prepare',
                 'refresh','reconcile','recover','automation','strategy-cycle','strategy-check','strategy-preview',
-                'strategy-reconcile','strategy-resolve','resolve-remainder','data-status','configure-data'} else 'other'
+                'strategy-reconcile','strategy-resolve','strategy-close-terminal','resolve-remainder','close-terminal','data-status','configure-data'} else 'other'
             actions[action] += 1
             if value.get('status') in {'blocked','paused','interrupted','failed'}:
                 failed.append({'job_ref': reference(value.get('id', path.stem)), 'action': action,
@@ -168,14 +168,14 @@ def inspect(root):
     def priority(row):
         if row['framework_status'] in {'unknown', 'unrecognized'} and row['adapter_match_status'] != 'matched':
             return 0
-        return 1 if row['framework_status'] not in {'filled', 'abandoned'} else 2
+        return 1 if row['framework_status'] not in {'filled', 'abandoned', 'closed'} else 2
     ordered = sorted(sorted(rows, key=lambda r:r.get('created_at') or '', reverse=True), key=priority)
     listed = ordered[:40]
     result['orders'] = {'framework_count': len(frameworks), 'adapter_count': adapter_count,
         'status_counts': dict(Counter(x['status'] for x in frameworks)), 'unreadable_databases': unreadable,
         'unreadable_records': sum(unreadable_records.values()), 'unreadable_record_counts': dict(unreadable_records),
         'recent_or_unresolved': listed, 'truncated_count': max(0, len(rows)-len(listed)),
-        'unresolved_omitted': sum(r['framework_status'] not in {'filled', 'abandoned'} for r in ordered[40:]),
+        'unresolved_omitted': sum(r['framework_status'] not in {'filled', 'abandoned', 'closed'} for r in ordered[40:]),
         'unknown_without_adapter': sum(r['framework_status']=='unknown' and r['adapter_match_status']=='missing' for r in rows),
         'unknown_unverified_adapter': sum(r['framework_status']=='unknown' and r['adapter_match_status'] not in {'missing','matched'} for r in rows)}
     return result

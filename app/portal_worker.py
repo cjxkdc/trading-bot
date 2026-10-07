@@ -81,7 +81,7 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
     clock = clock or datetime.now(timezone.utc)
     progress = progress or (lambda message: None)
     before_submit = None
-    if action in {'execute', 'resolve-remainder'}:
+    if action in {'execute', 'resolve-remainder', 'close-terminal'}:
         from app.strategy_instances import require_unmanaged
         require_unmanaged(root, registry, broker_id)
         before_submit = lambda: require_unmanaged(root, registry, broker_id)
@@ -107,10 +107,10 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         except Exception:
             observation.setdefault('limitations', []).append('基准数据暂不可用；账户记录仍已取得。')
         return dict(status='complete', message='账户表现已更新。', observation=observation)
-    if action in {'calendar', 'reconcile', 'resolve-remainder'}:
+    if action in {'calendar', 'reconcile', 'resolve-remainder', 'close-terminal'}:
         control = registry.control('broker', broker_id)
         descriptor = registry.descriptor('broker', broker_id)
-        capability = 'reconcile' if action == 'resolve-remainder' else action
+        capability = 'reconcile' if action in {'resolve-remainder', 'close-terminal'} else action
         if descriptor['mode'] != 'broker_paper' or capability not in descriptor['capabilities']:
             raise ControlError('当前模拟账户模块不支持此操作。')
         if action == 'calendar':
@@ -118,13 +118,14 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
             today = clock.astimezone(ZoneInfo('America/New_York')).date()
             sessions = control.trading_sessions(today.replace(day=1) - timedelta(days=7), today + timedelta(days=100))
             return {'status':'ready','message':'交易日历已更新。','sessions':[str(day) for day in sessions]}
-        from app.paper_recovery import reconcile_orders, close_unsubmitted
+        from app.paper_recovery import reconcile_orders, close_unsubmitted, close_terminal
         runner = build_portfolio_runner(registry.configuration(broker_id))
-        if action == 'resolve-remainder':
+        if action in {'resolve-remainder', 'close-terminal'}:
             automation_path = root / 'runs/automation/state.json'
             if automation_path.exists() and json.loads(automation_path.read_text(encoding='utf-8')).get('enabled') is not False:
                 raise ControlError('请先关闭自动运行，再处理未提交余单。')
-            return close_unsubmitted(control=control, policy=runner.policy, fees=runner.fees)
+            closing = close_terminal if action == 'close-terminal' else close_unsubmitted
+            return closing(control=control, policy=runner.policy, fees=runner.fees)
         return reconcile_orders(control=control, policy=runner.policy, fees=runner.fees)
     if action in {'offline', 'status'}:
         broker = registry.descriptor('broker', broker_id)

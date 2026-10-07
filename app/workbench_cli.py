@@ -76,7 +76,7 @@ class WorkbenchClient:
         if not allowed['enabled']:
             raise ControlError(allowed['message'])
         payload = {'action': action}
-        if action in {'execute', 'resolve-remainder'}:
+        if action in {'execute', 'resolve-remainder', 'close-terminal'}:
             if not confirmation or confirmation != state['broker']['id']:
                 raise ControlError('请先查看订单预览，再用 --confirm-broker 明确确认当前模拟券商编号。')
             payload['confirmation'] = confirmation

@@ -177,7 +177,7 @@ class Journal:
         if type(limit) is not int or not 1 <= limit <= 10000:
             raise ValueError('Invalid reconciliation limit')
         rows = self.db.execute(
-            "SELECT cycle,body,status FROM intents WHERE status NOT IN ('filled','abandoned') ORDER BY rowid LIMIT ?",
+            "SELECT cycle,body,status FROM intents WHERE status NOT IN ('filled','abandoned','closed') ORDER BY rowid LIMIT ?",
             (limit+1,)).fetchall()
         if len(rows) > limit:
             raise ValueError('Too many unresolved intents; manual reconciliation required')
@@ -219,7 +219,7 @@ class Journal:
         summaries = self.cycle_statuses()
         if any(cycle.rsplit(':', 1)[0] != account_id for cycle in summaries):
             raise ValueError('Journal belongs to another account')
-        if any(set(counts)-{'filled', 'planned', 'abandoned'} for counts in summaries.values()):
+        if any(set(counts)-{'filled', 'planned', 'abandoned', 'closed'} for counts in summaries.values()):
             raise ValueError('Only completely filled and never-submitted orders can be closed')
         rows = self.db.execute("SELECT id,cycle,body FROM intents WHERE status='planned' ORDER BY rowid").fetchall()
         if not rows:
@@ -236,8 +236,42 @@ class Journal:
                 raise ValueError('Intent state changed while closing the batch')
         return changed
 
+    def close_terminal(self, account_id):
+        """Retire broker-confirmed cancelled/rejected intents and the planned remainder.
+
+        The user explicitly confirms that these terminal orders were checked. Saved
+        broker states and filled quantities are kept; only the ledger status moves
+        to 'closed' (or 'abandoned' for never-claimed intents), with an audit row.
+        Caller must hold the execution lock and have re-queried the broker.
+        """
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Closing terminal orders requires the exclusive journal lock')
+        summaries = self.cycle_statuses()
+        if any(cycle.rsplit(':', 1)[0] != account_id for cycle in summaries):
+            raise ValueError('Journal belongs to another account')
+        allowed = {'filled', 'planned', 'abandoned', 'closed', 'cancelled', 'rejected'}
+        if any(set(counts)-allowed for counts in summaries.values()):
+            raise ValueError('Unknown, pending or partial orders must be reconciled before closing')
+        rows = self.db.execute(
+            "SELECT id,cycle,body,status,state FROM intents WHERE status IN ('cancelled','rejected','planned') ORDER BY rowid").fetchall()
+        if not any(status in {'cancelled', 'rejected'} for *_, status, _ in rows):
+            return {'closed': 0, 'abandoned': 0}
+        with self.transaction():
+            self.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, action TEXT NOT NULL, body TEXT NOT NULL)''')
+            event = {'account_id': account_id, 'intents': [
+                {'client_id': ident, 'cycle': cycle, 'status': status, 'intent': json.loads(body),
+                 'state': json.loads(state) if state else None} for ident, cycle, body, status, state in rows]}
+            self.db.execute('INSERT INTO execution_audit(recorded_at,action,body) VALUES(?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), 'close_terminal', packed(event)))
+            closed = self.db.execute("UPDATE intents SET status='closed' WHERE status IN ('cancelled','rejected')").rowcount
+            abandoned = self.db.execute("UPDATE intents SET status='abandoned' WHERE status='planned'").rowcount
+            if closed + abandoned != len(rows):
+                raise ValueError('Intent state changed while closing the batch')
+        return {'closed': closed, 'abandoned': abandoned}
+
     def other_unfinished(self, cycle):
-        return self.db.execute("SELECT id FROM intents WHERE cycle<>? AND status NOT IN ('filled','abandoned') LIMIT 1",
+        return self.db.execute("SELECT id FROM intents WHERE cycle<>? AND status NOT IN ('filled','abandoned','closed') LIMIT 1",
                                (cycle,)).fetchone() is not None
 
     def has_later_cycle(self, cycle):
