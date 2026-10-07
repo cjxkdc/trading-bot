@@ -255,6 +255,37 @@ class BrokerCases:
         self.assertNotIn('N/A', json.dumps(result))
         self.client.place_order.assert_called_once()
 
+    def test_paper_history_with_deprecated_rth_field_recovers_exact_fill_without_resubmission(self):
+        self.broker.submit(self.intent)
+        self.archive['1'] = self.remote.pop('1')
+        self.archive['1'].update(order_status='FILLED_ALL', dealt_qty=10, dealt_avg_price=99,
+                                 fill_outside_rth='N/A', session='RTH')
+        self.client._allow_orders = False
+        recovered = self.make_broker(read_only=True)
+        state = recovered.query(self.intent.client_id)
+        self.assertEqual((state.status, state.filled_quantity, state.average_price), ('filled', D(10), D(99)))
+        self.assertFalse(recovered.open_orders())
+        self.client.place_order.assert_called_once()
+        self.client.modify_order.assert_not_called()
+
+    def test_deprecated_field_never_supplies_missing_session_or_accepts_conflicting_hours(self):
+        self.broker.submit(self.intent)
+        from brokers.opend_broker import OpenDOrderIdentityError
+        for legacy, session in (('N/A', 'N/A'), ('N/A', 'ETH'), (True, 'RTH'), (None, 'RTH')):
+            self.remote['1'].update(fill_outside_rth=legacy, session=session)
+            with self.subTest(legacy=legacy, session=session), self.assertRaises(OpenDOrderIdentityError):
+                self.broker.query(self.intent.client_id)
+        self.remote['1'].update(fill_outside_rth='N/A', session='RTH', remark='foreign-tag')
+        with self.assertRaises(OpenDOrderIdentityError) as caught:
+            self.broker.query(self.intent.client_id)
+        self.assertEqual(caught.exception.mismatched_fields, ('remark',))
+        self.broker.profile['environment'] = 'REAL'
+        self.remote['1'].update(trd_env='REAL', remark=self.broker._tag(self.intent.client_id))
+        with self.assertRaises(OpenDOrderIdentityError) as caught:
+            self.broker.query(self.intent.client_id)
+        self.assertEqual(caught.exception.mismatched_fields, ('fill_outside_rth',))
+        self.client.place_order.assert_called_once()
+
     def test_partial_fill_cancel_ack_and_final_cancellation(self):
         self.broker.submit(self.intent)
         self.remote['1'].update(order_status='FILLED_PART', dealt_qty=3, dealt_avg_price=99)

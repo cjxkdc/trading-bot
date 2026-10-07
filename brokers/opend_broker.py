@@ -329,6 +329,13 @@ class OpenDBroker:
         return tuple(sorted(ids))
 
     def _save(self, intent, ticker, row):
+        # OpenD's deprecated fillOutsideRTH protobuf field can be absent even
+        # when the current session field explicitly confirms RTH. Its Python
+        # decoder reports the absent field as 'N/A', not False. Accept that
+        # known paper response only; missing/contradictory sessions still fail.
+        legacy_rth = row.get('fill_outside_rth')
+        paper_rth_confirmed = (self.profile.get('environment', 'SIMULATE') == 'SIMULATE'
+                               and row.get('session') == self.sdk.Session.RTH)
         matches = {
             'code': row.get('code') == _code(ticker),
             'trd_side': row.get('trd_side') == intent.side,
@@ -339,7 +346,7 @@ class OpenDBroker:
             'trd_env': row.get('trd_env', _scope(self.sdk, self.profile)['trd_env']) == _scope(self.sdk, self.profile)['trd_env'],
             'currency': row.get('currency') == self.sdk.Currency.USD,
             'time_in_force': row.get('time_in_force') == self.sdk.TimeInForce.DAY,
-            'fill_outside_rth': row.get('fill_outside_rth') in (False, 0),
+            'fill_outside_rth': legacy_rth in (False, 0) or (legacy_rth == 'N/A' and paper_rth_confirmed),
             'session': row.get('session') == self.sdk.Session.RTH,
         }
         if not all(matches.values()):

@@ -123,6 +123,17 @@ class Automation:
         before the batch was frozen can also produce a clean journal, so do not
         describe this as proof that the portfolio reached its target weights.
         """
+        if result.get('status') == 'ready' and result.get('recovery_state') == 'ready':
+            with self.lock:
+                count = sum(item.get('status') == 'planned' for item in result.get('details', {}).get('orders', []))
+                belongs = any(c['broker_id'] == broker_id and c['status'] in {'pending', 'blocked', 'preparing'}
+                              for c in self.data['cycles'].values())
+                if count and belongs and not self.data['enabled'] and self.data['status'] == 'paused':
+                    message = f'已提交委托已核对；仍有 {count} 笔未提交计划。原自动周期保持暂停，请处理余单后再开启。'
+                    if self.data['message'] != message:
+                        self.event(message, 'warning')
+                        self.persist()
+            return
         if result.get('status') != 'complete' or result.get('recovery_state') != 'complete':
             return
         with self.lock:

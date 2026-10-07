@@ -28,7 +28,7 @@ export function SystemPage({ view, state, busy, act, navigate, access, shutdown,
           {job.events?.map((event, index) => <div className="log-line" key={index}><time>{time(event.at)}</time><span>{event.message}</span></div>)}
           {job.result?.diagnostic_id && <details className="details diagnostic-details"><summary>诊断信息 · {job.result.diagnostic_id}</summary><dl>
             {[['诊断编号', job.result.diagnostic_id], ['错误代码', job.result.error_code], ['执行阶段', job.result.phase], ['异常类型', job.result.exception_type]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
-          </dl>{job.result.code_locations?.length > 0 && <ul>{job.result.code_locations.map((location, index) => <li key={index}><code>{location.file}:{location.line} · {location.function}</code></li>)}</ul>}</details>}
+          </dl>{job.result.mismatched_fields?.length > 0 && <p className="small">不一致字段：{job.result.mismatched_fields.join('、')}</p>}{job.result.code_locations?.length > 0 && <ul>{job.result.code_locations.map((location, index) => <li key={index}><code>{location.file}:{location.line} · {location.function}</code></li>)}</ul>}</details>}
           <small className="muted">记录编号：{job.id}</small>
         </div>
       </details>)}

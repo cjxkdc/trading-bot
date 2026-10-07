@@ -331,6 +331,25 @@ class AutomationTests(unittest.TestCase):
         self.enable();self.next()
         self.assertEqual([c[0] for c in self.calls].count('execute'),1)
 
+    def test_manual_reconcile_refreshes_paused_message_without_closing_remainder_or_enabling(self):
+        self.enable(); self.auto.tick(self.worker)
+        self.results['execute'] = dict(status='paused', message='unknown')
+        self.next(); self.auto.pause('Previous failure')
+        before = dict(self.auto.data['last_run'])
+        result = dict(status='ready', recovery_state='ready', details={'orders': [
+            {'status': 'filled'}, {'status': 'planned'}, {'status': 'planned'}]})
+        self.auto.reconciled('other-broker', result)
+        self.assertEqual(self.auto.data['message'], 'Previous failure')
+        self.auto.reconciled('paper-broker', result)
+        self.assertIn('2 笔未提交计划', self.auto.data['message'])
+        self.assertFalse(self.auto.data['enabled'])
+        self.assertEqual(self.auto.data['cycles']['paper-broker:2026-10']['status'], 'pending')
+        self.assertEqual(self.auto.data['last_run'], before)
+        events = len(self.auto.data['events'])
+        self.auto.reconciled('paper-broker', result)
+        self.assertEqual(len(self.auto.data['events']), events)
+        self.assertEqual([c[0] for c in self.calls].count('execute'), 1)
+
     def test_explicit_resume_only_within_original_unchanged_window(self):
         self.enable();self.auto.tick(self.worker)
         self.results['execute']=dict(status='paused',message='pending')
