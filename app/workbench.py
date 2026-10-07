@@ -191,6 +191,8 @@ class PortalService:
 
     def _editable_strategy(self, strategy_type):
         self.idle()
+        if self.automation.corrupt or self.strategy_instances.corrupt:
+            raise PortalError('自动运行或策略实例状态无法核对，请先检查运行状态文件再修改策略代码。')
         if self.automation.data['enabled'] or any(x['enabled'] for x in self.strategy_instances.data['instances']) or self.strategy_instances.data['pending']:
             raise PortalError('停止自动运行和所有实例，并核对未完成批次后再修改策略代码。')
 

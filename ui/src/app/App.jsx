@@ -21,6 +21,7 @@ const ResearchPage = lazyPage(() => import('../pages/ResearchPage'), 'ResearchPa
 const SystemPage = lazyPage(() => import('../pages/SystemPage'), 'SystemPage');
 const StrategyRuns = lazyPage(() => import('../components/StrategyRuns'), 'StrategyRuns');
 const StrategyFiles = lazyPage(() => import('../components/StrategyFiles'), 'StrategyFiles');
+const StrategyEditorDialog = lazyPage(() => import('../components/StrategyEditorDialog'), 'StrategyEditorDialog');
 const AutomationCard = lazyPage(() => import('../components/AutomationCard'), 'AutomationCard');
 const PerformancePanel = lazyPage(() => import('../components/PerformancePanel'), 'PerformancePanel');
 
@@ -32,6 +33,7 @@ export function App({ access, onLogout }) {
   const { act, run, pending, error, notice, setError, setNotice } = operation;
   const [route, setRoute] = useState(() => routeFromHash(window.location.hash, server));
   const [dialog, setDialog] = useState(null);
+  const [editingStrategy, setEditingStrategy] = useState(null);
   const selectedFile = useRef(null);
   const busy = pending || !!state?.active || !online || stopped || runtime?.status !== 'running';
   const runtimeStatus = runtimeView(runtime, online && !stopped, pending, state?.active, state?.automation);
@@ -91,7 +93,7 @@ export function App({ access, onLogout }) {
     if (route.page === 'modules') {
       if (route.view === 'data') return <DataPage key={state.source} {...common} chooseSource={chooseSource} upload={upload} selectedFile={selectedFile}/>;
       if (route.view === 'broker') return <BrokerPage {...common} chooseBroker={chooseBroker} authorize={authorize} bind={account => act(() => api('broker-auth/bind', { account }))} disconnect={() => act(() => api('broker/disconnect', {}))}/>;
-      return <><p className="page-intro">策略、数据和券商分别配置。实例保留自己的参数；这里的默认配置供手动调仓和单策略计划使用。</p><StrategyPage key={state.config_version} {...common}/><StrategyFiles {...common}/></>;
+      return <><p className="page-intro">策略、数据和券商分别配置。实例保留自己的参数；这里的默认配置供手动调仓和单策略计划使用。</p><StrategyPage key={state.config_version} {...common} onEdit={setEditingStrategy}/><StrategyFiles {...common} onEdit={setEditingStrategy}/></>;
     }
     if (route.page === 'research') return <ResearchPage {...common} navigate={navigate}/>;
     return <SystemPage view={route.view} {...common} navigate={navigate} access={access} shutdown={() => setDialog({ kind: 'stop' })} refresh={refresh}/>;
@@ -103,6 +105,7 @@ export function App({ access, onLogout }) {
     {state?.module_issue && route.page !== 'overview' && <div className="alert error" role="alert">{state.module_issue}</div>}
     {state?.active && <div className="running-strip" role="status"><div><strong>{actions[state.active.action] || state.active.action}</strong><span>{state.active.message}</span></div>{state.active.cancel_available && <Button disabled={pending} onClick={() => act(() => api('cancel-download', {}))}>停止下载</Button>}</div>}
     <Suspense fallback={<div className="loading-state" role="status"><div/><div/><p>正在打开页面…</p></div>}>{content()}</Suspense>
+    <Suspense fallback={null}>{editingStrategy && <StrategyEditorDialog key={editingStrategy} strategyType={editingStrategy} state={state} busy={busy} act={act} onClose={() => setEditingStrategy(null)}/>}</Suspense>
     {dialog && <Dialog labelledBy="confirm-title" canDismiss={!pending} onDismiss={() => setDialog(null)}>
       <h2 id="confirm-title">{dialog.kind === 'execute' ? '确认提交模拟订单' : '退出整个工作台'}</h2>
       <p>{dialog.kind === 'execute' ? `使用 ${dialog.brokerName}，提交刚才准备的 ${dialog.count} 笔模拟委托。执行前将再次检查账户、配置和行情。` : '退出会同时关闭工作台和交易后台。已提交的委托仍可能成交。'}</p>

@@ -552,6 +552,83 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(len(backup), 1)
         self.assertEqual(backup[0].read_text(encoding='utf-8'), original['content'])
 
+    def test_online_edit_rejects_context_invalid_python_before_changing_source(self):
+        service = PortalService(self.root)
+        original = service.strategy_source('equal_weight')
+        path = self.root / original['filename']
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ControlError, 'Python 语法错误'):
+            service.strategy_source('equal_weight', {
+                'content': original['content'] + '\nreturn 1\n', 'revision': original['revision']})
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse((self.root / 'runs/strategy_manager/source-history').exists())
+
+    def test_online_edit_preserves_utf8_line_endings_without_executing_source(self):
+        service = PortalService(self.root)
+        original = service.strategy_source('equal_weight')
+        path = self.root / original['filename']
+        normalized = original['content'].replace('\r\n', '\n')
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=repr(newline)):
+                initial = normalized.replace('\n', newline).encode('utf-8')
+                path.write_bytes(initial)
+                opened = service.strategy_source('equal_weight')
+                content = opened['content'] + newline + '# 策略代码' + newline + "raise RuntimeError('must not execute')" + newline
+                result = service.strategy_source('equal_weight', {'content': content, 'revision': opened['revision']})
+                self.assertEqual(path.read_bytes(), content.encode('utf-8'))
+                reopened = service.strategy_source('equal_weight')
+                self.assertEqual(reopened['content'], content)
+                self.assertEqual(reopened['revision'], result['revision'])
+        backups = [item.read_bytes() for item in (self.root / 'runs/strategy_manager/source-history').glob('*.py')]
+        self.assertCountEqual(backups, [normalized.replace('\n', newline).encode('utf-8') for newline in ('\n', '\r\n')])
+
+    def test_strategy_upload_preserves_line_endings_and_validates_without_execution(self):
+        service = PortalService(self.root)
+        with zipfile.ZipFile(io.BytesIO(service.strategy_files.bundle('equal_weight'))) as package:
+            template = json.loads(package.read('manifest.json'))
+            original = package.read('strategy.py').decode('utf-8-sig').replace('\r\n', '\n')
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=repr(newline)):
+                entry = dict(template, type='uploaded_lf' if newline == '\n' else 'uploaded_crlf')
+                content = (original + "\n# 策略代码\nraise RuntimeError('must not execute')\n").replace('\n', newline)
+                out = io.BytesIO()
+                with zipfile.ZipFile(out, 'w') as package:
+                    package.writestr('strategy.py', content.encode('utf-8'))
+                    package.writestr('manifest.json', json.dumps(entry))
+                result = service.upload_strategy(out.getvalue())
+                opened = service.strategy_source(result['type'])
+                self.assertEqual((self.root / opened['filename']).read_bytes(), content.encode('utf-8'))
+                self.assertEqual(opened['content'], content)
+        invalid = io.BytesIO()
+        with zipfile.ZipFile(invalid, 'w') as package:
+            package.writestr('strategy.py', original + '\nreturn 1\n')
+            package.writestr('manifest.json', json.dumps(dict(template, type='uploaded_invalid')))
+        with self.assertRaisesRegex(ControlError, 'Python 语法错误'):
+            service.upload_strategy(invalid.getvalue())
+        self.assertNotIn('uploaded_invalid', self.registry.catalog('strategy'))
+        self.assertFalse((self.root / 'strategies/plugins/uploaded_invalid.json').exists())
+
+    def test_strategy_source_changes_require_readable_control_state(self):
+        for folder, attribute in (('automation', 'automation'), ('strategy_manager', 'strategy_instances')):
+            with self.subTest(state=folder):
+                state_path = self.root / 'runs' / folder / 'state.json'
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text('{broken', encoding='utf-8')
+                service = PortalService(self.root)
+                self.assertTrue(getattr(service, attribute).corrupt)
+                original = service.strategy_source('equal_weight')
+                source_path = self.root / original['filename']
+                before = source_path.read_bytes()
+                with self.assertRaisesRegex(ControlError, '状态无法核对'):
+                    service.strategy_source('equal_weight', {
+                        'content': original['content'] + '\n# changed\n', 'revision': original['revision']})
+                with self.assertRaisesRegex(ControlError, '状态无法核对'):
+                    service.upload_strategy(service.strategy_files.bundle('equal_weight'))
+                self.assertEqual(source_path.read_bytes(), before)
+                self.assertEqual(state_path.read_text(encoding='utf-8'), '{broken')
+                self.assertFalse((self.root / 'runs/strategy_manager/source-history').exists())
+                state_path.unlink()
+
 
 class CombinedRunnerTests(unittest.TestCase):
     def test_net_plan_and_frozen_integer_positions_survive_quote_refresh(self):

@@ -23,7 +23,7 @@ export function dismissDialog(event, canDismiss, onDismiss) {
   if (canDismiss) onDismiss();
 }
 
-export function Dialog({ labelledBy, children, onDismiss, canDismiss = true }) {
+export function Dialog({ labelledBy, children, onDismiss, canDismiss = true, className = '' }) {
   const ref = useRef(null);
   useEffect(() => activateDialog(ref.current), []);
 
@@ -35,7 +35,7 @@ export function Dialog({ labelledBy, children, onDismiss, canDismiss = true }) {
     if (outside) dismissDialog(event, canDismiss, onDismiss);
   }
 
-  return <dialog ref={ref} className="modal" aria-modal="true" aria-labelledby={labelledBy}
+  return <dialog ref={ref} className={`modal ${className}`} aria-modal="true" aria-labelledby={labelledBy}
     onCancel={event => dismissDialog(event, canDismiss, onDismiss)} onClick={onBackdropClick}>
     {children}
   </dialog>;

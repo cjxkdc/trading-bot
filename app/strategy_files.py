@@ -42,6 +42,7 @@ class StrategyFiles:
             raise ControlError('策略代码须为 512 KB 以内的 UTF-8 文本。')
         try:
             tree = ast.parse(text)
+            compile(tree, '<strategy>', 'exec')
         except SyntaxError as exc:
             raise ControlError(f'Python 语法错误，请检查第 {exc.lineno} 行。') from None
         if not any(isinstance(node, ast.ClassDef) and node.name == class_name for node in tree.body):
@@ -60,7 +61,7 @@ class StrategyFiles:
         backup.write_bytes(original)
         temporary = path.with_name('.' + uuid4().hex + '.tmp')
         try:
-            temporary.write_text(value['content'], encoding='utf-8')
+            temporary.write_bytes(value['content'].encode('utf-8'))
             if sha256(path.read_bytes()).hexdigest() != value['revision']:
                 raise ControlError('保存前代码已变化，请重新加载。')
             temporary.replace(path)
@@ -118,7 +119,7 @@ class StrategyFiles:
             draft.write_text(json.dumps(entry, ensure_ascii=False), encoding='utf-8')
             if ident not in scan_catalog(check, 'strategies', {'portfolio'}):
                 raise ValueError()
-            source.write_text(code, encoding='utf-8')
+            source.write_bytes(code.encode('utf-8'))
             if readme is not None:
                 documentation.write_text(readme, encoding='utf-8')
             path.write_text(json.dumps(entry, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

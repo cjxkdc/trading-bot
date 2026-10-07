@@ -74,7 +74,20 @@
 .strategy-file-panel.card { margin-top: 30px; padding: 17px 0; border-top: 1px solid var(--border); }
 .strategy-file-panel > summary { font-size: 14px; }
 .strategy-file-panel .instance-export label { flex-grow: 0; flex-basis: 250px; }
-textarea.strategy-code-editor { min-height: 420px; font-family: 'Cascadia Code', Consolas, 'Liberation Mono', monospace; font-size: 13px; line-height: 1.65; white-space: pre; overflow: auto; tab-size: 4; background: #fafbfc; }
+.strategy-code-action { padding-bottom: 12px; }
+.modal.strategy-editor-dialog { width: min(1120px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); padding: 20px; }
+.editor-heading, .editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.editor-heading { margin-bottom: 16px; }
+.editor-heading h2 { margin: 0; font-size: 18px; }
+.editor-heading p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.python-editor { height: min(58dvh, 660px); min-height: 220px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.editor-footer { margin-top: 16px; }
+.editor-buttons { display: flex; flex-shrink: 0; gap: 8px; }
+.editor-footer p { margin: 5px 0 0; }
+.editor-notice { padding: 8px 12px; background: var(--surface-inset); font-size: 13px; }
+.editor-discard { padding: 12px; margin-top: 12px; border: 1px solid var(--border-strong); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.python-editor .cm-search { flex-wrap: wrap; }
+.python-editor .cm-textfield { width: 160px; }
 .strategy-readme summary span { margin-left: 7px; color: var(--secondary); font-size: 11px; font-weight: 400; }
 .strategy-readme-body { max-height: 480px; overflow: auto; padding-right: 10px; scrollbar-gutter: stable; }
 .readme-file { display: block; margin-bottom: 13px; overflow-wrap: anywhere; }
@@ -281,7 +294,8 @@ textarea.strategy-code-editor { min-height: 420px; font-family: 'Cascadia Code',
   .strategy-option-top { margin-left: 10px; }
   .data-source-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .strategy-file-panel .instance-export label { flex-basis: 100%; }
-  textarea.strategy-code-editor { min-height: 320px; }
+  .modal.strategy-editor-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 12px; }
+  .editor-footer { flex-wrap: wrap; }
   .summary-row strong { font-size: 15px; }
   .preflight-workflow { align-items: stretch; }
   .preflight-workflow > label { flex-basis: 100%; }

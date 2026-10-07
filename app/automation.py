@@ -235,7 +235,7 @@ class Automation:
         value['startup'] = {k: startup[k] for k in ('status', 'requested_at', 'checked_at', 'window_start') if k in startup} if startup else None
         b = self.data.get('binding')
         value['binding'] = {k:b[k] for k in ('strategy_name', 'broker_name', 'source_name', 'broker_id', 'source_id') if k in b} if b else None
-        value.update(available=not issues, blockers=issues, events=list(reversed(self.data['events'][-30:])))
+        value.update(available=not issues, corrupt=self.corrupt, blockers=issues, events=list(reversed(self.data['events'][-30:])))
         return value
 
     def due(self):
