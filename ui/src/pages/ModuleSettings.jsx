@@ -5,6 +5,7 @@ import { cls, percent, number, time } from '../format';
 import { scheduleSummary } from '../automation';
 import { orderSide, orderStatus } from '../orders';
 import { ModuleFields } from '../components/ModuleFields';
+import { BrokerConfiguration } from '../components/BrokerConfiguration';
 import { ModuleIssues } from '../components/ModuleIssues';
 import { executionContext, currencyLabel, timezoneLabel } from '../execution_context';
 
@@ -21,7 +22,7 @@ export function DataPage({ state, busy, act, run, chooseSource, upload, selected
     <ModuleIssues items={state.sources}/><details className="details"><summary>所有已登记的数据接口</summary><ul>{state.inventory.data.map(item => <li key={item.type}>{item.name} · {item.kind}{!item.has_control && ' · 尚未接入工作台控制接口'}</li>)}</ul></details></>;
 }
 
-export function BrokerPage({ state, busy, run, chooseBroker, authorize, bind, disconnect }) {
+export function BrokerPage({ state, busy, act, run, chooseBroker, authorize, bind, disconnect }) {
   const broker = state.broker, account = state.account, auth = state.broker_authorization;
   const loginMode = broker.authentication?.mode;
   const context = executionContext(broker);
@@ -35,7 +36,7 @@ export function BrokerPage({ state, busy, run, chooseBroker, authorize, bind, di
         {auth?.authorized && <label>绑定账户<select aria-label="网页授权账户" disabled={busy} value={auth.selected || ''} onChange={e => e.target.value && bind(e.target.value)}><option value="" disabled>请选择账户</option>{auth.accounts.map(item => <option key={item.id} value={item.id}>{item.name} · {item.account_hint}</option>)}</select></label>}
       </div> : <p className="small muted">{broker.authentication?.title}。{loginMode === 'external' ? '请先在官方客户端或当前模块的 API 配置中登录，然后检查账户连接。' : '使用本地回放账户。'}</p>}
       <div className="info-grid"><div><span>账户环境</span><strong>{broker.mode_label}</strong></div><div><span>模块版本</span><strong>{broker.version}</strong></div><div><span>最近检查</span><strong>{time(account?.checked_at)}</strong></div></div>
-      <div className="info-grid"><div><span>市场 / 资产类型</span><strong>{context.market || '未提供'} / {context.asset_class || '未提供'}</strong></div><div><span>结算币种</span><strong>{currencyLabel(context.currency)}</strong></div><div><span>市场时区</span><strong>{timezoneLabel(context.timezone)}</strong></div></div>
+      <BrokerConfiguration key={broker.id} state={state} busy={busy} act={act} chooseBroker={chooseBroker}/>
       {broker.execution_enabled === false && <p className="inline-warning">{broker.execution_reason || '此账户尚未开放执行，可先检查连接。'}</p>}
       <div className="card-actions">{broker.capabilities.includes('inspect') && <><Button primary disabled={busy || !state.actions?.status?.enabled} title={state.actions?.status?.message} onClick={() => run('status')}>检查账户连接</Button><Button disabled={busy || !state.actions?.offline?.enabled} onClick={() => run('offline')}>检查本地配置</Button></>}<Button disabled={busy} onClick={disconnect}>断开当前账户</Button></div>
       {account && <><p className="result-message">{account.message}</p>{account.details?.issues?.length > 0 && <ul className="small muted">{account.details.issues.map((item, i) => <li key={i}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul>}</>}

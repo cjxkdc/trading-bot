@@ -215,8 +215,9 @@
 .system-exit p { margin: 0; }
 .server-page .section-toolbar { margin-bottom: 6px; }
 .server-facts { margin-bottom: 0; }
-.server-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; padding: 25px 0; border-bottom: 1px solid var(--border); }
-.server-metric.card { padding: 0; border: 0; }
+.server-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.server-metric.card { min-width: 0; margin: 0; padding: 16px; border: 1px solid var(--border); }
+.server-metric .metric-label { display: block; color: var(--secondary); font-size: 12px; }
 .server-metric > strong { display: block; margin: 4px 0 12px; font-size: 19px; font-weight: 600; font-family: var(--font-mono); }
 .server-metric p { margin: 8px 0 0; color: var(--secondary); font-size: 12px; }
 .server-meter { height: 4px; background: var(--surface-raised); overflow: hidden; border-radius: 2px; }
@@ -297,7 +298,7 @@
   .job > summary { gap: 12px; }
   .job > summary small { font-size: 11px; }
   .diagnostic-details dl > div { grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
-  .server-metrics { grid-template-columns: minmax(0, 1fr); gap: 23px; }
+  .server-metrics { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .server-metric > strong { font-size: 17px; }
   .server-services { gap: 22px; }
 }
@@ -307,3 +308,12 @@
 .overview-status strong.red, .overview-status strong.error { color: var(--danger); }
 .order-filter { display: flex; align-items: center; gap: 12px; }
 .order-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+.broker-configuration { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
+.broker-configuration .form-grid { margin: 12px 0; }
+.broker-configuration .settings { margin-top: 12px; }
+.broker-configuration .card-actions { justify-content: flex-start; }
+.field-help { display: block; color: var(--secondary); font-size: 11px; font-weight: 400; line-height: 1.5; }
+
+.broker-configuration .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .broker-configuration .form-grid { grid-template-columns: minmax(0, 1fr); } }

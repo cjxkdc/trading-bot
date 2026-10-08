@@ -254,6 +254,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         value = await body(request)
         return service.select_broker(value.get('broker'))
 
+    @app.post('/api/broker/settings')
+    async def broker_settings(request: Request):
+        return service.configure_broker(await body(request))
+
     @app.post('/api/broker/disconnect')
     async def disconnect(request: Request):
         if await body(request):

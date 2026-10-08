@@ -183,6 +183,15 @@ class ExecutionAuthorizedBroker:
 
 class OpenDControl(BrokerControl):
     expected_environment = None
+
+    def public_settings(self):
+        from brokers.opend_settings import public_settings
+        return public_settings(self)
+
+    def configure(self, values):
+        from brokers.opend_settings import configure
+        return configure(self, values)
+
     def financial_account_reference(self):
         return self.execution_account_reference()
 

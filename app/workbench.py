@@ -430,6 +430,11 @@ class PortalService:
             self._save_preferences()
             return {'message': '券商模块已切换，请重新检查账户与预览。'}
 
+    def configure_broker(self, value):
+        from app.broker_settings import configure_broker
+        with self.lock:
+            return configure_broker(self, value)
+
     def switch_issues(self):
         details = (self.account or {}).get('details', {})
         if details.get('open_order_count', 0):

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "entrypoint": "brokers.futu_live:FutuLiveConnector",
   "account_status": true,
-  "description": "Futu HK real-account adapter; explicit account, live activation and separate durable ledger required",
+  "description": "富途 OpenD · 美股股票 · 限价委托",
   "display_name": "Futu 实盘",
   "control": {
     "entrypoint": "brokers.controls:OpenDLiveControl",
@@ -15,7 +15,8 @@
       "prepare",
       "calendar",
       "reconcile",
-      "observe"
+      "observe",
+      "configure"
     ],
     "path_fields": [
       "config_dir",
@@ -56,6 +57,44 @@
         "price_tick": "0.001",
         "contract_multiplier": "1"
       }
-    }
+    },
+    "configuration_family": "futu_opend",
+    "settings_fields": [
+      {
+        "name": "host",
+        "label": "OpenD 地址",
+        "type": "string",
+        "required": true,
+        "default": "127.0.0.1",
+        "max_length": 64,
+        "help": "使用当前运行机器上的 OpenD；地址固定为本机，端口可修改。",
+        "read_only": true
+      },
+      {
+        "name": "port",
+        "label": "API 端口",
+        "type": "integer",
+        "required": true,
+        "min": 1,
+        "max": 65535,
+        "default": 11111
+      },
+      {
+        "name": "account_id",
+        "label": "交易账户 ID",
+        "type": "string",
+        "secret": true,
+        "max_length": 32,
+        "help": "已保存时留空保留；使用所选环境对应的账户 ID。"
+      },
+      {
+        "name": "login_user_id",
+        "label": "OpenD 登录用户 ID",
+        "type": "string",
+        "secret": true,
+        "max_length": 32,
+        "help": "已保存时留空保留，无需填写登录密码。"
+      }
+    ]
   }
 }

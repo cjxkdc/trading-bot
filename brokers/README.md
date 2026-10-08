@@ -69,3 +69,13 @@ python bot.py broker-status --broker tiger_readonly --config-dir <配置目录>
 仍然只有显式增加 `--connect` 才联网；该模块不能作为执行 broker。当前默认配置不使用实盘凭据。
 
 官方依据：[接入准备](https://docs.itigerup.com/docs/prepare)、[账户接口](https://docs.itigerup.com/docs/accounts)、[订单查询](https://docs.itigerup.com/docs/orderinfo)、[下单接口](https://docs.itigerup.com/docs/place-order)、[Python SDK](https://github.com/tigerfintech/openapi-python-sdk)。
+
+## Portal 账户与连接配置
+
+在「连接 → 券商账户」中选择账户模块、账户环境及交易市场。环境和市场选项只来自同一 `configuration_family` 下已登记的账户配置；币种和时区由选中模块提供，不能单独改成与订单不一致的值。当前 Futu/moomoo OpenD 适配器实际实现 US 股票，其他市场需安装对应适配器，不会仅修改界面标签就启用交易。
+
+Futu/moomoo 的模拟和实盘连接均可在页面保存 API 端口、账户 ID 和 OpenD 登录用户 ID。OpenD 地址限于运行工作台机器的 `127.0.0.1`，云端连接云端的 OpenD。敏感 ID 不回传页面，留空保留已有值；模拟和实盘配置独立，选择实盘不会自动授予下单权限。
+
+保存前需暂停自动计划与策略实例、核对未完成委托。已有账本的账户不可直接改绑其他账户。保存会清除旧连接核验与订单预览，不发送订单、不调用券商登录。多个页面同时编辑时，旧版本的保存会被拒绝。
+
+模块提供 `configure` 能力、`settings_fields`、`public_settings()` 与 `configure(values)` 即可接入表单；`public_settings()` 返回不含凭证的 `values` 和已配置字段名称 `configured_fields`。接口为 `POST /api/broker/settings`，提交所选 broker、读取时的 revision 和 values。新增券商无需在 Portal 组件里添加券商分支。

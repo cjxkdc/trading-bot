@@ -95,6 +95,7 @@ class ModuleRegistry:
             methods = ({'collect': ('collect',), 'inspect': ('inspect',), 'configure': ('configure',),
                         'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',), 'execution_signal': ('execution_signal',)}
                        if kind == 'data' else {'inspect': ('inspect',), 'execute': ('session',),
+                                             'configure': ('configure', 'public_settings'),
                                              'prepare': ('observe_account', 'observe_quotes'),
                                              'calendar': ('trading_sessions',), 'reconcile': ('reconciliation_session',),
                                              'observe': ('financial_observation', 'financial_account_reference')})
@@ -105,6 +106,7 @@ class ModuleRegistry:
                 'description': entry.get('description', ''), 'version': entry['version'],
                 'capabilities': control.get('capabilities', []),
                 'fields': control.get('settings_fields', []), 'mode': mode,
+                'configuration_family': control.get('configuration_family', entry['type']),
                 'mode_label': MODE_LABELS.get(mode, ''), 'enabled': enabled,
                 'authentication': control.get('authentication', {'mode': 'local' if mode == 'paper' else 'external',
                     'title': '本地回放' if mode == 'paper' else '券商客户端或 API 配置'}),
@@ -129,7 +131,9 @@ class ModuleRegistry:
         context = adapter.execution_context() if callable(getattr(adapter, 'execution_context', None)) else None
         return {'execution_enabled': reason is None, 'execution_reason': reason,
                 'execution_context': context,
-                'order_capabilities': deepcopy(entry['control'].get('order_capabilities', {}))}
+                'order_capabilities': deepcopy(entry['control'].get('order_capabilities', {})),
+                **({'settings': adapter.public_settings(), 'settings_revision': adapter.config_revision()}
+                   if 'configure' in entry['control'].get('capabilities', []) else {})}
 
     def require_execution(self, broker_id):
         control = self.control('broker', broker_id)
