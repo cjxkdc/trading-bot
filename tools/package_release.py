@@ -40,6 +40,8 @@ def public_files(root, variant):
             for name in sorted(names):
                 path = current / name
                 relative = path.relative_to(root)
+                if relative.parts[:3] == ('tests', 'fixtures', 'strategy_samples'):
+                    continue  # Test-only plugins never belong to an installed strategy library.
                 if path.is_symlink() or not path.resolve().is_relative_to(root):
                     continue
                 if (path.suffix not in SUFFIXES or name == 'connection.json' or name.startswith('.')

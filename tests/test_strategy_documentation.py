@@ -29,11 +29,11 @@ class StrategyDocumentationTests(unittest.TestCase):
         self.assertTrue(self.descriptor()['enabled'])
         self.assertIsNone(self.descriptor()['readme'])
         self.assertIn('readme_issue', self.descriptor())
-        entry = self.directory / 'plugins/equal_weight.json'
+        entry = self.directory / 'plugins/tech_profit_momentum.json'
         value = json.loads(entry.read_text(encoding='utf-8'))
         value.pop('readme', None)
         entry.write_text(json.dumps(value), encoding='utf-8')
-        other = self.descriptor('equal_weight')
+        other = self.descriptor('tech_profit_momentum')
         self.assertTrue(other['enabled'])
         self.assertIsNone(other['readme'])
         self.assertNotIn('readme_issue', other)

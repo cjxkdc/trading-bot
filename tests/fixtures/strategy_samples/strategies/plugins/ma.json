@@ -4,6 +4,5 @@
   "version": "1.0",
   "entrypoint": "strategies.moving_average:MovingAverage",
   "description": "短期均线高于长期均线时持有，否则空仓。",
-  "display_name": "双均线趋势",
-  "readme": "MOVING_AVERAGE.md"
+  "display_name": "双均线趋势"
 }

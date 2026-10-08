@@ -1,6 +1,6 @@
 import unittest
 from datetime import date, timedelta
-from app.research import backtest, signal
+from app.research import backtest, signal, evaluate_benchmark
 
 
 class ResearchTests(unittest.TestCase):
@@ -15,6 +15,16 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(r["final_equity"], 1000)
         self.assertEqual(r["curve"][0]["target"], 0)
         self.assertEqual(r["curve"][1]["target"], 1)
+
+    def test_passive_benchmark_does_not_require_an_installed_hold_plugin(self):
+        from unittest.mock import patch
+        rows = [(date(2020, 1, 1) + timedelta(days=i), 10) for i in range(4)]
+        cfg = dict(periods={'validation': ['2020-01-02', '2020-01-04']},
+                   initial_capital=1000, max_weight=1, cost_bps_one_way=100, minimum_sessions=2)
+        with patch('app.research.build_strategy', side_effect=AssertionError('No strategy plugin needed')):
+            result = evaluate_benchmark(rows, cfg, 'validation')
+        self.assertAlmostEqual(result['final_equity'], 1000 / 1.01)
+        self.assertEqual(result['trades'], 1)
 
     def test_entry_fee_is_funded_without_borrowing(self):
         rows = [(date(2020, 1, 1) + timedelta(days=i), 10) for i in range(4)]

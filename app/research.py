@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from app.assembly import build_strategy, build_data_provider
 from backtests.engine import backtest as run_backtest
+from backtests.benchmarks import BuyAndHoldBenchmark
 
 
 def fingerprint(path):
@@ -27,7 +28,8 @@ def backtest(rows, strategy, *args, **kwargs):
 
 def code_fingerprint():
     root = Path(__file__).resolve().parents[1]
-    paths = [root / "app/research.py", root / "app/assembly.py"]
+    paths = [root / "app/research.py", root / "app/assembly.py",
+             root / "backtests/engine.py", root / "backtests/benchmarks.py"]
     for folder in ("framework", "strategies", "platforms"):
         paths.extend(sorted((root / folder).rglob("*.py")))
     paths.extend(sorted((root / "strategies/plugins").glob("*.json")))
@@ -42,6 +44,12 @@ def evaluate(rows, strategy, cfg, period, multiplier=1):
                     cfg["minimum_sessions"])
 
 
+def evaluate_benchmark(rows, cfg, period, multiplier=1):
+    return run_backtest(rows, BuyAndHoldBenchmark(), cfg["periods"][period], cfg["initial_capital"],
+                        cfg["max_weight"], cfg["cost_bps_one_way"] * multiplier,
+                        cfg["minimum_sessions"])
+
+
 def passes(result, benchmark, gates):
     return (result["cagr"] >= gates["min_cagr"] and
             result["max_drawdown"] <= gates["max_drawdown"] and
@@ -53,7 +61,7 @@ def main():
     parser.add_argument("stage", choices=["screen", "validate", "holdout"])
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[1] / "configs/config.json")
+    parser.add_argument("--config", type=Path, required=True, help="Research configuration for your registered single-asset plugins")
     args = parser.parse_args()
     cfg = json.loads(args.config.read_text(encoding="utf-8"))
     periods = [list(map(date.fromisoformat, cfg["periods"][p]))
@@ -86,7 +94,7 @@ def main():
         if not candidates:
             raise ValueError("No candidate passed the previous stage")
     period = {"screen": "development", "validate": "validation", "holdout": "holdout"}[args.stage]
-    benchmark = evaluate(rows, {"type": "hold"}, cfg, period)
+    benchmark = evaluate_benchmark(rows, cfg, period)
     results = {s["id"]: evaluate(rows, s, cfg, period) for s in candidates}
     report = {"stage": args.stage, "provenance": provenance, "previous_report_sha256": previous_hash,
               "benchmark": benchmark, "results": results, "live_authorized": False}
@@ -96,7 +104,7 @@ def main():
     else:
         report["passed"] = [k for k, v in results.items() if passes(v, benchmark, cfg["gates"])]
     if args.stage == "holdout":
-        stress_benchmark = evaluate(rows, {"type": "hold"}, cfg, period, 2)
+        stress_benchmark = evaluate_benchmark(rows, cfg, period, 2)
         stress = {s["id"]: evaluate(rows, s, cfg, period, 2) for s in candidates}
         report.update(stress=stress, stress_benchmark=stress_benchmark)
         report["passed"] = [k for k in report["passed"] if passes(stress[k], stress_benchmark, cfg["gates"])]

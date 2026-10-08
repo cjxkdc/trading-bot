@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    if not (ROOT / "tests/fixtures/strategy_samples").is_dir():
+        raise SystemExit("Run regression tests from the full source checkout; release packages omit test strategy fixtures.")
     with tempfile.TemporaryDirectory(prefix='trading-bot-tests-', ignore_cleanup_errors=True) as directory:
         project = Path(directory) / 'project'
         project.mkdir()
@@ -27,6 +29,9 @@ def main():
             shutil.copyfile(ROOT / name, project / name)
         shutil.copyfile(project / 'tests/fixtures/portfolio_default.json', project / 'configs/portfolio_config.json')
         shutil.copyfile(project / 'tests/fixtures/broker_profiles.json', project / 'configs/broker_profiles.json')
+        samples = project / 'tests/fixtures/strategy_samples'
+        for folder in ('strategies', 'configs'):
+            shutil.copytree(samples / folder, project / folder, dirs_exist_ok=True)
         os.environ['APPDATA'] = str(Path(directory) / 'appdata')
         os.chdir(project)
         sys.path.insert(0, str(project))

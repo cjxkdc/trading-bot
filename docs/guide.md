@@ -55,7 +55,7 @@ Portal 的选择分别由主配置中的 `strategy`、`configs/data_sources.json
 
 主配置为 [configs/portfolio_config.json](../configs/portfolio_config.json)，同时供本地组合入口和 QC 导出读取。默认科技股盈利动量规则仍是：最多 5 只，每只 19%，过去 12 个月营业利润为正，成交额过滤，252 日跳过最近 21 日的动量，同一细分行业最多 2 只。月初调仓由 QC 接入的交易日历安排。
 
-组合规则见 [策略目录](../strategies/README.md)。`configs/equal_weight_control.json` 提供按标的标识排序的等权技术对照，不代表全市场等权指数。
+组合规则见 [策略目录](../strategies/README.md)，预装策略仅包含 MOM8 动量轮动和科技股盈利动量。
 
 - `strategy`：选择策略及其参数。
 - `data`：选择本地行情输入，目前为标准快照文件。
@@ -63,7 +63,7 @@ Portal 的选择分别由主配置中的 `strategy`、`configs/data_sources.json
 - `limits`、`fees`、`initial_cash`：仓位限制、费用假设、初始虚拟资金。
 - `backtest`：QC 回测起止日期和滑点假设。
 
-配置可通过 `extends` 引用另一个本地文件，路径相对当前配置；同名的顶层块整块替换。使用 `bot.py config` 可查看最终配置。`configs/paper_config.json` 是指向主配置的兼容入口。`configs/config.json` 专属于早期单标的研究。
+配置可通过 `extends` 引用另一个本地文件，路径相对当前配置；同名的顶层块整块替换。使用 `bot.py config` 可查看最终配置。`configs/paper_config.json` 是指向主配置的兼容入口。单标的研究需自行提供配置文件和已登记的策略插件。
 
 ## 从这里开始
 
@@ -103,12 +103,12 @@ python bot.py export-qc --out runs/qc-baseline-001
 旧的单标的研究入口继续保留：
 
 ```text
-python -m app.research screen --data SPY.csv --out runs/experiment-001
-python -m app.research validate --data SPY.csv --out runs/experiment-001
-python -m app.research holdout --data SPY.csv --out runs/experiment-001
+python -m app.research screen --config my-research.json --data SPY.csv --out runs/experiment-001
+python -m app.research validate --config my-research.json --data SPY.csv --out runs/experiment-001
+python -m app.research holdout --config my-research.json --data SPY.csv --out runs/experiment-001
 ```
 
-数据为 `date,total_return_index`，必须核对总回报序列的分红/拆股口径并提供预热历史。`configs/config.json` 定义开发、验证和最终测试区间；阶段之间冻结数据、配置、源码。该模型按连续比例敞口和收盘总回报估计，不能用于科技股多股票组合或冒充真实券商撮合。
+数据为 `date,total_return_index`，必须核对总回报序列的分红/拆股口径并提供预热历史。自备研究配置定义候选策略、开发、验证和最终测试区间；阶段之间冻结数据、配置、源码。该模型按连续比例敞口和收盘总回报估计，不能用于科技股多股票组合或冒充真实券商撮合。
 
 ## v0.4 新增
 

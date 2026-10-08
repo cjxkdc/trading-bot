@@ -1,6 +1,6 @@
 # Paste this ENTIRE file into a new QuantConnect Python project's main.py.
 # Generated file: edit the original modules, then rebuild.
-# Source SHA256: ff03b29d34d6e9bf12e1727e81189dca5857d2a28ef0216eaec64ef43505417e
+# Source SHA256: 5086bf9f4961e1428b703d6486491e8ce06699ab02a0629204dbaef970a81f50
 
 # ===== framework/market.py =====
 """Portable execution metadata supplied by market/broker modules.
@@ -562,26 +562,6 @@ def next_window(now, sessions, cfg):
             cursor += timedelta(days=1)
     return None
 
-# ===== strategies/equal_weight.py =====
-"""A simple control plug-in for testing composition, not an investment thesis."""
-from math import isfinite
-
-
-class EqualWeight:
-    def __init__(self, count=5, weight=0.19):
-        if type(count) is not int or count < 1 or not isfinite(weight) or not 0 < weight <= 1 / count:
-            raise ValueError("Invalid equal-weight settings")
-        self.count, self.weight = count, weight
-
-    @property
-    def history_requirements(self):
-        # Keep the same eligible price-history universe as the baseline control.
-        return HistoryRequirements(253, 20)
-
-    def select(self, stocks):
-        return tuple(StockTarget(s.asset_id, self.weight, 0.0)
-                     for s in sorted(stocks, key=lambda s: s.asset_id)[:self.count])
-
 # ===== strategies/tech_profit_momentum.py =====
 """Tech profit momentum v0.1. No platform calls and no order submission."""
 
@@ -649,8 +629,8 @@ class TechProfitMomentum:
 _RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'tech_profit_momentum', 'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}, 'initial_cash': '100000', 'limits': {'max_gross': '0.95', 'max_weight': '0.19', 'max_order_value': '100000', 'max_quote_age_seconds': 120}, 'fees': {'per_order': '1', 'bps': '0'}, 'backtest': {'backend': 'quantconnect', 'start': '2020-01-01', 'end': '2020-12-31', 'slippage_bps': 10}, 'schedule': {'cadence': 'monthly', 'day': 1, 'weekday': 0, 'prepare_time': '06:00', 'trade_time': '09:35', 'window_minutes': 60, 'timezone': 'America/New_York', 'poll_seconds': 30, 'initial_entry': 'scheduled'}, 'benchmark': 'QQQ'}
 _INPUT_SCHEMA = 'us_technology_daily_v1'
 _QC_PROFILE = {}
-_PLUGIN_CLASSES = {'equal_weight': EqualWeight, 'tech_profit_momentum': TechProfitMomentum}
-_PLUGIN_SPECS = {'equal_weight': {'type': 'equal_weight', 'version': '1.0', 'source_sha256': '6819b56af61c6f67660a0c6ba8d52b05789e063e2b32f3fff70917eb8c03bcdb', 'engine_sha256': '48c1d57552324bb427e51167c141de2a99a3c0544513fda61cb401256f36281c', 'parameters': {'count': 5, 'weight': 0.19}}, 'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '48c1d57552324bb427e51167c141de2a99a3c0544513fda61cb401256f36281c', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
+_PLUGIN_CLASSES = {'tech_profit_momentum': TechProfitMomentum}
+_PLUGIN_SPECS = {'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '48c1d57552324bb427e51167c141de2a99a3c0544513fda61cb401256f36281c', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
 def build_portfolio_strategy(config):
     return _PLUGIN_CLASSES[config['type']](**{k:v for k,v in config.items() if k not in {'type','id'}})
 def portfolio_spec(config):

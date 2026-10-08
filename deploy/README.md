@@ -6,3 +6,5 @@
 - 发布：`python tools/package_release.py --output runs/releases` 从一个仓库生成两个独立 ZIP。
 
 [AWS 安装、账户限制与验证范围](../docs/SERVER.md)。发布包没有密钥、登录令牌、账本、缓存和 Python 虚拟环境。部署分开，策略、数据、券商和框架源码保持同一套。
+
+回归测试请在完整源码仓库运行 `python -X utf8 tools/test_project.py`。测试夹具不会登记到正式策略库，也不包含在桌面或服务器发布 ZIP 中。

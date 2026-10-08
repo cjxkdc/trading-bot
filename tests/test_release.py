@@ -16,7 +16,7 @@ class ReleaseTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / 'project'
         self.root.mkdir()
-        files = {'README.md': 'public', 'app/main.py': 'print("public")', 'configs/portfolio_config.json': '{}',
+        files = {'tests/fixtures/strategy_samples/strategies/hold.py': 'TEST-ONLY-STRATEGY', 'README.md': 'public', 'app/main.py': 'print("public")', 'configs/portfolio_config.json': '{}',
                  'ui/dist/index.html': '<html></html>', 'deploy/server/install.sh': '#!/bin/bash\n',
                  'deploy/desktop/install.ps1': '# 中文安装\n', 'secrets/tiger/private.pem': 'PRIVATE',
                  'secrets/portal/server.json': 'PASSWORD-HASH', 'runs/paper/journal.sqlite': 'LEDGER',
@@ -39,7 +39,7 @@ class ReleaseTests(unittest.TestCase):
         with zipfile.ZipFile(path) as bundle:
             names = bundle.namelist()
             all_content = b''.join(bundle.read(name) for name in names)
-            for private in (b'PRIVATE', b'PASSWORD-HASH', b'LEDGER', b'ACCOUNT-ID', b'TOKEN', b'DEPENDENCY', b'PRIVATE-CLOUD-URL'):
+            for private in (b'PRIVATE', b'PASSWORD-HASH', b'LEDGER', b'ACCOUNT-ID', b'TOKEN', b'DEPENDENCY', b'PRIVATE-CLOUD-URL', b'TEST-ONLY-STRATEGY'):
                 self.assertNotIn(private, all_content)
             self.assertNotIn('Trading-bot/configs/execution_policy.json', names)
             self.assertIn('Trading-bot/configs/execution_policy.example.json', names)
