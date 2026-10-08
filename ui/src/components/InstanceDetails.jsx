@@ -5,9 +5,8 @@ import { budgetSummary, instanceDraft, instancePayload, instanceStatus, runnable
 
 import { ModuleFields } from './ModuleFields';
 import { StrategyReadme } from './StrategyReadme';
+import { percent, time } from '../format';
 
-const time = value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
-const percent = value => `${(Number(value) * 100).toFixed(1)}%`;
 
 export function InstanceDetails({ state, item, busy, act }) {
   const [logs, setLogs] = useState(null), [exporting, setExporting] = useState(false);

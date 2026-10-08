@@ -1,16 +1,16 @@
 import React from 'react';
 import { attentionItems, nextRun, runningRows } from '../app/overview';
 import { Button, Empty, Tag } from '../ui';
-import { time } from '../format';
+import { relativeTime, time } from '../format';
 
 export function OverviewPage({ state, runtimeStatus, navigate }) {
   const rows = runningRows(state), attention = attentionItems(state);
-  const enabled = rows.filter(item => item.enabled).length;
+  const enabled = rows.filter(item => item.enabled).length, next = nextRun(rows);
   return <div className="overview-page">
     <section className="overview-status" aria-label="运行摘要">
-      <div><span>交易后台</span><strong>{runtimeStatus.label}</strong></div>
-      <div><span>已开启的运行</span><strong>{enabled} 项</strong></div>
-      <div><span>下次执行 · 本地时间</span><strong>{nextRun(rows) ? time(nextRun(rows)) : '暂无已确认时间'}</strong></div>
+      <div><span>交易后台</span><strong className={runtimeStatus.tone}>{runtimeStatus.label}</strong><small>{attention.length ? `${attention.length} 项需要处理` : '没有待处理事项'}</small></div>
+      <div><span>已开启的运行</span><strong>{enabled}<small> / {rows.length} 项</small></strong><small>{rows.filter(row => row.attention).length ? '有运行需要核对' : '运行状态正常'}</small></div>
+      <div><span>下次执行 · 本地时间</span><strong>{next ? time(next) : '—'}</strong><small className={next ? 'relative' : ''}>{next ? relativeTime(next) : '暂无已确认时间'}</small></div>
     </section>
     <section className="overview-section">
       <div className="section-heading"><h2>需要处理{attention.length > 0 && <span className="count">{attention.length}</span>}</h2>
@@ -26,7 +26,7 @@ export function OverviewPage({ state, runtimeStatus, navigate }) {
         {rows.slice(0, 6).map(row => <div className="run-summary" key={row.id}>
           <div className="run-name"><strong>{row.name}</strong><small>{row.account}</small></div>
           <Tag tone={row.attention ? 'amber' : 'muted'}>{row.status.label}</Tag>
-          <div className="run-next"><small>下次执行 · 本地时间</small><span>{row.next ? time(row.next) : row.enabled ? '等待确认' : '—'}</span></div>
+          <div className="run-next"><small>下次执行 · 本地时间</small><span>{row.next ? <>{time(row.next)} <em>{relativeTime(row.next)}</em></> : row.enabled ? '等待确认' : '—'}</span></div>
           <button className="text-link" onClick={() => navigate(row.destination)}>查看<IconArrow/></button>
         </div>)}
         {rows.length > 6 && <button className="text-link list-more" onClick={() => navigate('instances')}>查看全部 {rows.length} 项运行</button>}

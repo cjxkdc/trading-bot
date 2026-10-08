@@ -28,7 +28,7 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
         if needs_broker:
             if not broker.get('enabled'):
                 block('broker_unavailable', broker.get('reason') or '券商模块不可用。', 'broker')
-            capability = ('reconcile' if action == 'resolve-remainder' else action if action in {'calendar', 'reconcile', 'observe'}
+            capability = ('reconcile' if action in {'resolve-remainder', 'close-terminal'} else action if action in {'calendar', 'reconcile', 'observe'}
                           else 'inspect' if action in BROKER_CHECKS else action)
             if capability not in broker.get('capabilities', []):
                 block('broker_capability', '当前券商不支持此操作。', 'broker')
@@ -73,6 +73,8 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
             block('internal_recovery', '订单续行由自动运行服务核对冻结批次后处理。')
         if action == 'resolve-remainder' and broker.get('mode') != 'broker_paper':
             block('paper_resolution_only', '只能结束联网模拟账户中尚未提交的余单。')
+        if action == 'close-terminal' and broker.get('mode') != 'broker_paper':
+            block('paper_resolution_only', '只能关闭联网模拟账户中已撤单或拒单的委托。')
         result[action] = {'enabled': not blockers, 'blockers': blockers,
                           'message': blockers[0]['message'] if blockers else '可以执行此操作。',
                           'next_action': blockers[0]['next_action'] if blockers else None}

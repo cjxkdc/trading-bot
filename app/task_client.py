@@ -63,7 +63,7 @@ def run_worker(root, action, snapshot=None, token=None, progress=None, *, source
 
 
 def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progress=None):
-    if action not in {'strategy-check', 'strategy-preview', 'strategy-refresh', 'strategy-cycle', 'strategy-reconcile', 'strategy-resolve'}:
+    if action not in {'strategy-check', 'strategy-preview', 'strategy-refresh', 'strategy-cycle', 'strategy-reconcile', 'strategy-resolve', 'strategy-close-terminal'}:
         raise ValueError('Unknown managed operation')
     python = Path(root) / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
     request = {'action': action}

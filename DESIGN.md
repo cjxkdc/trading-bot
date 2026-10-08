@@ -1,262 +1,167 @@
 ---
 name: "Trading Bot · 个人交易工作台"
-description: "白色、中性色与 indigo 的中文列表工作台"
+description: "深色交易终端风格的中文工作台，可切换浅色；橙色为唯一动作色"
 colors:
-  ink: "#202631"
-  secondary: "#596272"
-  border: "#e1e5eb"
-  border-strong: "#b8c1ce"
+  bg: "#0b0e14"
+  sidebar: "#0e1219"
+  surface: "#121721"
+  surface-raised: "#182030"
+  surface-inset: "#0f141c"
+  surface-hover: "#1b2333"
+  ink: "#e4e8f0"
+  body-ink: "#c3cad7"
+  secondary: "#8b95a8"
+  faint: "#5f6a7e"
+  border: "#222a38"
+  border-strong: "#323c4e"
+  accent: "#f5a623"
+  accent-hover: "#ffb845"
+  accent-ink: "#1b1204"
+  info: "#5aa2ff"
+  success: "#2ebd85"
+  warning: "#e9c15b"
+  danger: "#f6465d"
+  gain: "#2ebd85"
+  loss: "#f6465d"
+colors-light:
+  bg: "#eef1f5"
   surface: "#ffffff"
-  surface-inset: "#f5f7fa"
-  sidebar: "#f7f8fa"
-  accent: "#454dc3"
-  accent-hover: "#363da7"
-  accent-soft: "#eeeffb"
-  success: "#28704c"
-  success-soft: "#eff8f2"
-  warning: "#8b560e"
-  warning-soft: "#fff7e8"
-  danger: "#ae343b"
-  danger-soft: "#fff2f2"
-  control-ink: "#374050"
-  field-ink: "#424c5b"
-  disabled-ink: "#636d7b"
-  tag-neutral-ink: "#566171"
-  tag-neutral-surface: "#eef1f5"
-  tag-selected-ink: "#3d449e"
-  nav-selected-ink: "#3c449f"
-  nav-selected-surface: "#e9ebf9"
+  surface-raised: "#f5f7fa"
+  ink: "#18202e"
+  secondary: "#5a6476"
+  border: "#dde2ea"
+  accent: "#e8890c"
+  info: "#2a6fdb"
+  success: "#12825a"
+  warning: "#9a6200"
+  danger: "#d02f46"
 typography:
-  headline:
+  page-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "26px"
+    fontSize: "16px"
     fontWeight: 600
-    lineHeight: 1.45
-    letterSpacing: "-.025em"
-  headline-mobile:
+  panel-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "24px"
+    fontSize: "13px"
     fontWeight: 600
-    lineHeight: 1.45
-    letterSpacing: "-.025em"
-  title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "18px"
-    fontWeight: 600
-    lineHeight: 1.45
-    letterSpacing: "-.012em"
-  instance-title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "22px"
-    fontWeight: 600
-    lineHeight: 1.45
-    letterSpacing: "-.012em"
   body:
     fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "14px"
+    fontSize: "13px"
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 1.55
   label:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "13px"
+    fontSize: "11px"
     fontWeight: 500
-    lineHeight: 1.6
-  button:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "13px"
-    fontWeight: 500
-    lineHeight: 1.5
-  metadata:
-    fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif"
-    fontSize: "12px"
-    fontWeight: 400
-    lineHeight: 1.65
-  code:
-    fontFamily: "\"Cascadia Code\", Consolas, \"Liberation Mono\", monospace"
-    fontSize: "12px"
-    fontWeight: 400
-    lineHeight: 1.7
+    letterSpacing: ".02em"
+  column-header:
+    fontSize: "10.5px"
+    fontWeight: 600
+    letterSpacing: ".06em"
+    textTransform: "uppercase"
+  numeric:
+    fontFamily: "\"Cascadia Mono\", \"SF Mono\", \"JetBrains Mono\", Consolas, \"Liberation Mono\", monospace"
+    fontVariantNumeric: "tabular-nums"
 rounded:
-  flat: "0px"
-  tag: "4px"
-  control: "6px"
-  floating: "10px"
+  control: "4px"
+  tag: "3px"
+  dialog: "6px"
 spacing:
-  xs: "8px"
-  sm: "12px"
-  md: "16px"
-  lg: "20px"
-  section: "24px"
-  gutter: "36px"
+  table-cell: "7px 12px"
+  panel: "14px 16px"
+  gap: "12px"
+  gutter: "20px"
 components:
   button-primary:
     backgroundColor: "{colors.accent}"
-    textColor: "{colors.surface}"
-    typography: "{typography.button}"
-    rounded: "{rounded.control}"
-    padding: "7px 13px"
-  button-primary-hover:
-    backgroundColor: "{colors.accent-hover}"
+    textColor: "{colors.accent-ink}"
+    minHeight: "30px"
+    padding: "4px 12px"
   button-secondary:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.control-ink}"
-    typography: "{typography.button}"
-    rounded: "{rounded.control}"
-    padding: "7px 13px"
-  button-secondary-hover:
-    backgroundColor: "{colors.surface-inset}"
+    backgroundColor: "{colors.surface-raised}"
     textColor: "{colors.ink}"
-  button-disabled:
-    backgroundColor: "#f2f4f7"
-    textColor: "{colors.disabled-ink}"
-  button-primary-disabled:
-    backgroundColor: "#e6e8f4"
-    textColor: "#62698a"
-  input:
+    border: "{colors.border-strong}"
+  button-danger:
+    backgroundColor: "danger-soft"
+    textColor: "{colors.danger}"
+  panel:
     backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.control}"
-    padding: "8px 10px"
+    border: "{colors.border}"
+    header: "{colors.surface-raised}"
+  kpi-tile:
+    backgroundColor: "{colors.surface}"
+    divider: "1px {colors.border}"
   nav-selected:
-    backgroundColor: "{colors.nav-selected-surface}"
-    textColor: "{colors.nav-selected-ink}"
-    rounded: "{rounded.control}"
-    padding: "10px 12px"
-  tag-neutral:
-    backgroundColor: "{colors.tag-neutral-surface}"
-    textColor: "{colors.tag-neutral-ink}"
-    rounded: "{rounded.tag}"
-    padding: "3px 8px"
-  tag-pending:
-    backgroundColor: "{colors.warning-soft}"
-    textColor: "{colors.warning}"
-    rounded: "{rounded.tag}"
-    padding: "3px 8px"
-  content-section:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.flat}"
-    padding: "26px 0"
-  dialog:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.floating}"
-    padding: "28px"
+    backgroundColor: "accent-soft"
+    indicator: "3px {colors.accent}"
 ---
 
 # Design System: Trading Bot · 个人交易工作台
 
 ## Overview
 
-**Creative North Star: "The Personal Workbench"**
+界面参照券商交易终端与 QuantConnect 的工作区：深色底、带标题条的面板、高信息密度的表格和等宽数字。默认使用深色主题，顶栏可切换为浅色，选择保存在当前浏览器中。
 
-白色主内容与浅中性侧栏构成清楚的个人工作台。日常信息沿行与细分隔线展开，indigo 连接当前任务、选择和键盘焦点；标题、正文和辅助信息以克制的字级区分。
+顶栏是一条状态栏，依次显示纽约时间、按美股常规时段推算的交易状态（盘前、盘中交易、盘后、休市）、部署位置与「仅模拟账户」标识。交易状态不包含交易所假日，实际交易日以券商交易日历为准。
 
-详情、配置和维护按需进入，列表保留识别运行所需的名称、账户、状态和时间。模块身份与事实来源相邻；未知值和待核对状态用明确文字呈现，视觉层级不替代产品状态。
-
-**Key Characteristics:**
-
-- 白色内容底、浅中性侧栏与平面分隔列表。
-- indigo 主要动作、链接、选中状态与键盘焦点。
-- 中文系统字体与紧凑但可辨的文字层级。
-- 来源、时区、状态和阻塞原因贴近对应内容。
-
-本规范更新了已获授权的重构系统。源码依据为 [令牌](ui/src/styles/tokens.css)、[基础控件](ui/src/styles/base.css)、[应用壳](ui/src/styles/shell.css)、[功能样式](ui/src/styles/features.css) 与 [共享组件](ui/src/ui.jsx)。产品边界见 [PRODUCT.md](PRODUCT.md)；导航及页面关系见 [navigation](ui/src/app/navigation.js) 和 [页面回归](ui/src/app/pages.test.js)。
+源码依据为 [令牌](ui/src/styles/tokens.css)、[基础控件](ui/src/styles/base.css)、[应用壳](ui/src/styles/shell.css)、[功能样式](ui/src/styles/features.css)、[账户与策略样式](ui/src/styles/account-strategy.css) 与 [共享组件](ui/src/ui.jsx)。产品边界见 [PRODUCT.md](PRODUCT.md)。
 
 ## Colors
 
-白色内容、浅中性导航面与灰阶文字承载日常信息；indigo 是唯一的动作与选择主色。前置令牌记录实际值，组件变体保留源码中的局部颜色。
+所有颜色均定义为 `:root` 上的令牌，样式文件不再直接写十六进制颜色。深色为默认值，`[data-theme='light']` 重新定义同名令牌。
 
-### Primary
-
-- **Workbench Indigo** (`accent` / `accent-hover` / `accent-soft`)：主要按钮、链接、当前标签页、输入光标、复选框与焦点轮廓。
-- **Selected Navigation** (`nav-selected-ink` / `nav-selected-surface`)：当前主导航行；**Selected Context** (`tag-selected-ink`)：上下文标签。
-
-### Neutral
-
-- **Clear Surface / Inset / Sidebar** (`surface` / `surface-inset` / `sidebar`)：主内容、内嵌读数与应用导航。
-- **Text Inks** (`ink` / `secondary` / `control-ink` / `field-ink`)：正文、辅助信息、次要动作和字段标签。
-- **Quiet Edges** (`border` / `border-strong`)：内容分隔线与控件边界。
-- **Neutral State** (`tag-neutral-ink` / `tag-neutral-surface`)：普通等待和未强调的状态；`disabled-ink` 保持不可用操作可读。
-- **Verified Green / Unresolved Amber / Error Red**：`success`、`warning`、`danger` 及各自的浅色面。净资产 K 线使用绿涨、红跌、灰平的同一语义色。
-
-**The Single Accent Rule.** indigo 统一主要动作与选择；绿色、琥珀和红色只表达对应的语义状态。普通运行等待保持中性。
+- **动作色** `accent`：橙色，用于主要按钮、当前导航指示条、当前标签页下划线、输入焦点和光标。主要按钮上的文字使用 `accent-ink`。
+- **信息色** `info`：文字链接与一般提示。
+- **状态色** `success` / `warning` / `danger`：分别表示已核对、待处理和错误，各有对应的 `-soft` 底色与 `-border` 边线。
+- **涨跌色** `gain` / `loss`：只用于盈亏、K 线与买卖方向，与状态色分开定义。默认绿涨红跌；顶栏选择「红涨」后，`[data-updown='cn']` 将两者对调，状态色不受影响。
+- **中性层级** `bg` → `surface` → `surface-raised`：页面底、面板与面板标题条；`surface-inset` 用于输入框和代码区，`surface-hover` 用于行悬停。
 
 ## Typography
 
-**Display / Body Font:** 同一系统无衬线栈，中文回退按 PingFang SC、Microsoft YaHei 排列。
-**Code Font:** Cascadia Code、Consolas、Liberation Mono，回退 monospace。
+正文使用系统无衬线字体，字号 13px。页面标题 16px，旁边以小号大写英文标注所属区域（如 DASHBOARD、PORTFOLIO）。面板标题 13px，字段标签 11px，表头 10.5px 大写并加字距。
 
-页面标题使用 `headline`，手机使用 `headline-mobile`；分区标题使用 `title`，实例详情名使用 `instance-title`，手机详情名为 (20px)。正文使用 `body`；常规说明、动作和列表数值多为 (13px)，辅助信息使用 `metadata`，窄屏列表附注可为 (11px)。实例资金比例是详情中的普通事实，不继承上轮的大号数字强调。说明正文通常限于 (72–75ch)，README 约为 (78ch)。
-
-**The Adjacent Evidence Rule.** 事实、来源、时间与时区保持同组；数字和时间使用等宽数字特性，未知数据不被装饰性指标补齐。
-
-当前字体与版式来自已披露的 fallback 实现。引擎流程保留 batch label 失败（包括两次 concept seed 尝试及 detect）；字体目录与字体评审未验证。本文不宣称引擎门槛、自动检测或字体目录审核完成。
+所有金额、数量、价格、时间与表格单元格使用 `--font-mono` 等宽字体和 `tabular-nums`，使列内数字对齐。代码编辑器使用同一等宽字体，语法高亮颜色取自 `--code-*` 令牌，随主题切换。
 
 ## Layout
 
-桌面应用壳为粘性左导航 (208px) 加流式工作区；内容最大宽度为 (1248px)，常规主内容内边距为 (34px 36px 64px)。在 (1100px) 水平留白收为 (28px)；在 (681–850px) 导航为 (184px)，内容左右留白为 (24px)。手机 (680px 及以下) 导航在顶部用三列两行完整显示六个入口，主内容内边距为 (26px 20px 48px)。
+桌面为固定左侧导航（196px）加工作区，顶栏在滚动时保持可见，内容最大宽度 1440px，左右留白 20px。主导航顺序为 总览、策略运行、账户、模块配置、研究、系统；当前项左侧显示橙色指示条，「总览」上的数字角标表示需要处理的事项数，浏览器标签页标题同时显示该数字。
 
-当前主导航为 总览 (`overview`)、策略运行 (`runs`)、账户 (`account`)、模块配置 (`modules`)、研究 (`research`)、系统 (`system`)；子视图由带下边线的标签页区分。日常运行列表与详情路由分离，不把当前手动上下文当成所有实例的绑定。
+内容以面板组织：每个 `.card` 为带边框的面板，`card-heading` 作为灰色标题条。关键数字以 KPI 磁贴呈现（总览状态、实例事实、手动调仓摘要），磁贴之间以 1px 分隔线相连。表格在自身容器内横向滚动，表头吸顶。
 
-表单常规三列，在 (1000px) 变两列，手机变一列。运行行在 (1150px) 调整状态位置，在手机重排为身份 / 状态、事实 / 详情入口；事实组在手机纵排。表格只在自身容器横向滚动，长名称与状态说明允许换行。
+在 1000px 以下表单改为两列；680px 及以下导航改为顶部三列两行，表单与磁贴改为单列，页面不出现横向滚动。
 
-**The List First Rule.** 日常内容用行、列与分隔线组织；详情和表单按需展开，不为每项运行增加独立的悬浮卡片。
+## Elevation & Shapes
 
-## Elevation & Depth
-
-列表、分区和读数保持平面，依靠细线、留白与浅色内嵌面区分层级。原生确认对话框使用遮罩与环境阴影 (`0 18px 60px rgba(20, 28, 43, .18)`)，仅供弹层。按钮颜色状态过渡为 (160ms ease)，后台开关滑块为 (180ms ease)；降低动态偏好压至 (.01ms)，动画只执行一次。
-
-**The Content Is Flat Rule.** 主内容保持平面；仅对话框使用环境阴影与遮罩，不把弹层的深度复制到日常列表。
-
-## Shapes
-
-日常内容以直边分隔，不采用独立圆角面板外壳。状态标签使用 `tag` 圆角，输入和按钮使用 `control` 圆角，对话框与登录面使用 `floating` 圆角；标签页为直边。边界通常为 (1px)，选中标签页下边线为 (2px)。导航图标使用一致、无底砖的描边 SVG；圆点、开关与检查进度保留功能所需的形状。
+面板依靠边框和底色区分层级，不使用阴影。只有确认对话框带阴影和半透明遮罩，对话框的标题区与按钮区为独立色带。控件圆角 4px，标签 3px，对话框 6px。状态标签前带一个同色圆点。
 
 ## Components
 
 ### Buttons
 
-indigo 主要动作与白底描边次要动作共享按钮字级。桌面最小高度为 (36px)，手机为 (40px)、内边距 (8px 12px)；禁用主按钮与次按钮各有浅色处理，原有阻塞原因继续可见。文字链接默认无下划线，悬停出现下划线。焦点为 (2px) indigo 轮廓，常规偏移 (3px)。
+最小高度 30px（手机 36px）。主要按钮为橙底深色字；次要按钮为 `surface-raised` 底加 `border-strong` 边线；`danger` 变体用于「关闭已撤单/拒单」等需要谨慎确认的操作。
 
-### Chips
+### Tables
 
-紧凑状态标签使用 (12px)、字重 (500)。普通运行等待用中性面，待核对用琥珀；成功、错误与选中上下文使用对应语义色。状态文字来自既有 helper，颜色不创造新状态。
-
-### Cards / Containers
-
-共享内容分区保持透明、无圆角、无阴影，常规上下内边距为 (26px)，手机为 (24px)，相邻内容以底部细线分开。内嵌结果与代码可用浅色面；登录面和对话框保留它们的独立外壳。
-
-### Inputs / Fields
-
-字段标签与输入纵向相邻，标签字级使用 `label`。输入为白底、较强边界与控件圆角，最小高度 (38px)、字号 (14px)、内边距 (8px 10px)。悬停增强边界，焦点使用统一 indigo 轮廓，`aria-invalid` 使用错误色。禁用字段保留完整对比与中性底。
-
-### Navigation
-
-桌面主导航为图标与文字行；当前行使用选中导航色及字重 (600)。手机六项入口三列两行，每项最小高度 (40px)，间隙 (4px)。二级标签页以 indigo 文字与下边线定位，焦点偏移为 (-3px)。保留跳至内容入口与后台、实例、单策略计划的独立状态入口。
+单元格内边距 7px 12px，行悬停加亮。订单表的状态列使用彩色标签：已成交为绿色，等待成交为蓝色，部分成交和待核对为琥珀色，已撤单和已拒绝为红色，已结束和已关闭为中性色。买卖方向使用涨跌色。
 
 ### Confirmation Dialogs
 
-[共享 Dialog](ui/src/components/Dialog.jsx) 以原生 `showModal` 打开，背景隔离、焦点限制在对话框内，关闭后恢复触发焦点。Escape 与遮罩点击遵守调用方的取消权限，不能绕过正在提交时的锁。最大宽度为 (540px)，桌面左右保留 (24px)，手机保留 (16px)；确认文字与真实账户和操作范围保持相邻。
+[共享 Dialog](ui/src/components/Dialog.jsx) 以原生 `showModal` 打开。提交模拟订单前显示委托笔数和买入、卖出的估算金额。「关闭已撤单/拒单」要求勾选「已在券商端核对」后才能确认。
 
-### Account Candles
+### Status Bar Preferences
 
-净资产 K 线属于账户内容；周期选择与当前观测读数相邻，形成中的柱体使用降低透明度 (0.72)。缺失时段不补齐，单点显示横线；时间周期明确标注美东时间。图表保留键盘选择与数值表入口，读数来源约束见 [candle tests](ui/src/account_candles.test.js)。
+顶栏的「绿涨 / 红涨」与「深色 / 浅色」两组切换按钮写入 `localStorage`。存储不可用时使用默认值，页面照常显示。
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** 沿四层样式扩展，共享令牌和基础控件，不恢复上轮页面皮肤。
-- **Do** 保持模块身份、状态、来源、时间及不可用原因在对应内容旁。
-- **Do** 用真实状态 helper 与账户口径驱动标签、数字和可用操作。
-- **Do** 让手机导航、列表和表单按可用宽度重排，宽表格在自身容器内滚动。
-- **Do** 保持实例、单策略计划与交易后台的状态和操作边界可辨。
+- **Do** 新增颜色时先在 `tokens.css` 中为深色和浅色两套主题都定义令牌。
+- **Do** 数字一律使用等宽字体；未知值显示「—」，不显示为零。
+- **Do** 盈亏与买卖方向使用 `gain` / `loss`，系统状态使用 `success` / `warning` / `danger`。
+- **Do** 保持模块身份、状态、来源、时间及不可用原因与对应内容相邻。
 
 ### Don't:
 
-- **Don't** 把未知持仓、现金或执行时间显示成零或已确认状态。
-- **Don't** 将实例资金比例换算为推测的金额，或将净资产 K 线描述为已核实收益。
-- **Don't** 用营销标题、装饰指标、厚重面板或无意义动画增加视觉噪音。
-- **Don't** 让布局更改隐藏有效运行或改变现有交易确认与守卫。
-- **Don't** 宣称 fallback 已通过 Impeccable 引擎门槛、自动检测或字体目录审核。
+- **Don't** 在样式或组件中直接写十六进制颜色，否则主题切换会失效。
+- **Don't** 用颜色单独表达状态；标签与提示必须同时给出文字。
+- **Don't** 让版式改动隐藏有效运行，或改变现有的交易确认与守卫。

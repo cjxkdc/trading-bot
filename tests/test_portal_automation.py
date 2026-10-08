@@ -237,6 +237,30 @@ class PortalAutomationTests(unittest.TestCase):
         self.assertEqual(self.service.automation.data['cycles'][broker+':2026-09']['status'],'closed')
         self.assertEqual([args[1] for args,_ in self.calls],['status','resolve-remainder'])
 
+    def test_terminal_closure_requires_exact_account_and_disabled_plan(self):
+        for confirmation in (None, 'some-other-broker'):
+            reply=self.client.post('/api/jobs',json={'action':'close-terminal','confirmation':confirmation})
+            self.assertEqual(reply.status_code,409)
+        self.assertEqual(self.calls,[])
+        self.arm()
+        reply=self.client.post('/api/jobs',json={'action':'close-terminal','confirmation':self.service.broker_id})
+        self.assertEqual(reply.status_code,409)
+        self.assertNotIn('close-terminal',[args[1] for args,_ in self.calls])
+
+    def test_terminal_closure_closes_cycle_without_rearming(self):
+        self.arm()
+        broker=self.service.broker_id
+        self.service.automation.data['cycles'][broker+':2026-09']={'broker_id':broker,'status':'blocked'}
+        self.service.automation.disable()
+        self.response={'status':'complete','message':'Terminal orders closed',
+                       'recovery_state':'complete','details':{'closed':1}}
+        reply=self.client.post('/api/jobs',json={'action':'close-terminal','confirmation':broker})
+        self.assertEqual(reply.status_code,200,reply.text)
+        self.finish()
+        self.assertFalse(self.service.automation.data['enabled'])
+        self.assertEqual(self.service.automation.data['cycles'][broker+':2026-09']['status'],'closed')
+        self.assertEqual([args[1] for args,_ in self.calls],['status','close-terminal'])
+
 
 if __name__ == '__main__':
     unittest.main()

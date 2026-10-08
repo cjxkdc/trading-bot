@@ -158,6 +158,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
             if value != {'confirmation': ident}:
                 raise PortalError('请确认结束未提交余单；已成交持仓会保留。')
             return service.strategy_instance_job(ident, 'strategy-resolve')
+        if action == 'close-terminal':
+            if value != {'confirmation': ident}:
+                raise PortalError('请确认已在券商端核对撤单或拒单，再关闭这些委托。')
+            return service.strategy_instance_job(ident, 'strategy-close-terminal')
         if action in {'check', 'preview', 'reconcile'}:
             if value:
                 raise PortalError('检查不接受订单参数。')
@@ -299,6 +303,8 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
             raise PortalError('请先核对预览并确认当前账户模块。')
         if action == 'resolve-remainder' and value.get('confirmation') != service.broker_id:
             raise PortalError('请明确确认当前模拟账户，并确认结束尚未提交的余单。')
+        if action == 'close-terminal' and value.get('confirmation') != service.broker_id:
+            raise PortalError('请明确确认当前模拟账户，并确认已在券商端核对撤单或拒单。')
         return service.start(action)
 
     @app.post('/api/data/settings')

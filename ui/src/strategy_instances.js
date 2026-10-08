@@ -34,6 +34,14 @@ export function latestInstancePreview(jobs, item) {
     value.research_only === true && value.execution_ready === false ? value : null;
 }
 
+// Cancelled/rejected orders found by the latest reconciliation of this instance's account batch.
+export function terminalOrderCount(jobs, item) {
+  const latest = jobs?.find(x => ['strategy-reconcile', 'strategy-resolve', 'strategy-close-terminal'].includes(x.action)
+    && x.instance_id === item.id && x.finished_at);
+  const count = latest?.action === 'strategy-reconcile' ? Number(latest.result?.details?.terminal) : 0;
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
 export function budgetSummary(items, brokerId) {
   return items.filter(x => x.broker_id === brokerId && (x.enabled || x.positions?.length))
     .reduce((sum, x) => sum + Number(x.budget), 0);

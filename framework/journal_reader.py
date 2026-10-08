@@ -28,7 +28,7 @@ class JournalReader:
             raise JournalReadError('账户账本无法核对，请保留原文件并检查。') from None
 
     def has_unresolved(self):
-        return bool(self._rows("SELECT 1 FROM intents WHERE status NOT IN ('filled','cancelled','rejected','abandoned') LIMIT 1"))
+        return bool(self._rows("SELECT 1 FROM intents WHERE status NOT IN ('filled','cancelled','rejected','abandoned','closed') LIMIT 1"))
 
     @staticmethod
     def _valid_ticker(value):

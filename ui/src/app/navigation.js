@@ -1,10 +1,10 @@
 export const navigation = [
-  { id: 'overview', label: '总览', icon: 'grid' },
-  { id: 'runs', label: '策略运行', icon: 'clock' },
-  { id: 'account', label: '账户', icon: 'briefcase' },
-  { id: 'modules', label: '模块配置', icon: 'layers' },
-  { id: 'research', label: '研究', icon: 'chart', secondary: true },
-  { id: 'system', label: '系统', icon: 'server', secondary: true },
+  { id: 'overview', label: '总览', caption: 'Dashboard', icon: 'grid' },
+  { id: 'runs', label: '策略运行', caption: 'Strategy Runs', icon: 'clock' },
+  { id: 'account', label: '账户', caption: 'Portfolio', icon: 'briefcase' },
+  { id: 'modules', label: '模块配置', caption: 'Algorithm Lab', icon: 'layers' },
+  { id: 'research', label: '研究', caption: 'Backtests', icon: 'chart', secondary: true },
+  { id: 'system', label: '系统', caption: 'System', icon: 'server', secondary: true },
 ];
 
 export const sections = {

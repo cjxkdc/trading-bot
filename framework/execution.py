@@ -92,10 +92,12 @@ class Executor:
                 raise ExecutionBlocked('Journal belongs to another account')
             batches.append({'execution_day': cycle.rsplit(':', 1)[1], 'statuses': counts,
                             'orders': sum(counts.values()), 'complete': not (set(counts)-{'filled'}),
-                            'resolved': not (set(counts)-{'filled','abandoned'}),
-                            'abandoned': counts.get('abandoned',0)})
+                            'resolved': not (set(counts)-{'filled','abandoned','closed'}),
+                            'abandoned': counts.get('abandoned',0), 'closed': counts.get('closed',0)})
         return {'recovery_state': state, 'orders': items, 'batches': batches,
-                'abandoned': sum(b['abandoned'] for b in batches), 'queried': queried, 'submitted': 0}
+                'abandoned': sum(b['abandoned'] for b in batches), 'closed': sum(b['closed'] for b in batches),
+                'terminal': sum(item['status'] in {'cancelled', 'rejected'} for item in items),
+                'queried': queried, 'submitted': 0}
 
     def close_unsubmitted(self):
         """Explicitly close unclaimed remainders; no broker cancellation or submission."""
@@ -108,6 +110,42 @@ class Executor:
             count = self.journal.abandon_planned(self.broker.account().account_id)
             report = self._reconcile_locked()
             return dict(report, newly_abandoned=count)
+
+    def close_terminal(self):
+        """Explicitly retire broker-confirmed cancelled/rejected orders after a human check.
+
+        Unknown, accepted, pending or partial orders still block. Each terminal
+        order the broker acknowledged is queried again and must report the same
+        terminal status and fill; nothing is cancelled, resubmitted or repriced.
+        """
+        if self.broker.mode != 'broker_paper' or getattr(self.broker, 'read_only', False) is not True:
+            raise ExecutionBlocked('Closing terminal orders requires a read-only paper connection')
+        with self.journal.exclusive():
+            report = self._reconcile_locked()
+            statuses = {item['status'] for item in report['orders']}
+            if statuses - {'filled', 'planned', 'cancelled', 'rejected'} or self.broker.open_orders():
+                raise ExecutionBlocked('Unknown, pending or partial orders must be reconciled before closing')
+            if not statuses & {'cancelled', 'rejected'}:
+                raise ExecutionBlocked('No cancelled or rejected order needs closing')
+            for _, order, status in self.journal.unfinished_orders():
+                if status not in {'cancelled', 'rejected'}:
+                    continue
+                _, saved = self.journal.status(order)
+                if saved is None or saved.status != status:
+                    raise ExecutionBlocked('Terminal order has no consistent recorded broker state')
+                if not saved.broker_id:
+                    if not self.journal.rejected_before_transmission(order):
+                        raise ExecutionBlocked('Terminal order lacks broker acknowledgement or pre-transmission proof')
+                    continue  # Proven pre-transmission rejection; the broker never received it.
+                result = self.broker.query(order.client_id)
+                if (result.client_id != order.client_id or result.status != saved.status
+                        or amount(result.filled_quantity) != saved.filled_quantity
+                        or result.broker_id != saved.broker_id
+                        or result.average_price != saved.average_price or result.fees != saved.fees):
+                    raise ExecutionBlocked('Broker no longer confirms the recorded terminal order state')
+            counts = self.journal.close_terminal(self.broker.account().account_id)
+            report = self._reconcile_locked()
+            return dict(report, newly_closed=counts['closed'], newly_abandoned=counts['abandoned'])
 
     def run(self, decision, quotes, now, *, approved_orders=None, expected_account=None,
             recover=False, before_submit=None):
@@ -178,7 +216,7 @@ class Executor:
                 raise ExecutionBlocked('Recovery orders differ from the frozen batch')
             for order in frozen_orders:
                 status, _ = self.journal.status(order)
-                if status not in {'planned', 'filled', 'cancelled', 'rejected', 'abandoned'}:
+                if status not in {'planned', 'filled', 'cancelled', 'rejected', 'abandoned', 'closed'}:
                     self._reconcile(order, self.broker.query(order.client_id), allow_pending=True)
             account = self._recovered_account(expected_account, frozen_orders)
         if frozen is None:
@@ -201,8 +239,8 @@ class Executor:
             status, _ = self.journal.status(order)
             if status == "filled":
                 continue
-            if status == 'abandoned':
-                raise ExecutionBlocked('Unsubmitted intent was explicitly abandoned; never resume this batch')
+            if status in {'abandoned', 'closed'}:
+                raise ExecutionBlocked(f'Intent was explicitly {status}; never resume this batch')
             if status != "planned":
                 self._settle(order, self.broker.query(order.client_id))
                 continue

@@ -94,7 +94,7 @@ test('a current account check is distinct from an old automatic execution failur
     result: { recovery_state: 'ready', details: { orders: [{ status: 'filled' }, ...Array.from({length: 15}, () => ({status: 'planned'}))] } } };
   const other = { ...current, broker: 'b', status: 'complete', finished_at: '2026-10-07T10:40:00Z', result: { recovery_state: 'complete' } };
   assert.deepEqual(automationOrderCheck(plan, [old, other, current], 'b'), {
-    at: current.finished_at, title: '最近订单核对', message: '核对通过 · 15 笔未提交计划',
+    at: current.finished_at, title: '最近订单核对', message: '核对通过 · 15 笔未提交计划', terminal: 0,
   });
   assert.equal(plan.last_run.message, 'old failure');
   assert.equal(automationOrderCheck({...plan, binding: {}}, [current], 'a'), null);
@@ -107,9 +107,24 @@ test('a later failed check or remainder resolution replaces earlier check eviden
   assert.equal(automationOrderCheck(ready, [passed, failed], 'a').message, failed.message);
   const closed = {...failed, action: 'resolve-remainder', status: 'complete', finished_at: '2026-10-07T10:45:00Z', result: {recovery_state: 'complete'}};
   assert.deepEqual(automationOrderCheck(ready, [passed, closed, failed], 'a'), {
-    at: closed.finished_at, title: '最近余单处理', message: '核对通过 · 无未完成委托',
+    at: closed.finished_at, title: '最近余单处理', message: '核对通过 · 无未完成委托', terminal: 0,
   });
   const unconfirmed = {...closed, action: 'reconcile', message: 'needs verification', result: {}};
   assert.equal(automationOrderCheck(ready, [unconfirmed], 'a').message, unconfirmed.message);
   assert.equal(automationOrderCheck(ready, [{...passed, finished_at: null}, {...passed, finished_at: 'invalid'}], 'a'), null);
+});
+
+test('only a reconciliation that found cancelled or rejected orders offers closing them', () => {
+  const blocked = { action: 'reconcile', broker: 'a', status: 'paused', finished_at: '2026-10-07T10:50:00Z', message: 'blocked',
+    result: { recovery_state: 'blocked', details: { terminal: 2, orders: [{ status: 'cancelled' }, { status: 'rejected' }] } } };
+  assert.equal(automationOrderCheck(ready, [blocked], 'a').terminal, 2);
+  const closedTerminal = { ...blocked, action: 'close-terminal', status: 'complete', finished_at: '2026-10-07T10:55:00Z', result: { recovery_state: 'complete', details: { terminal: 0 } } };
+  const latest = automationOrderCheck(ready, [blocked, closedTerminal], 'a');
+  assert.equal(latest.title, '最近关闭撤单/拒单');
+  assert.equal(latest.terminal, 0);
+  const plan = { enabled: false, status: 'paused' };
+  const base = { online: true, runtimeRunning: true, reconcileReady: true };
+  assert.equal(automationControls(plan, { ...base, closeTerminalReady: true }).canCloseTerminal, true);
+  assert.equal(automationControls(plan, { ...base, closeTerminalReady: false }).canCloseTerminal, false);
+  assert.equal(automationControls({ ...plan, enabled: true }, { ...base, closeTerminalReady: true }).canCloseTerminal, false);
 });

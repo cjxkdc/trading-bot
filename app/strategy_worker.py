@@ -318,9 +318,10 @@ def reconcile(root, cycle_path, progress, *, close=False):
     registry = ModuleRegistry(root)
     control = registry.control('broker', cycle['broker_id'])
     cfg = registry.configuration(cycle['broker_id'])
-    from app.paper_recovery import reconcile_orders, close_unsubmitted
+    from app.paper_recovery import reconcile_orders, close_unsubmitted, close_terminal
     if close:
-        close_unsubmitted(control=control, policy=policy_from_config(cfg), fees=fees_from_config(cfg))
+        closing = close_terminal if close == 'terminal' else close_unsubmitted
+        closing(control=control, policy=policy_from_config(cfg), fees=fees_from_config(cfg))
     report = reconcile_orders(control=control, policy=policy_from_config(cfg), fees=fees_from_config(cfg))
     if report.get('recovery_state') != 'complete':
         return report
@@ -335,6 +336,7 @@ def reconcile(root, cycle_path, progress, *, close=False):
     cycle.update(phase='complete', book=book)
     save(path, cycle)
     return {'status': 'complete', 'book': book, 'message': '已核对成交与持仓归属，实例保持停止。' if not close else
+            '已撤单或拒单的委托已关闭，归属按已确认实际持仓更新；未补单，不代表组合已达到目标。' if close == 'terminal' else
             '未提交余单已结束，归属按已确认实际持仓更新；不代表组合已达到目标。'}
 
 
@@ -353,6 +355,8 @@ def dispatch(root, action, *, instance=None, cycle_path=None, progress=lambda me
             return reconcile(root, cycle_path, progress)
         if action == 'strategy-resolve':
             return reconcile(root, cycle_path, progress, close=True)
+        if action == 'strategy-close-terminal':
+            return reconcile(root, cycle_path, progress, close='terminal')
         raise ControlError('未知策略运行操作。')
     except ControlError as exc:
         return dict(failure_details(exc, action), status='blocked' if action in {'strategy-check', 'strategy-preview'} else 'paused', message=str(exc))

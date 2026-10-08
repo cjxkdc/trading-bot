@@ -288,6 +288,145 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.journal.status(self.orders[1])[0],'abandoned')
         self.assertEqual(self.proxy.submit.call_count,1)
 
+    def terminal(self, status='cancelled', filled=D(0)):
+        self.proxy.submit.side_effect = lambda o: OrderState(o.client_id, 'order-1', status, filled,
+                                                             D(100) if filled else D(0))
+        with self.assertRaises(ExecutionBlocked): self.run_batch()
+        state = self.journal.status(self.orders[0])[1]
+        self.proxy.query.return_value = state
+        self.proxy.read_only = True
+        return state
+
+    def test_confirmed_terminal_orders_close_with_audit_and_unblock_the_next_session(self):
+        import json
+        state = self.terminal('cancelled', D(2))
+        self.assertEqual(Executor(self.proxy, self.journal, self.policy, self.fees).reconcile()['terminal'], 1)
+        report = Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual((report['newly_closed'], report['newly_abandoned']), (1, 1))
+        self.assertEqual(report['recovery_state'], 'complete')
+        self.assertTrue(report['batches'][0]['resolved'])
+        self.assertEqual(report['batches'][0]['closed'], 1)
+        # The broker's own terminal state and partial fill are kept verbatim.
+        self.assertEqual(self.journal.status(self.orders[0]), ('closed', state))
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'abandoned')
+        self.assertFalse(JournalReader(self.jpath).has_unresolved())
+        audit = self.journal.db.execute('SELECT action,body FROM execution_audit').fetchall()
+        self.assertEqual([row[0] for row in audit], ['close_terminal'])
+        self.assertEqual([i['status'] for i in json.loads(audit[0][1])['intents']], ['cancelled', 'planned'])
+        self.proxy.read_only = False
+        self.proxy.submit.side_effect = None  # Later sessions reach the paper broker again.
+        for recovering in (False, True):
+            with self.assertRaisesRegex(ExecutionBlocked, 'closed'):
+                self.run_batch(recover=recovering)
+        future = NOW + timedelta(days=1)
+        self.broker.now = future
+        self.broker.quotes = {s: replace(q, as_of=future) for s, q in self.quotes.items()}
+        self.proxy.execution_time.return_value = future
+        self.assertEqual(Executor(self.proxy, self.journal, self.policy, self.fees).run(
+            decision(day='2026-09-02'), self.broker.quotes, future)['status'], 'complete')
+        self.assertEqual(self.proxy.submit.call_count, 3)
+
+    def test_close_terminal_refuses_ambiguous_changed_or_unconfirmed_states(self):
+        self.terminal('rejected')
+        executor = lambda: Executor(self.proxy, self.journal, self.policy, self.fees)
+        self.proxy.read_only = False
+        with self.assertRaisesRegex(ExecutionBlocked, 'read-only'):
+            executor().close_terminal()
+        self.proxy.read_only = True
+        self.proxy.open_orders.return_value = ('foreign-order',)
+        with self.assertRaisesRegex(ExecutionBlocked, 'reconciled'):
+            executor().close_terminal()
+        self.proxy.open_orders.return_value = ()
+        saved = self.journal.status(self.orders[0])[1]
+        self.proxy.query.return_value = replace(saved, broker_id='order-2')
+        with self.assertRaisesRegex(ExecutionBlocked, 'no longer confirms'):
+            executor().close_terminal()
+        for status in ('unknown', 'accepted', 'pending', 'partial'):
+            quantity = D(2) if status == 'partial' else D(0)
+            state = OrderState(self.orders[0].client_id, 'order-1', status, quantity, D(100) if quantity else D(0))
+            self.journal.db.execute('UPDATE intents SET status=?,state=? WHERE id=?',
+                                    (status, packed(asdict(state)), state.client_id))
+            self.journal.db.commit()
+            self.proxy.query.return_value = state
+            with self.subTest(status=status), self.assertRaises(ExecutionBlocked):
+                executor().close_terminal()
+        self.assertEqual([self.journal.status(o)[0] for o in self.orders], ['partial', 'planned'])
+        self.assertIsNone(self.journal.db.execute("SELECT name FROM sqlite_master WHERE name='execution_audit'").fetchone())
+        self.assertEqual(self.proxy.submit.call_count, 1)
+
+    def test_close_terminal_needs_a_terminal_order_and_skips_query_for_presend_rejection(self):
+        self.freeze_without_transmission()
+        with self.assertRaisesRegex(ExecutionBlocked, 'No cancelled'):
+            Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.proxy.read_only = False
+        self.proxy.submit.side_effect = SubmissionRejected('pre-send')
+        self.proxy.reset_mock()
+        with self.assertRaises(SubmissionRejected): self.run_batch()
+        self.proxy.read_only = True
+        report = Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual(report['newly_closed'], 1)
+        self.proxy.query.assert_not_called()
+
+    def test_blocked_message_offers_terminal_closure_only_when_nothing_is_ambiguous(self):
+        @contextmanager
+        def session(fees): yield self.proxy, self.journal
+        control = SimpleNamespace(mode='broker_paper', state_dir=self.root, reconciliation_session=session)
+        self.terminal('cancelled')
+        self.assertIn('关闭已撤单/拒单', reconcile_orders(control=control, policy=self.policy, fees=self.fees)['message'])
+        self.journal.db.execute("UPDATE intents SET state=NULL,status='unknown' WHERE id=?", (self.orders[0].client_id,))
+        self.journal.db.commit()
+        self.proxy.query.return_value = OrderState(self.orders[0].client_id, 'order-1', 'unknown', D(0))
+        self.assertNotIn('关闭已撤单/拒单', reconcile_orders(control=control, policy=self.policy, fees=self.fees)['message'])
+
+    def test_close_terminal_requires_recorded_presend_proof_when_no_broker_id_exists(self):
+        self.freeze_without_transmission()
+        for status in ('rejected', 'cancelled'):
+            state = OrderState(self.orders[0].client_id, None, status, D(0))
+            self.journal.save(state)
+            with self.subTest(status=status), self.assertRaisesRegex(ExecutionBlocked, 'proof'):
+                Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+            self.assertEqual(self.journal.status(self.orders[0])[0], status)
+            self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+        self.proxy.submit.assert_not_called()
+        self.proxy.query.assert_not_called()
+
+    def test_close_terminal_presend_proof_survives_restart_but_missing_proof_blocks(self):
+        self.proxy.submit.side_effect = SubmissionRejected('pre-send')
+        with self.assertRaises(SubmissionRejected): self.run_batch()
+        self.journal.close()
+        self.journal = Journal(self.jpath)
+        self.proxy.read_only = True
+        self.assertTrue(self.journal.rejected_before_transmission(self.orders[0]))
+        self.journal.db.execute("DELETE FROM execution_audit WHERE action='reject_before_transmission'")
+        self.journal.db.commit()
+        with self.assertRaisesRegex(ExecutionBlocked, 'proof'):
+            Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual(self.journal.status(self.orders[0])[0], 'rejected')
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+
+    def test_close_terminal_checks_price_fees_and_fill_before_retiring(self):
+        saved = self.terminal('cancelled', D(2))
+        for changed in (replace(saved, average_price=D(99)), replace(saved, fees=D(1)),
+                        replace(saved, filled_quantity=D(3))):
+            self.proxy.query.return_value = changed
+            with self.subTest(state=changed), self.assertRaisesRegex(ExecutionBlocked, 'no longer confirms'):
+                Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual(self.journal.status(self.orders[0]), ('cancelled', saved))
+        self.assertEqual(self.journal.status(self.orders[1])[0], 'planned')
+        self.assertEqual(self.proxy.submit.call_count, 1)
+
+    def test_close_terminal_accepts_another_order_just_confirmed_filled(self):
+        saved = self.terminal('cancelled')
+        order = self.orders[1]
+        self.journal.save(OrderState(order.client_id, 'order-2', 'unknown', D(0)))
+        filled = OrderState(order.client_id, 'order-2', 'filled', order.quantity, D(100))
+        self.proxy.query.side_effect = lambda client_id: saved if client_id == saved.client_id else filled
+        result = Executor(self.proxy, self.journal, self.policy, self.fees).close_terminal()
+        self.assertEqual((result['newly_closed'], result['newly_abandoned']), (1, 0))
+        self.assertEqual(result['recovery_state'], 'complete')
+        self.assertEqual(self.journal.status(order), ('filled', filled))
+        self.assertEqual(self.proxy.submit.call_count, 1)
+
 
 class CalendarTests(unittest.TestCase):
     def setUp(self):

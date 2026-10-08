@@ -234,14 +234,15 @@ class PortalService:
         with self.lock:
             self.idle()
             item = self.strategy_instances.get(ident)
-            cycle = self.strategy_instances.pending_cycle(ident) if action in {'strategy-reconcile', 'strategy-resolve'} else None
-            if action in {'strategy-reconcile', 'strategy-resolve'} and cycle is None:
+            closing = {'strategy-reconcile', 'strategy-resolve', 'strategy-close-terminal'}
+            cycle = self.strategy_instances.pending_cycle(ident) if action in closing else None
+            if action in closing and cycle is None:
                 raise PortalError('此实例没有未核对的账户批次。')
-            if action not in {'strategy-check', 'strategy-preview', 'strategy-reconcile', 'strategy-resolve'}:
+            if action not in {'strategy-check', 'strategy-preview'} | closing:
                 raise PortalError('未知策略实例检查。')
             if action == 'strategy-preview' and item['broker_id'] in self.strategy_instances.data['pending']:
                 raise PortalError('先核对未完成批次，再按已确认的持仓预览。')
-            if action == 'strategy-resolve' and any(x['enabled'] for x in self.strategy_instances.data['instances'] if x['broker_id'] == item['broker_id']):
+            if action in {'strategy-resolve', 'strategy-close-terminal'} and any(x['enabled'] for x in self.strategy_instances.data['instances'] if x['broker_id'] == item['broker_id']):
                 raise PortalError('先停止此账户的所有实例，再结束未提交余单。')
             return self._managed_job(action, ident=ident, cycle=cycle)
 
@@ -685,10 +686,11 @@ class PortalService:
                 context_issue=context_issue, strategy_issue=strategy_issue, authorization=authorization)
             if self.automation.data['enabled']:
                 actions['execute'] = {'enabled': False, 'blockers': [], 'message': '自动运行已开启；手动下单前请先关闭自动运行。', 'next_action': None}
-                actions['resolve-remainder'] = {'enabled': False, 'blockers': [], 'message': '请先关闭自动运行，再处理未提交余单。', 'next_action': None}
+                for action in ('resolve-remainder', 'close-terminal'):
+                    actions[action] = {'enabled': False, 'blockers': [], 'message': '请先关闭自动运行，再处理未提交余单。', 'next_action': None}
             managed = self.managed_account(self.broker_id)
             if managed:
-                for action in ('execute', 'resolve-remainder'):
+                for action in ('execute', 'resolve-remainder', 'close-terminal'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
@@ -712,7 +714,7 @@ class PortalService:
         atomic_json(self.folder / 'jobs' / (job['id'] + '.json'), self._public(job))
         if job.get('finished_at') and job['action'] != 'observe':
             failed = job['status'] in {'blocked','paused','interrupted'}
-            if failed or job['action'] in {'refresh','execute','reconcile','automation','strategy-cycle','strategy-reconcile','strategy-resolve'}:
+            if failed or job['action'] in {'refresh','execute','reconcile','automation','strategy-cycle','strategy-reconcile','strategy-resolve','strategy-close-terminal','close-terminal'}:
                 self.monitor.emit('job:'+job['id'],job['message'],'error' if failed else 'info','logs',at=job['finished_at'])
 
     def start(self, action, credentials=None):
@@ -832,7 +834,7 @@ class PortalService:
                                                     'checked_at':now()}
                     if action == 'execute':
                         self.account = None  # Do not display pre-trade holdings as current.
-                    if action in {'reconcile', 'resolve-remainder'}:
+                    if action in {'reconcile', 'resolve-remainder', 'close-terminal'}:
                         self.automation.reconciled(broker_id, result)
                     self.active = None
                     self._save_job(job)

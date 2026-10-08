@@ -1,29 +1,104 @@
-:root {
+/* Trading-terminal tokens. Dark is the default; light keeps the same hierarchy.
+   Market direction colours are separate from status colours so the
+   red-up / green-down convention can be switched without touching alerts. */
+:root, :root[data-theme='dark'] {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
-  color: #202631;
-  background: #ffffff;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  color-scheme: light;
-  --ink: #202631;
-  --secondary: #596272;
-  --border: #e1e5eb;
-  --border-strong: #b8c1ce;
-  --surface: #ffffff;
-  --surface-inset: #f5f7fa;
-  --sidebar: #f7f8fa;
-  --accent: #454dc3;
-  --accent-hover: #363da7;
-  --accent-soft: #eeeffb;
-  --success: #28704c;
-  --success-soft: #eff8f2;
-  --warning: #8b560e;
-  --warning-soft: #fff7e8;
-  --danger: #ae343b;
-  --danger-soft: #fff2f2;
-  --radius: 6px;
-  --sidebar-width: 208px;
-  --content-width: 1248px;
+  color-scheme: dark;
+  --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+  --bg: #0b0e14;
+  --sidebar: #0e1219;
+  --surface: #121721;
+  --surface-raised: #182030;
+  --surface-inset: #0f141c;
+  --surface-hover: #1b2333;
+  --field: #0f141c;
+  --ink: #e4e8f0;
+  --body-ink: #c3cad7;
+  --secondary: #8b95a8;
+  --faint: #5f6a7e;
+  --border: #222a38;
+  --border-strong: #323c4e;
+  --border-hover: #4a5568;
+  --accent: #f5a623;
+  --accent-hover: #ffb845;
+  --accent-ink: #1b1204;
+  --accent-soft: rgba(245, 166, 35, .12);
+  --accent-border: rgba(245, 166, 35, .38);
+  --info: #5aa2ff;
+  --info-soft: rgba(90, 162, 255, .12);
+  --info-border: rgba(90, 162, 255, .35);
+  --success: #2ebd85;
+  --success-soft: rgba(46, 189, 133, .12);
+  --warning: #e9c15b;
+  --warning-soft: rgba(233, 193, 91, .1);
+  --warning-border: rgba(233, 193, 91, .35);
+  --danger: #f6465d;
+  --danger-soft: rgba(246, 70, 93, .12);
+  --danger-border: rgba(246, 70, 93, .38);
+  --gain: #2ebd85;
+  --loss: #f6465d;
+  --switch-knob: #f4f6fa;
+  --shadow: 0 18px 60px rgba(0, 0, 0, .55);
+  --code-keyword: #ff9d5c;
+  --code-string: #9fd88b;
+  --code-number: #f5c26b;
+  --code-comment: #6b778c;
+  --code-function: #7cb7ff;
+  --code-type: #d7a8ff;
+  --radius: 4px;
+  --sidebar-width: 196px;
+  --content-width: 1440px;
 }
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #eef1f5;
+  --sidebar: #ffffff;
+  --surface: #ffffff;
+  --surface-raised: #f5f7fa;
+  --surface-inset: #f7f9fb;
+  --surface-hover: #f0f3f7;
+  --field: #ffffff;
+  --ink: #18202e;
+  --body-ink: #3a4456;
+  --secondary: #5a6476;
+  --faint: #7c8697;
+  --border: #dde2ea;
+  --border-strong: #c3cad6;
+  --border-hover: #98a2b3;
+  --accent: #e8890c;
+  --accent-hover: #f59a22;
+  --accent-ink: #1b1204;
+  --accent-soft: rgba(232, 137, 12, .1);
+  --accent-border: rgba(232, 137, 12, .4);
+  --info: #2a6fdb;
+  --info-soft: rgba(42, 111, 219, .08);
+  --info-border: rgba(42, 111, 219, .3);
+  --success: #12825a;
+  --success-soft: rgba(18, 130, 90, .08);
+  --warning: #9a6200;
+  --warning-soft: rgba(214, 152, 0, .1);
+  --warning-border: rgba(154, 98, 0, .3);
+  --danger: #d02f46;
+  --danger-soft: rgba(208, 47, 70, .07);
+  --danger-border: rgba(208, 47, 70, .3);
+  --gain: #12825a;
+  --loss: #d02f46;
+  --switch-knob: #ffffff;
+  --shadow: 0 18px 60px rgba(20, 28, 43, .18);
+  --code-keyword: #b5520c;
+  --code-string: #2f7d32;
+  --code-number: #9a6200;
+  --code-comment: #7c8697;
+  --code-function: #2a6fdb;
+  --code-type: #8a3fc2;
+}
+
+/* 红涨绿跌：中国内地及港股习惯。 */
+:root[data-updown='cn'] { --gain: var(--danger); --loss: var(--success); }

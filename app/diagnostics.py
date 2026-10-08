@@ -12,9 +12,9 @@ ORDER_FIELDS = {'code', 'trd_side', 'order_type', 'qty', 'price', 'remark', 'trd
                 'currency', 'time_in_force', 'fill_outside_rth', 'session'}
 SOURCE_DIRS = {'app', 'framework', 'brokers', 'platforms', 'data', 'strategies'}
 PHASES = {'offline', 'status', 'observe', 'preview', 'prepare', 'execute', 'refresh', 'data-status',
-          'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder', 'automation',
+          'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder', 'close-terminal', 'automation',
           'strategy-check', 'strategy-preview', 'strategy-refresh', 'strategy-cycle',
-          'strategy-reconcile', 'strategy-resolve', 'worker-transport', 'preflight'}
+          'strategy-reconcile', 'strategy-resolve', 'strategy-close-terminal', 'worker-transport', 'preflight'}
 
 # These keys are exact literals from our own adapters, never vendor response text.
 OPEND_REASONS = {
