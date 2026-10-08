@@ -3,6 +3,7 @@
   "kind": "single",
   "version": "1.0",
   "entrypoint": "strategies.hold:Hold",
-  "description": "买入持有基准",
-  "display_name": "买入持有"
+  "description": "持续持有指定标的，作为被动持有基准。",
+  "display_name": "买入持有",
+  "readme": "HOLD.md"
 }

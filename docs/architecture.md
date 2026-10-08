@@ -104,7 +104,7 @@ QC 结果格式由平台模块解析；框架研究模块只保存归一化指�
 
 2026-09-30 的设计参考包括用户提供的朋友项目、FriesTrader、LEAN、vn.py 和 NautilusTrader。采纳了策略与平台分离、订单意图先记录、未知结果先核对、同策略跨运行方式的思路。
 
-已加入朋友 MOM8 的框架适配版，使用现有 95% 仓位限制和定期配平；详细差异见 [MOM8 说明](../strategies/MOM8.md)。朋友的账户配置没有复制进本项目。AI 新闻判断没有引入默认策略；历史回测依赖的是可在当时获取的数据。参考资料是架构背景，不是对当前平台兼容性或盈利能力的验证：
+MOM8 的规则见 [策略说明](../strategies/MOM8.md)，源码许可见 [第三方声明](THIRD_PARTY_NOTICES.md)。策略仅负责选股与目标权重，调仓计划、数据获取和订单执行由独立模块管理。以下为架构参考资料：
 
 - https://github.com/YizhiSong/FriesTrader
 - https://www.quantconnect.com/docs/v2/writing-algorithms/algorithm-framework/overview

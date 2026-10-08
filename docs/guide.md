@@ -2,7 +2,7 @@
 
 项目按 **券商、数据、策略、框架、回测** 五个模块维护。策略、数据来源和券商分别登记、分别选择。Portal 按模块声明生成选项、参数和操作；公共框架和 QuantConnect 回测接入保持固定。
 
-策略库已加入 [MOM8 · 框架适配版](../strategies/MOM8.md)：全美股动量选 8 只、前 12 名持仓缓冲，沿用 95% 仓位和定期配平。回测入口仍是 QuantConnect；当前研究数据统一选择 Massive，股票范围和字段跟随策略。规则、与朋友原版的区别及数据限制见链接，原有策略不自动切换。
+策略库中的每个模块提供独立的规则、参数和数据说明，见 [策略目录](../strategies/README.md)。选择策略后，在其工作区查看说明、调整参数、开展回测或创建运行实例。
 
 ## Windows 双击启动
 
@@ -55,7 +55,7 @@ Portal 的选择分别由主配置中的 `strategy`、`configs/data_sources.json
 
 主配置为 [configs/portfolio_config.json](../configs/portfolio_config.json)，同时供本地组合入口和 QC 导出读取。默认科技股盈利动量规则仍是：最多 5 只，每只 19%，过去 12 个月营业利润为正，成交额过滤，252 日跳过最近 21 日的动量，同一细分行业最多 2 只。月初调仓由 QC 接入的交易日历安排。
 
-本次没有根据历史收益调优参数。可比较版本见 [策略说明](../strategies/README.md)。`configs/equal_weight_control.json` 是接口演示，不是投资基准。
+组合规则见 [策略目录](../strategies/README.md)。`configs/equal_weight_control.json` 提供按标的标识排序的等权技术对照，不代表全市场等权指数。
 
 - `strategy`：选择策略及其参数。
 - `data`：选择本地行情输入，目前为标准快照文件。
@@ -118,7 +118,7 @@ python -m app.research holdout --data SPY.csv --out runs/experiment-001
 - `broker-status`：默认离线检查 Tiger 配置；加 `--connect` 只查询账户、持仓及未完成订单。
 - `PortfolioContext`：策略可以选择接收冻结的持仓名单，为排名缓冲留出接口；当前策略未增加新规则。
 
-具体用法见 [回测流程](../backtests/README.md)、[Tiger 接入](../brokers/README.md) 和 [策略接口](../strategies/README.md)。
+具体用法见 [回测流程](../backtests/README.md)、[Tiger 接入](../brokers/README.md) 和 [策略接口](STRATEGY_MODULES.md)。
 
 ## v0.5：Tiger 模拟券商
 

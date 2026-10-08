@@ -4,7 +4,7 @@
   "version": "1.0",
   "entrypoint": "strategies.equal_weight:EqualWeight",
   "input_schema": "us_technology_daily_v1",
-  "description": "按稳定标识选取的等权对照插件，仅用于框架验证",
+  "description": "按稳定标的标识排序取样，以固定等权构建技术对照组合。",
   "display_name": "等权对照",
   "parameters": {
     "count": {
@@ -38,5 +38,6 @@
       "industry",
       "dollar_volumes"
     ]
-  }
+  },
+  "readme": "EQUAL_WEIGHT.md"
 }

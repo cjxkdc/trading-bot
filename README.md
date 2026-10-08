@@ -87,7 +87,7 @@ GitHub 提供源码，不包含 exe、已构建网页或 Python 虚拟环境。�
 - [完整使用指南](docs/guide.md) · [架构](docs/architecture.md)
 - [配置索引](configs/README.md) · [命令行入口](app/README.md)
 - [Portal 安装与模块接入](portal/README.md) · [Python 依赖](requirements/README.md)
-- [Massive 接入](data/MASSIVE.md) · [MOM8 规则与适配差异](strategies/MOM8.md)
+- [Massive 接入](data/MASSIVE.md) · [策略目录](strategies/README.md) · [策略模块开发](docs/STRATEGY_MODULES.md)
 - [第三方声明](docs/THIRD_PARTY_NOTICES.md)
 - [AWS 与远程 Portal](docs/SERVER.md) · [桌面 / 服务器发布包](deploy/README.md)
 - [账户表现、监控通知与统一调仓计划](docs/OBSERVABILITY.md)
