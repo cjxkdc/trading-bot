@@ -12,7 +12,7 @@ from app.control_contracts import ControlError, project_path
 from framework.configuration import load_config, normalize_config
 from framework.decisions import digest
 from app.strategy_documentation import strategy_documentation
-from app.execution_policy import ACCOUNT_ENVIRONMENTS, CURRENT_EXECUTION_POLICY
+from app.execution_policy import ACCOUNT_ENVIRONMENTS, CURRENT_EXECUTION_POLICY, load_execution_policy
 
 # Compatibility names for callers; policy and environment definitions have one owner.
 ALLOWED_MODES = CURRENT_EXECUTION_POLICY.allowed_environments
@@ -93,7 +93,7 @@ class ModuleRegistry:
         if enabled:
             cls = load_class(control['entrypoint'], {'data': 'data', 'broker': 'brokers'}[kind])
             methods = ({'collect': ('collect',), 'inspect': ('inspect',), 'configure': ('configure',),
-                        'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',)}
+                        'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',), 'execution_signal': ('execution_signal',)}
                        if kind == 'data' else {'inspect': ('inspect',), 'execute': ('session',),
                                              'prepare': ('observe_account', 'observe_quotes'),
                                              'calendar': ('trading_sessions',), 'reconcile': ('reconciliation_session',),
@@ -108,7 +108,33 @@ class ModuleRegistry:
                 'mode_label': MODE_LABELS.get(mode, ''), 'enabled': enabled,
                 'authentication': control.get('authentication', {'mode': 'local' if mode == 'paper' else 'external',
                     'title': '本地回放' if mode == 'paper' else '券商客户端或 API 配置'}),
-                'reason': None if enabled else CURRENT_EXECUTION_POLICY.rejection_reason(mode)}
+                'reason': None if enabled else CURRENT_EXECUTION_POLICY.rejection_reason(mode),
+                **(self.execution_descriptor(ident, profile, entry) if kind == 'broker' and enabled else {})}
+
+    def execution_descriptor(self, ident, profile, entry):
+        mode = entry['control'].get('mode')
+        cls = load_class(entry['control']['entrypoint'], 'brokers')
+        adapter = cls(self.root, profile, entry)
+        adapter.instance_id = ident
+        try:
+            reference_method = getattr(adapter, 'execution_account_reference', None)
+            if mode == 'live' and not callable(reference_method):
+                raise ControlError('实盘模块必须提供独立验证的账户身份。')
+            account_ref = reference_method() if mode == 'live' else None
+            reason = load_execution_policy(self.root).execution_rejection(mode, ident, account_ref)
+        except (ControlError, ValueError, RuntimeError):
+            reason = '账户绑定或服务器执行授权尚未完成；账户检查仍可使用。'
+        if 'execute' not in entry['control'].get('capabilities', []):
+            reason = '此账户模块只提供读取能力，未声明订单执行。'
+        context = adapter.execution_context() if callable(getattr(adapter, 'execution_context', None)) else None
+        return {'execution_enabled': reason is None, 'execution_reason': reason,
+                'execution_context': context,
+                'order_capabilities': deepcopy(entry['control'].get('order_capabilities', {}))}
+
+    def require_execution(self, broker_id):
+        control = self.control('broker', broker_id)
+        control.require_execution()
+        return control
 
     def descriptors(self, kind):
         result = []

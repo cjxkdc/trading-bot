@@ -1,12 +1,12 @@
-"""Provider-neutral paper reconciliation and exact frozen-batch continuation."""
+"""Provider-neutral reconciliation and exact frozen-batch continuation."""
 from app.control_contracts import ControlError
 from framework.execution import Executor
 
 
 def reconcile_orders(*, control, policy, fees):
     """Read broker status after a restart or the close; never submit/cancel/reprice."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         return {'status': 'complete', 'recovery_state': 'complete',
                 'message': '尚未创建执行账本，没有本程序的订单需要核对。',
@@ -32,8 +32,8 @@ def reconcile_orders(*, control, policy, fees):
 
 def close_unsubmitted(*, control, policy, fees):
     """Explicit user-confirmed closure; authorization is enforced by the Portal caller."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         raise ControlError('没有执行账本，无法关闭未提交的订单计划。')
     with control.reconciliation_session(fees) as (broker, journal):
@@ -45,8 +45,8 @@ def close_unsubmitted(*, control, policy, fees):
 
 def close_terminal(*, control, policy, fees):
     """Explicit user-confirmed closure of broker-confirmed cancelled/rejected orders."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         raise ControlError('没有执行账本，无需关闭委托。')
     with control.reconciliation_session(fees) as (broker, journal):

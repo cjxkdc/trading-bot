@@ -107,7 +107,9 @@ class ResearchStrategyBindingTests(unittest.TestCase):
         self.assertEqual(state['execution_scope'], CURRENT_EXECUTION_POLICY.public())
         self.assertEqual(state['mode'], state['broker']['mode'])
         self.assertIn('live', state['execution_scope']['known_environments'])
-        self.assertNotIn('live', state['execution_scope']['allowed_environments'])
+        self.assertIn('live', state['execution_scope']['allowed_environments'])
+        self.assertFalse(state['execution_scope']['live_enabled'])
+        self.assertEqual(state['execution_scope']['live_profiles'], [])
 
 
 if __name__ == '__main__':

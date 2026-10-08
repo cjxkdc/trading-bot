@@ -1,20 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { marketSession, newYorkClock } from './market.js';
+import { marketSession, marketClock } from './market.js';
 import { applyPreferences, readPreference, savePreference } from './preferences.js';
 import { relativeTime } from './format.js';
 import { orderDay, orderNeedsAttention, orderStatus, orderSummary, orderTone } from './orders.js';
 
-test('US session follows the New York clock across daylight saving changes', () => {
-  // 2026-07-15 is EDT (UTC-4); 2026-12-15 is EST (UTC-5).
-  assert.equal(marketSession(new Date('2026-07-15T13:00:00Z')).id, 'pre');
-  assert.equal(marketSession(new Date('2026-07-15T13:30:00Z')).id, 'regular');
-  assert.equal(marketSession(new Date('2026-12-15T14:29:00Z')).id, 'pre');
-  assert.equal(marketSession(new Date('2026-12-15T14:30:00Z')).id, 'regular');
-  assert.equal(marketSession(new Date('2026-07-15T20:00:00Z')).id, 'after');
-  assert.equal(marketSession(new Date('2026-07-16T00:00:00Z')).id, 'closed');
-  assert.equal(marketSession(new Date('2026-07-18T15:00:00Z')).label, '周末休市');
-  assert.equal(newYorkClock(new Date('2026-07-15T13:30:05Z')), '09:30:05');
+test('market status comes from a fresh calendar observation and never a US clock guess', () => {
+  const now = new Date('2026-10-10T03:00:00Z');
+  assert.equal(marketSession({status:'open', observed_at:now.toISOString()}, now).label, '交易中');
+  assert.equal(marketSession({status:'closed', observed_at:now.toISOString()}, now).id, 'closed');
+  assert.equal(marketSession({status:'open', observed_at:'2026-10-09T03:00:00Z'}, now).id, 'unknown');
+  assert.equal(marketSession(null, now).id, 'unknown');
+  assert.equal(marketClock(now, 'Asia/Hong_Kong'), '11:00:00');
+  assert.equal(marketClock(new Date('2026-07-15T13:30:05Z'), 'America/New_York'), '09:30:05');
 });
 
 test('display preferences fall back safely when storage is missing, invalid or throws', () => {
@@ -53,7 +51,7 @@ test('order views flag terminal and ambiguous orders and summarise the batch', (
   assert.equal(orderTone('filled'), 'green');
   assert.equal(orderDay('ACC-1:2026-10-06'), '2026-10-06');
   assert.equal(orderDay(undefined), '—');
-  assert.deepEqual(orderSummary([{ side: 'SELL', notional: '1000.5' }, { side: 'BUY', quantity: '3', limit_price: '10' }, { side: 'BUY', notional: 20 }]),
+  assert.deepEqual(orderSummary([{ side: 'SELL', notional: '1000.5' }, { side: 'BUY', quantity: '3', limit_price: '10', contract_multiplier:'1' }, { side: 'BUY', notional: 20 }]),
     { buy: 50, sell: 1000.5, buyCount: 2, sellCount: 1 });
 });
 

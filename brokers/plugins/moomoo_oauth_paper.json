@@ -22,6 +22,18 @@
       "mode": "oauth",
       "entrypoint": "brokers.moomoo_oauth:MoomooAuthorization",
       "title": "券商官网授权 · 只读"
+    },
+    "execution_context": {
+      "market": "US",
+      "timezone": "America/New_York",
+      "currency": "USD",
+      "asset_class": "equity",
+      "instrument_rules": {
+        "quantity_step": "1",
+        "min_quantity": "1",
+        "price_tick": "0.001",
+        "contract_multiplier": "1"
+      }
     }
   }
 }

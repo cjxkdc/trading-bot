@@ -1,7 +1,7 @@
 import { automationSchedule } from './automation.js';
 
 export function runnableBroker(item) {
-  return item.enabled && item.mode === 'broker_paper' &&
+  return item?.enabled === true &&
     ['prepare', 'execute', 'reconcile', 'calendar'].every(capability => item.capabilities?.includes(capability));
 }
 
@@ -10,12 +10,15 @@ export function instanceDraft(state, item, strategyType) {
   if (!item && strategyType && !selected) throw new Error('所选策略已不可用，请返回策略工作区重新选择。');
   const strategy = selected && selected.type !== state.strategy.type ? { ...selected.defaults, type: selected.type } : state.strategy;
   const name = selected?.name || state.strategy_name;
+  const broker = runnableBroker(state.broker) ? state.broker : state.brokers.find(runnableBroker);
+  const context = broker?.execution_context || {};
+  const schedule = { ...(broker?.id === state.broker?.id ? state.automation?.config : {}), ...context.schedule_defaults, timezone: context.timezone || '' };
   return item ? { name: item.name, strategy: { ...item.strategy }, broker_id: item.broker_id,
     source_id: item.source_id, budget: Number(item.budget) * 100, schedule: automationSchedule(item.schedule) } :
     { name: `${name} · 新实例`, strategy: { ...strategy },
-      broker_id: runnableBroker(state.broker) ? state.broker.id : state.brokers.find(runnableBroker)?.id || '',
+      broker_id: broker?.id || '',
       source_id: state.sources.find(x => x.id === state.source && x.capabilities.includes('collect'))?.id || state.sources.find(x => x.enabled && x.capabilities.includes('collect'))?.id || '',
-      budget: 50, schedule: automationSchedule(state.automation?.config) };
+      budget: 50, schedule: automationSchedule(schedule) };
 }
 
 export function instancePayload(draft, fields = []) {

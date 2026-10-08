@@ -3,6 +3,7 @@ import { api } from '../api';
 import { runtimeView } from '../runtime';
 import { isServerDeployment } from '../server';
 import { actions, number } from '../format';
+import { currencyLabel, environmentLabel, executionContext } from '../execution_context';
 import { orderSummary } from '../orders';
 import { Button, Empty, Icon } from '../ui';
 import { usePortalSession } from './usePortalSession';
@@ -80,7 +81,7 @@ export function App({ access, onLogout }) {
     if (file) await act(() => api('snapshot', file, { raw: true }), '快照已导入，可在手动调仓中预览。');
   }
   function requestSubmission() {
-    setDialog({ kind: 'execute', brokerId: state.broker.id, brokerName: state.broker.name, previewAt: state.preview?.created_at, count: state.preview?.orders?.length || 0, totals: orderSummary(state.preview?.orders) });
+    setDialog({ kind: 'execute', brokerId: state.broker.id, brokerName: state.broker.name, environment: environmentLabel(state.broker), currency: currencyLabel(executionContext(state.broker).currency), previewAt: state.preview?.created_at, count: state.preview?.orders?.length || 0, totals: orderSummary(state.preview?.orders, state.preview?.execution_context) });
   }
   const confirmChanged = dialog?.kind === 'execute' && (!state || dialog.brokerId !== state.broker.id || dialog.previewAt !== state.preview?.created_at || !state.actions?.execute?.enabled);
   async function confirm() {
@@ -124,15 +125,15 @@ export function App({ access, onLogout }) {
     {state?.active && <div className="running-strip" role="status"><div><strong>{actions[state.active.action] || state.active.action}</strong><span>{state.active.message}</span></div>{state.active.cancel_available && <Button disabled={pending} onClick={() => act(() => api('cancel-download', {}))}>停止下载</Button>}</div>}
     <PageBoundary resetKey={routeHash(route)}><Suspense fallback={<div className="loading-state" role="status"><div/><div/><p>正在打开页面…</p></div>}>{content()}</Suspense></PageBoundary>
     {dialog && <Dialog labelledBy="confirm-title" canDismiss={!pending} onDismiss={() => setDialog(null)}>
-      <h2 id="confirm-title">{dialog.kind === 'execute' ? '确认提交模拟订单' : '退出整个工作台'}</h2>
+      <h2 id="confirm-title">{dialog.kind === 'execute' ? `确认提交订单 · ${dialog.environment}` : '退出整个工作台'}</h2>
       {dialog.kind === 'execute' && <div className="order-summary">
         <div><span>委托笔数</span><strong>{dialog.count}</strong></div>
         <div><span>卖出 · {dialog.totals.sellCount} 笔</span><strong className="loss">{number(dialog.totals.sell)}</strong></div>
         <div><span>买入 · {dialog.totals.buyCount} 笔</span><strong className="gain">{number(dialog.totals.buy)}</strong></div>
       </div>}
-      <p>{dialog.kind === 'execute' ? `使用 ${dialog.brokerName} 提交以上模拟委托（金额为 USD 限价估算，先卖后买）。执行前将再次检查账户、配置和行情。` : '退出会同时关闭工作台和交易后台。已提交的委托仍可能成交。'}</p>
+      <p>{dialog.kind === 'execute' ? `使用 ${dialog.brokerName} 向 ${dialog.environment} 提交以上委托（金额以 ${dialog.currency} 限价估算，先卖后买）。执行前将再次检查账户、配置和行情。` : '退出会同时关闭工作台和交易后台。已提交的委托仍可能成交。'}</p>
       {confirmChanged && <p className="inline-warning">账户或订单预览已变化，请关闭并重新核对。</p>}
-      <div className="button-row"><Button autoFocus disabled={pending} onClick={() => setDialog(null)}>取消</Button><Button primary disabled={pending || confirmChanged || (dialog.kind === 'execute' && busy)} onClick={confirm}>确认{dialog.kind === 'execute' ? '提交模拟订单' : '退出'}</Button></div>
+      <div className="button-row"><Button autoFocus disabled={pending} onClick={() => setDialog(null)}>取消</Button><Button primary disabled={pending || confirmChanged || (dialog.kind === 'execute' && busy)} onClick={confirm}>确认{dialog.kind === 'execute' ? '提交订单' : '退出'}</Button></div>
     </Dialog>}
   </PortalShell>;
 }

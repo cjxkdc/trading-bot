@@ -184,6 +184,11 @@ class ProjectTests(unittest.TestCase):
         entry = registry.catalog('broker')[registry.descriptor('broker', self.broker)['type']]
         test = self
         class Control:
+            mode = "broker_paper"
+            def require_execution(self): pass
+            def execution_context(self):
+                from framework.market import ExecutionContext
+                return ExecutionContext.legacy_us().record()
             def observe_account(self): return actual[0]
             def observe_quotes(self, mapping, max_age):
                 return {s: Quote(s, D(10), D(10), stamp) for s in mapping}, date(2026, 10, 2), stamp

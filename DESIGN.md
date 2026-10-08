@@ -101,7 +101,7 @@ components:
 
 界面参照券商交易终端与 QuantConnect 的工作区：深色底、带标题条的面板、高信息密度的表格和等宽数字。默认使用深色主题，顶栏可切换为浅色，选择保存在当前浏览器中。
 
-顶栏是一条状态栏，依次显示纽约时间、按美股常规时段推算的交易状态（盘前、盘中交易、盘后、休市）、部署位置与「仅模拟账户」标识。交易状态不包含交易所假日，实际交易日以券商交易日历为准。
+顶栏按当前账户或所查看实例的执行上下文显示时钟、时区、市场及部署位置。交易状态采用后台返回的最新市场结果；没有可靠结果时显示「交易时段待确认」，不按固定美股时间猜测。模拟或实盘标识属于具体账户及实例，不作为整个工作台的固定标签。市场、币种、数量规则及执行资格的边界见 [模块化交易执行](docs/MODULAR_EXECUTION.md)。
 
 源码依据为 [令牌](ui/src/styles/tokens.css)、[基础控件](ui/src/styles/base.css)、[应用壳](ui/src/styles/shell.css)、[功能样式](ui/src/styles/features.css)、[账户与策略样式](ui/src/styles/account-strategy.css) 与 [共享组件](ui/src/ui.jsx)。产品边界见 [PRODUCT.md](PRODUCT.md)。
 
@@ -145,7 +145,7 @@ components:
 
 ### Confirmation Dialogs
 
-[共享 Dialog](ui/src/components/Dialog.jsx) 以原生 `showModal` 打开。提交模拟订单前显示委托笔数和买入、卖出的估算金额。「关闭已撤单/拒单」要求勾选「已在券商端核对」后才能确认。
+[共享 Dialog](ui/src/components/Dialog.jsx) 以原生 `showModal` 打开。提交订单前显示委托笔数、绑定账户环境，以及按当前账户币种计算的买入和卖出估算金额。「关闭已撤单/拒单」要求勾选「已在券商端核对」后才能确认。
 
 ### Status Bar Preferences
 

@@ -3,7 +3,8 @@ import { navigation, sections } from './navigation';
 import { attentionItems, visiblePlan } from './overview';
 import { automationView } from '../automation';
 import { isServerDeployment } from '../server';
-import { marketSession, newYorkClock } from '../market';
+import { marketSession, marketClock } from '../market';
+import { executionContext, validTimezone } from '../execution_context';
 import { applyPreferences, readPreference, savePreference } from '../preferences';
 import { Button, Icon } from '../ui';
 import { cls, time } from '../format';
@@ -31,7 +32,12 @@ export function PortalShell({ route, navigate, access, onLogout, session, runtim
   const current = navigation.find(item => item.id === route.page);
   const plan = automationView(state?.automation, { online, runtimeRunning: runtime?.status === 'running' });
   const tabs = (sections[route.page] || []).filter(([id]) => isServerDeployment(access) || id !== 'server');
-  const now = useNow(), market = marketSession(now);
+  const now = useNow();
+  const instance = route.page === 'runs' ? state?.strategy_manager?.instances?.find(item => item.id === route.instance) : null;
+  const scopedBroker = instance ? state?.brokers?.find(item => item.id === instance.broker_id) : state?.broker;
+  const context = executionContext(scopedBroker, instance?.execution_context);
+  const market = marketSession(scopedBroker?.id === state?.broker?.id ? state?.market_session : null, now);
+  const timezone = validTimezone(context.timezone) ? context.timezone : null;
   const attention = state ? attentionItems(state).length : 0;
   useEffect(() => {
     document.title = `${attention ? `(${attention}) ` : ''}${current?.label || '工作台'} · Trading Bot`;
@@ -56,8 +62,8 @@ export function PortalShell({ route, navigate, access, onLogout, session, runtim
     <div className="workspace">
       <header className="topbar">
         <div className="status-strip">
-          <span className="clock" title="纽约当地时间">{newYorkClock(now)}<small>ET</small></span>
-          <span className={cls('session', market.tone)} title="按美股常规时段推算，未计入交易所假日；以券商交易日历为准。">{market.label}</span>
+          <span className="clock" title={timezone || '当前设备本地时间'}>{marketClock(now, timezone)}<small>{timezone || '本地'}</small></span>
+          <span className={cls('session', market.tone)} title="当前账户的市场与交易日历；缺少最新日历结果时不推测开盘状态。">{context.market || '市场未提供'} · {market.label}</span>
           <span className="divider" aria-hidden="true"/>
           <span className="deployment-label">{isServerDeployment(access) ? '云端工作台' : '本地工作台'}</span>
         </div>

@@ -1,4 +1,4 @@
-"""Managed paper batches. Plugin selection is isolated; execution reuses the ledger."""
+"""Managed account batches. Plugin selection is isolated; execution reuses the ledger."""
 from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -19,13 +19,13 @@ from app.module_registry import ModuleRegistry
 from app.strategy_instances import managed_guard, instance_binding
 from framework.configuration import fees_from_config, policy_from_config
 from framework.decisions import Decision, digest, canonical
-from framework.order_capabilities import US_EQUITY_LIMIT_ORDERS
+from framework.order_capabilities import order_capability_issues
+from framework.market import ExecutionContext
 from framework.portfolio import StockTarget
 from framework.runtime import PortfolioRunner
 from framework.strategy_book import reconcile_ownership, owner_plan, settle_ownership
 from framework.trading import Account, Quote, amount
 
-NY = ZoneInfo('America/New_York')
 SCHEMA = 'managed_strategy_signals_v1'
 
 
@@ -77,6 +77,8 @@ class ManagedSource:
     def __init__(self, root, registry, cycle):
         self.root, self.registry, self.cycle = Path(root), registry, cycle
         self.parts, self.rows = {}, ()
+        self.execution_context = ExecutionContext.from_record(registry.descriptor('broker',cycle['broker_id'])['execution_context'])
+        self.order_requirements = None
         self.labels = {}
 
     def load(self, signal):
@@ -96,9 +98,13 @@ class ManagedSource:
             if digest(raw) != component['sha256']:
                 raise ControlError('策略数据快照已变化，请重新准备。')
             loaded = source.load(raw)
-            if loaded.order_requirements != US_EQUITY_LIMIT_ORDERS:
-                raise ControlError('共享账户目前支持美股、美元、整股 DAY 限价单。')
-            converted = tuple(replace(s, asset_id='MANAGED:US:' + s.ticker) for s in loaded.stocks)
+            issues = order_capability_issues(self.registry.descriptor('broker', self.cycle['broker_id']).get('order_capabilities'), loaded.order_requirements)
+            if issues:
+                raise ControlError(' '.join(issues))
+            if self.order_requirements is not None and self.order_requirements != loaded.order_requirements:
+                raise ControlError('共享账户中的到期策略需要一致的市场、币种及订单规则。')
+            self.order_requirements = loaded.order_requirements
+            converted = tuple(replace(s, asset_id='MANAGED:' + self.execution_context.market + ':' + s.ticker) for s in loaded.stocks)
             parts[item['id']] = dict(source=source, raw=raw, stocks=converted)
             for stock in converted:
                 rows.setdefault(stock.asset_id, stock)
@@ -109,14 +115,15 @@ class ManagedSource:
         self.labels.update(labels)
         return SnapshotInput(SCHEMA, True, signal, self.rows,
                              {'candidate_count': len(rows), 'strategy_instances': len(parts)}, self.labels,
-                             order_requirements=US_EQUITY_LIMIT_ORDERS)
+                             order_requirements=self.order_requirements)
 
     def paper_signal(self, signal, clock):
         self.load(signal)
         rows, warnings = {}, []
         for ident, part in self.parts.items():
-            stocks, notes = part['source'].paper_signal(part['raw'], clock)
-            converted = tuple(replace(s, asset_id='MANAGED:US:' + s.ticker) for s in stocks)
+            from app.execution_preparation import signal_for
+            stocks, notes = signal_for(part['source'], part['raw'], clock)
+            converted = tuple(replace(s, asset_id='MANAGED:' + self.execution_context.market + ':' + s.ticker) for s in stocks)
             part['stocks'] = converted
             rows.update({s.asset_id: s for s in converted})
             warnings.extend(notes)
@@ -140,19 +147,20 @@ class ManagedRunner(PortfolioRunner):
             raise ControlError('共享账户上下文尚未取得。')
         book = self.cycle['book']
         if book.get('account_ref') and book['account_ref'] != digest(self.account.account_id):
-            raise ControlError('当前模拟账户与原持仓归属账本不同。')
+            raise ControlError('当前账户与原持仓归属账本不同。')
         observed = {s: str(q) for s, q in self.account.positions}
         self.unmanaged = reconcile_ownership(book['owners'], observed, book.get('unmanaged'))
-        if self.account.currency != 'USD':
-            raise ControlError('共享策略账户须为美元模拟账户。')
+        market = snapshot.market
+        if self.account.currency != market.currency:
+            raise ControlError('账户币种与当前市场执行配置不一致。')
         reverse = {t: a for a, t in snapshot.instruments.items()}
-        day = snapshot.execution_time.astimezone(NY).date()
+        day = snapshot.execution_time.astimezone(ZoneInfo(market.timezone)).date()
         targets_by_owner, scores = {}, {}
         for item in self.cycle['instances']:
             if item['id'] not in self.cycle['due_ids']:
                 continue
             stocks = self.source.parts[item['id']]['stocks']
-            held = tuple('MANAGED:US:' + ticker for ticker in book['owners'].get(item['id'], {}))
+            held = tuple('MANAGED:' + market.market + ':' + ticker for ticker in book['owners'].get(item['id'], {}))
             key = digest({'strategy': item['strategy'], 'stocks': [asdict(s) for s in stocks], 'day': str(day), 'held': held})
             if key not in self.cache:
                 self.cache[key] = self.selector(self.root, item, stocks, day, held, self.policy,
@@ -173,16 +181,18 @@ class ManagedRunner(PortfolioRunner):
         if self.frozen_quotes is None:
             self.frozen_quotes = dict(snapshot.quotes)
         quotes = self.frozen_quotes
-        equity = self.account.cash + sum((q * quotes[reverse[s]].mark for s, q in self.account.positions), amount(0))
+        equity = self.account.cash + sum((q * quotes[reverse[s]].mark * market.rules_for(reverse[s],quotes[reverse[s]]).contract_multiplier for s, q in self.account.positions), amount(0))
         asks = {ticker: quotes[asset].ask for ticker, asset in reverse.items() if asset in quotes}
         self.planned, desired = owner_plan(book['owners'], self.unmanaged, targets_by_owner,
-            {i['id']: i['budget'] for i in self.cycle['instances']}, equity, asks)
+            {i['id']: i['budget'] for i in self.cycle['instances']}, equity, asks,
+            instrument_rules={ticker: market.rules_for(asset,quotes[asset]) for ticker,asset in reverse.items() if asset in quotes})
         combined = {reverse[t]: q for t, q in desired.items()}
-        weights = {a: float(amount(q) * quotes[a].ask / equity) for a, q in combined.items()}
+        weights = {a: float(amount(q) * quotes[a].ask * market.rules_for(a,quotes[a]).contract_multiplier / equity) for a, q in combined.items()}
         if sum(weights.values()) > float(self.policy.max_gross) + 1e-12 or any(w > float(self.policy.max_weight) + 1e-12 for w in weights.values()):
             raise ControlError('合并目标超过账户仓位限制；保留持仓未被自动卖出，请调整资金分配。')
         ts = tuple(StockTarget(a, w, scores.get(a, 0.)) for a, w in sorted(weights.items()))
         record = dict(schema=1, input_schema=SCHEMA, execution_day=str(day), cycle_id=self.cycle['id'],
+                      execution_context=market.record(),
                       instances=[identity_for_decision(i) for i in self.cycle['instances']],
                       targets=[asdict(t) for t in ts], desired_positions=combined,
                       owner_positions=self.planned, unmanaged=self.unmanaged,
@@ -212,7 +222,7 @@ class CaptureControl:
         account = self.delegate.observe_account()
         self.runner.account = account
         for ticker, quantity in account.positions:
-            self.runner.source.labels.setdefault('HELD:US:' + ticker, {'ticker': ticker, 'industry': '保留持仓'})
+            self.runner.source.labels.setdefault('HELD:' + self.runner.source.execution_context.market + ':' + ticker, {'ticker': ticker, 'industry': '保留持仓'})
         return account
 
 
@@ -222,14 +232,14 @@ def check(root, item, progress):
     control = registry.control('broker', item['broker_id'])
     report = control.inspect(connect=True)
     if report.get('status') != 'connected' or report.get('issues'):
-        raise ControlError('模拟账户检查未通过，请检查 OpenD 和模拟账户。')
+        raise ControlError('账户检查未通过，请检查所选券商连接和账户。')
     source = registry.control('data', item['source_id'], config=cfg)
     if not source.configuration_status().get('configured'):
         raise ControlError('请先配置所选数据源。')
     required = registry.data_requirements(cfg)
     source.inspect(price_bars=max(required.price_bars, required.volume_bars), progress=progress)
     return {'status': 'complete', 'account_ref': digest(control.observe_account().account_id),
-            'message': '模拟账户和数据接口检查通过。'}
+            'message': '账户和数据接口检查通过。'}
 
 
 def refresh(root, item, progress):
@@ -250,6 +260,8 @@ def run_cycle(root, cycle_path, progress):
     cycle = json.loads(path.read_text(encoding='utf-8'))
     managed_guard(root, cycle)
     registry = ModuleRegistry(root)
+    registry.require_execution(cycle['broker_id'])
+    market = ExecutionContext.from_record(registry.descriptor('broker',cycle['broker_id'])['execution_context'])
     cfg = registry.configuration(cycle['broker_id'])
     components, collected = [], {}
     for item in cycle['instances']:
@@ -262,7 +274,7 @@ def run_cycle(root, cycle_path, progress):
         if key not in collected:
             managed_guard(root, cycle)
             prepared = item.get('prepared')
-            if prepared and prepared.get('day') == str(datetime.now(timezone.utc).astimezone(NY).date()):
+            if prepared and prepared.get('day') == str(datetime.now(timezone.utc).astimezone(ZoneInfo(market.timezone)).date()):
                 selected = project_path(root, prepared['path'], under='runs')
             else:
                 progress(f'采集 {item["name"]} 所需数据…')
@@ -280,13 +292,15 @@ def run_cycle(root, cycle_path, progress):
     loaded = source.load(signal)
     runner = ManagedRunner(root, source, cycle, cfg)
     control = CaptureControl(registry.control('broker', cycle['broker_id']), runner)
-    from app.paper_preparation import prepare, execute_prepared
+    from app.execution_preparation import prepare, execute_prepared
     context = digest({'cycle_id': cycle['id'], 'bindings': cycle['bindings'], 'code': cycle['code_revision']})
     managed_guard(root, cycle)
     preview = prepare(root=root, source=source, loaded=loaded, runner=runner, control=control,
                       path=signal_path, context=context, clock=datetime.now(timezone.utc), progress=progress)
     cycle.update(phase='prepared', signal_path=str(signal_path), planned=runner.planned,
-                 unmanaged=runner.unmanaged, preview_path=preview.get('snapshot_path'),
+                 unmanaged=runner.unmanaged, execution_context=market.record(),
+                 instrument_rules={runner.source.labels[a]['ticker']: market.rules_for(a,q).record() for a,q in (runner.frozen_quotes or {}).items() if a in runner.source.labels},
+                 preview_path=preview.get('snapshot_path'),
                  preview_token=preview.get('preview_token'), context=context)
     save(path, cycle)
     if preview.get('no_orders'):
@@ -297,17 +311,17 @@ def run_cycle(root, cycle_path, progress):
         cycle['phase'] = 'executing'
         save(path, cycle)
         raw = json.loads(Path(preview['snapshot_path']).read_text(encoding='utf-8'))
-        progress('按合并后的账户差额提交一批模拟订单，并核对成交…')
+        progress('按合并后的账户差额提交一批订单，并核对成交…')
         result = execute_prepared(root=root, raw=raw, context=context, token=preview['preview_token'],
             source=source, runner=runner, control=control, cfg=cfg, clock=datetime.now(timezone.utc),
             before_submit=lambda: managed_guard(root, cycle))
     final_account = control.observe_account()
     observed = {s: str(q) for s, q in final_account.positions}
-    owners = settle_ownership(runner.planned, cycle['book']['owners'], runner.unmanaged, observed, cycle['due_ids'])
+    owners = settle_ownership(runner.planned, cycle['book']['owners'], runner.unmanaged, observed, cycle['due_ids'], instrument_rules=cycle.get('instrument_rules'))
     book = {'owners': owners, 'unmanaged': runner.unmanaged, 'account_ref': digest(final_account.account_id)}
     cycle.update(phase='complete', completed_at=datetime.now(timezone.utc).isoformat(), book=book)
     save(path, cycle)
-    return dict(result, status='complete', message='合并模拟交易完成，订单和各策略持仓归属已核对。', book=book,
+    return dict(result, status='complete', message='合并交易完成，订单和各策略持仓归属已核对。', book=book,
                 instance_targets=runner.component_targets, owner_positions=owners)
 
 
@@ -329,9 +343,9 @@ def reconcile(root, cycle_path, progress, *, close=False):
         return {'status': 'complete', 'book': cycle['book'], 'message': '未提交订单，已关闭中断的准备批次。'}
     account = control.observe_account()
     if cycle['book'].get('account_ref') and cycle['book']['account_ref'] != digest(account.account_id):
-        raise ControlError('模拟账户已变化，无法核对原持仓归属。')
+        raise ControlError('账户已变化，无法核对原持仓归属。')
     owners = settle_ownership(cycle['planned'], cycle['book']['owners'], cycle['unmanaged'],
-                             {s: str(q) for s, q in account.positions}, cycle['due_ids'], partial=close)
+                             {s: str(q) for s, q in account.positions}, cycle['due_ids'], partial=close, instrument_rules=cycle.get('instrument_rules'))
     book = {'owners': owners, 'unmanaged': cycle['unmanaged'], 'account_ref': digest(account.account_id)}
     cycle.update(phase='complete', book=book)
     save(path, cycle)

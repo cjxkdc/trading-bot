@@ -32,7 +32,7 @@ class JournalReader:
 
     @staticmethod
     def _valid_ticker(value):
-        return isinstance(value, str) and re.fullmatch(r'[A-Z][A-Z0-9.\-]{0,14}', value) is not None
+        return isinstance(value, str) and not value.startswith(('FIGI:', 'MANAGED:', 'HELD:', 'DEMO-')) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/\-]{0,79}', value) is not None
 
     def _broker_tickers(self, orders):
         """Read only the selected account's durable adapter records, without an SDK."""
@@ -81,12 +81,12 @@ class JournalReader:
                     if path.resolve().parent != self.envelope_dir or path.stat().st_size > 32 * 1024 * 1024:
                         continue
                     raw = json.loads(path.read_text(encoding='utf-8-sig'))
-                    if raw.get('schema') != 'paper_order_preparation_v1':
+                    if raw.get('schema') not in {'paper_order_preparation_v1','execution_preparation_v2'}:
                         continue
                     stamp = datetime.fromisoformat(raw['execution_time'])
                     if stamp.tzinfo is None:
                         continue
-                    day = stamp.astimezone(ZoneInfo('America/New_York')).date().isoformat()
+                    day = stamp.astimezone(ZoneInfo((raw.get('execution_context') or {}).get('timezone', 'America/New_York'))).date().isoformat()
                     cycle = raw['account']['account_id'] + ':' + day
                     if cycle not in batches or raw['orders'] != batches[cycle]:
                         continue

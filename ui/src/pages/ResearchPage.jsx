@@ -85,7 +85,7 @@ export function ResearchPage({ state, strategyType, busy, act, navigate }) {
         </label>
         {sourceChanged && <p className="inline-warning" role="status">原来源已改变或移除，请重新选择此策略的配置。</p>}
         {source && <p className="small muted">调仓：{scheduleSummary(source.schedule)}；首次建仓：{source.schedule?.initial_entry === 'scheduled' ? '等待计划日' : '首个可用交易日'}。</p>}
-        <details className="details"><summary>回测与运行的差异</summary><p className="small muted">QC 使用历史股票池及基本面、市场单成交模型和设定的手续费／滑点；运行使用所选数据源与券商 DAY 限价单。调仓规则一致不等于成交价格一致。回测首次建仓从首个可用交易日开始，程序中途开启则按当时可用时段开始。</p></details>
+        <details className="details"><summary>回测与运行的差异</summary><p className="small muted">当前 QC 股票适配器使用历史股票池及基本面、市场单成交模型和设定的手续费／滑点；运行按所选账户模块的交易规则执行。其他市场需要对应的回测适配器。调仓规则一致不等于成交价格一致。回测首次建仓从首个可用交易日开始，程序中途开启则按当时可用时段开始。</p></details>
         <form onSubmit={exportCode}>
           <div className="backtest-form">
             <label>开始日期<input type="date" required value={start} disabled={busy || !source} onChange={event => setStart(event.target.value)}/></label>

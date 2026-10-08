@@ -1,4 +1,4 @@
-"""Persistent, paper-only orchestration. Strategy and provider logic stay in plugins."""
+"""Persistent, capability-driven account orchestration. Strategy and provider logic stay in plugins."""
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from app.control_contracts import ControlError, project_path
 from app.diagnostics import diagnostic_fields, failure_details
-from framework.scheduling import DEFAULT_SCHEDULE, schedule_config, instant, period_window, next_window, period_key, initial_window
+from framework.scheduling import DEFAULT_SCHEDULE, schedule_config, instant, period_window, next_window, period_key, initial_window, normalize_sessions, session_dates, schedule_defaults, session_close
 
 
 def utcnow():
@@ -155,7 +155,7 @@ class Automation:
         try:
             cfg = schedule_config(value)
         except (ValueError, TypeError):
-            raise ControlError('时间设置无效；请选择每日、每周或每月，并填写有效的美东时间。') from None
+            raise ControlError('时间设置无效；请选择每日、每周或每月，并填写有效的所选时区的时间。') from None
         self.data.update(config=cfg, calendar=None, next_run=None, next_check=None, startup=None)
         self.persist()
         return {'message': '运行时间已保存；尚未开启自动交易。'}
@@ -165,12 +165,12 @@ class Automation:
         try:
             broker = self.registry.descriptor('broker', broker_id)
             source = self.registry.descriptor('data', source_id)
-            if not broker['enabled'] or broker['mode'] != 'broker_paper':
-                issues.append('自动运行仅支持已绑定的联网模拟账户。')
+            if not broker['enabled'] or broker['mode'] not in {'broker_paper', 'live'} or not broker.get('execution_enabled', broker['mode'] != 'live'):
+                issues.append('自动运行需要已绑定且允许执行的联网账户。')
             if not {'inspect', 'prepare', 'execute', 'calendar', 'reconcile'} <= set(broker['capabilities']):
-                issues.append('当前券商未提供完整的交易日历、模拟执行与订单核对能力。')
-            if not source['enabled'] or not {'collect', 'paper_signal'} <= set(source['capabilities']):
-                issues.append('当前数据源不支持自动采集和模拟信号准备。')
+                issues.append('当前券商未提供完整的交易日历、订单执行与订单核对能力。')
+            if not source['enabled'] or ('collect' not in source['capabilities'] or not {'execution_signal', 'paper_signal'} & set(source['capabilities'])):
+                issues.append('当前数据源不支持自动采集和交易信号准备。')
             cfg = self.registry.configuration(broker_id)
             self.registry.compatible(cfg, source_id)
             if not self.registry.control('data', source_id).configuration_status().get('configured', False):
@@ -186,9 +186,12 @@ class Automation:
             raise ControlError('自动运行已经开启。')
         issues = self.available(broker_id, source_id)
         if not verified and not initialize:
-            issues.append('请先检查当前模拟账户连接。')
+            issues.append('请先检查当前账户连接。')
         if issues:
             raise ControlError(' '.join(issues))
+        descriptor = self.registry.descriptor('broker', broker_id)
+        if self.data['config'] == DEFAULT_SCHEDULE and descriptor.get('execution_context'):
+            self.data['config'] = schedule_defaults(descriptor['execution_context'])
         cfg = self.registry.configuration(broker_id)
         strategy = self.registry.catalog('strategy')[cfg['strategy']['type']]
         binding = dict(broker_id=broker_id, source_id=source_id,
@@ -205,7 +208,7 @@ class Automation:
             try:
                 resumable = (len(unfinished) == 1 and cycle['status'] == 'pending'
                     and cycle['context'] == binding['context'] and cycle['code_revision'] == binding['code_revision']
-                    and cycle['day'] == str(current.astimezone(ZoneInfo('America/New_York')).date())
+                    and cycle['day'] == str(current.astimezone(ZoneInfo(self.data['config']['timezone'])).date())
                     and datetime.fromisoformat(cycle['window_start']) <= current < datetime.fromisoformat(cycle['window_end']))
             except (KeyError, ValueError, TypeError):
                 resumable = False
@@ -218,9 +221,9 @@ class Automation:
                                        requested_at=self.clock().isoformat())
         elif not unfinished:
             self.data['startup'] = None
-        self.event('自动模拟交易已开启；先核对原冻结批次，在原窗口内继续。' if unfinished else
+        self.event('自动交易已开启；先核对原冻结批次，在原窗口内继续。' if unfinished else
                    '已开启，正在检查账户与数据；首轮建仓将在可用的交易时段开始。' if initialize else
-                   '自动模拟交易已开启；先获取交易日历，在计划窗口执行，不立即补下旧订单。')
+                   '自动交易已开启；先获取交易日历，在计划窗口执行，不立即补下旧订单。')
         self.persist()
         return {'message': self.data['message']}
 
@@ -278,7 +281,7 @@ class Automation:
         startup = self.data['startup']
         self.data['status'] = 'running'
         self.persist()
-        progress('首次启动：检查模拟账户…')
+        progress('首次启动：检查账户…')
         account = call('status')
         if account.get('status') != 'connected':
             raise ControlError(account['message'])
@@ -295,7 +298,7 @@ class Automation:
         startup.update(status='checked', checked_at=current.isoformat(),
                        window_start=start.isoformat(), window_end=end.isoformat())
         message = ('账户、数据与选股已检查，正在准备首轮建仓。' if start <= current < end else
-                   '账户、数据与选股已检查；首轮建仓等待下一个美股交易时段。')
+                   '账户、数据与选股已检查；首轮建仓等待下一个交易时段。')
         self.data.update(status='waiting', next_check=None, next_run=start.isoformat())
         self.event(message)
         self.persist()
@@ -334,11 +337,11 @@ class Automation:
                 response = call('calendar')
                 if response['status'] != 'ready':
                     raise ControlError(response['message'])
-                sessions = [date.fromisoformat(x) for x in response['sessions']]
-                if len(set(sessions)) != len(sessions) or not any(d > today for d in sessions):
+                sessions = normalize_sessions(response['sessions'])
+                if not any(d > today for d in session_dates(sessions)):
                     raise ControlError('交易日历覆盖不足，不能计算自动计划。')
-                self.data['calendar'] = dict(checked_day=str(today), sessions=[str(d) for d in sessions])
-            sessions = [date.fromisoformat(x) for x in self.data['calendar']['sessions']]
+                self.data['calendar'] = dict(checked_day=str(today), sessions=[d.record() for d in sessions])
+            sessions = normalize_sessions(self.data['calendar']['sessions'])
             startup = self.data.get('startup')
             if startup and startup['status'] == 'pending_check':
                 return self._startup_check(call, sessions, cfg, progress)
@@ -370,7 +373,7 @@ class Automation:
                     self.persist()
                     return result
                 return self._pause_after_result('上一轮调仓仍未完成；已核对订单，本轮不会另建订单。', result)
-            if today not in sessions:
+            if today not in session_dates(sessions):
                 self.data.update(status='waiting', next_check=instant(today+timedelta(days=1),'00:05',cfg).isoformat())
                 self.persist()
                 return None
@@ -416,7 +419,7 @@ class Automation:
                 self.event('今日策略数据更新完成。')
                 self.data.update(status='waiting', next_check=None)
                 self.persist()
-                return {'status':'complete','message':'自动数据更新完成；将在计划窗口准备模拟订单。'}
+                return {'status':'complete','message':'自动数据更新完成；将在计划窗口准备订单。'}
 
             if in_window and not cycle:
                 result = call('status')
@@ -449,7 +452,8 @@ class Automation:
             if local >= end and not cycle:
                 self.data['cycles'][cycle_key] = dict(status='missed', day=str(today), broker_id=b['broker_id'], context=b['context'])
                 self.event('本期调仓时段已过去，等待下一次计划。', 'warning')
-            if local >= instant(today, '16:20', cfg) and daily['reconcile'] != 'complete':
+            reconcile_at = session_close(today, sessions, cfg) + timedelta(minutes=20)
+            if local >= reconcile_at and daily['reconcile'] != 'complete':
                 result = call('reconcile')
                 if result['status'] not in {'complete', 'ready'}:
                     raise ControlError(result['message'])
@@ -461,7 +465,7 @@ class Automation:
             if cycle and cycle['status'] in {'complete', 'closed', 'missed'}:
                 future = next_window(end, sessions, cfg)
                 self.data['next_run'] = future.isoformat() if future else None
-            candidates = [instant(today, cfg['prepare_time'], cfg), instant(today,'16:20',cfg), start,
+            candidates = [instant(today, cfg['prepare_time'], cfg), reconcile_at, start,
                           instant(today+timedelta(days=1),'00:05',cfg)]
             self.data['next_check'] = min(t for t in candidates if t > local).isoformat()
             self.persist()
@@ -487,7 +491,7 @@ class Automation:
         if result['status'] == 'complete':
             cycle['status'] = 'complete'
             self._finish_initial(cycle)
-            self.event('首轮模拟建仓已完成。' if cycle.get('kind') == 'initial' else '本轮模拟调仓已完成。')
+            self.event('首轮建仓已完成。' if cycle.get('kind') == 'initial' else '本轮调仓已完成。')
             self.data['status'] = 'waiting' if self.data['enabled'] else 'disabled'
         elif result.get('recovery_state') == 'blocked':
             cycle['status'] = 'blocked'

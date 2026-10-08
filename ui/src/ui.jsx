@@ -30,6 +30,6 @@ export function Tag({ children, tone = 'muted' }) { return <span className={'tag
 
 export function TargetTable({ preview }) {
   const rows = preview?.targets || [];
-  if (!rows.length) return <Empty title={preview ? '本次没有选中股票' : '尚未生成目标持仓'}>{preview ? '检查筛选条件与数据覆盖范围。' : '更新数据或使用已有快照，运行一次策略预览。'}</Empty>;
-  return <div className="table-wrap"><table><thead><tr><th>股票</th><th>行业</th><th className="right">策略得分</th><th className="right">目标权重</th></tr></thead><tbody>{rows.map(row => <tr key={row.asset_id}><td><strong>{row.ticker || row.asset_id}</strong></td><td className="muted">{row.industry || '—'}</td><td className="right mono">{Number(row.score ?? 0).toFixed(3)}</td><td className="right mono"><span className="weight-cell"><i style={{ width: `${Math.min(100, row.weight * 200)}%` }}/><span>{percent(row.weight)}</span></span></td></tr>)}</tbody></table></div>;
+  if (!rows.length) return <Empty title={preview ? '本次没有选中标的' : '尚未生成目标持仓'}>{preview ? '检查筛选条件与数据覆盖范围。' : '更新数据或使用已有快照，运行一次策略预览。'}</Empty>;
+  return <div className="table-wrap"><table><thead><tr><th>标的</th><th>行业</th><th className="right">策略得分</th><th className="right">目标权重</th></tr></thead><tbody>{rows.map(row => <tr key={row.asset_id}><td><strong>{row.ticker || row.asset_id}</strong></td><td className="muted">{row.industry || '—'}</td><td className="right mono">{Number(row.score ?? 0).toFixed(3)}</td><td className="right mono"><span className="weight-cell"><i style={{ width: `${Math.min(100, row.weight * 200)}%` }}/><span>{percent(row.weight)}</span></span></td></tr>)}</tbody></table></div>;
 }

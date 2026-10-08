@@ -166,6 +166,13 @@ class OpenDConnector:
     def _settings(self):
         return settings(self.provider, self.config_dir, environment=self.environment)
 
+    def execution_account_reference(self):
+        cfg = self._settings()
+        if not cfg.account_id or not cfg.login_user_id:
+            raise OpenDError('Explicit account and login binding required')
+        return _identity(dict(provider=self.provider, environment=self.environment,
+                              user_id=str(cfg.login_user_id), account_id=str(cfg.account_id)))
+
     @contextmanager
     def _session(self, *, allow_orders=False, enable_live=False):
         with ExitStack() as stack:
@@ -214,10 +221,10 @@ class OpenDConnector:
             db.execute('INSERT INTO binding VALUES (?)', (binding,))
             db.commit()
 
-    def connect(self, state_dir, snapshot, fees, *, enable_live=False, read_only=False):
-        if read_only and (self.environment != 'SIMULATE' or enable_live):
-            raise OpenDError('Read-only recovery is restricted to simulation accounts')
-        if self.environment == 'REAL' and enable_live is not True:
+    def connect(self, state_dir, snapshot, fees, *, enable_live=False, read_only=False, expected_account_ref=None):
+        if read_only and enable_live:
+            raise OpenDError('Read-only reconciliation cannot enable live order transmission')
+        if self.environment == 'REAL' and not read_only and enable_live is not True:
             raise OpenDError('Live execution must be explicitly enabled before connecting')
         path = self._path(state_dir)
         offset = getattr(snapshot,'clock_offset_seconds',0.)
@@ -226,6 +233,8 @@ class OpenDConnector:
         manager = self._session(allow_orders=not read_only, enable_live=enable_live)
         sdk, client, profile, validate = manager.__enter__()
         try:
+            if expected_account_ref is not None and _identity(profile) != expected_account_ref:
+                raise OpenDError('Connected account differs from the server execution grant')
             symbols = None if snapshot is None else (snapshot.instruments or {s.asset_id: s.ticker for s in snapshot.stocks})
             return OpenDBroker(sdk, client, profile, path, fees, symbol_map=symbols,
                                     clock=lambda:datetime.now(timezone.utc)+timedelta(seconds=offset),
@@ -246,15 +255,15 @@ class OpenDBroker:
                 or str(getattr(client, '_verified_account', '')) != profile['account_id']
                 or getattr(client, '_trading_environment', None) != environment
                 or (not read_only and not getattr(client, '_allow_orders', False))
-                or (read_only and (environment != 'SIMULATE' or getattr(client, '_allow_orders', False)))):
+                or (read_only and getattr(client, '_allow_orders', False))):
             raise OpenDError('Verified account, matching environment and order permission required')
-        if environment == 'REAL' and (enable_live is not True or not callable(instrument_check)):
+        if environment == 'REAL' and ((not read_only and enable_live is not True) or not callable(instrument_check)):
             raise OpenDError('Live execution requires explicit activation and broker instrument validation')
         if _needs_instrument_validation(profile) and not callable(instrument_check):
             raise OpenDError('Combined paper accounts require broker instrument validation')
         self.live_enabled = environment == 'REAL' and enable_live is True
         self.read_only = read_only
-        self.mode = 'live' if self.live_enabled else 'broker_paper'
+        self.mode = 'live' if environment == 'REAL' else 'broker_paper'
         self.instrument_check = instrument_check
         self.sdk, self.client, self.profile = sdk, client, dict(profile)
         self.clock = clock or (lambda: datetime.now(timezone.utc))

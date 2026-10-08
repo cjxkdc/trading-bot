@@ -11,10 +11,9 @@ from zoneinfo import ZoneInfo
 from app.automation import code_revision, save
 from app.control_contracts import ControlError, project_path
 from framework.decisions import digest
-from framework.scheduling import DEFAULT_SCHEDULE, initial_window, next_window, period_window, period_key, schedule_config
+from framework.scheduling import DEFAULT_SCHEDULE, initial_window, next_window, period_window, period_key, schedule_config, normalize_sessions, session_dates, schedule_defaults
 from framework.trading import amount
 
-NY = ZoneInfo('America/New_York')
 ID = re.compile(r'st-[0-9a-f]{16}')
 MAX_INSTANCES = 16
 
@@ -76,7 +75,7 @@ def require_unmanaged(root, registry, broker_id):
     if location is not None:
         for item in manager.data['instances']:
             if manager.owns_account(item['broker_id']) and getattr(registry.control('broker', item['broker_id']), 'state_dir', None) == location:
-                raise ControlError('此模拟账户由另一配置的策略实例管理，请使用同一账户配置。')
+                raise ControlError('此账户由另一配置的策略实例管理，请使用同一账户配置。')
 
 
 class StrategyInstances:
@@ -156,21 +155,22 @@ class StrategyInstances:
             budget = amount(value['budget'], True)
             if budget > 1:
                 raise ValueError()
-            schedule = schedule_config(value['schedule'])
+            broker = self.registry.descriptor('broker', value['broker_id'])
+            schedule = schedule_config(value['schedule'], defaults=schedule_defaults(broker.get('execution_context')))
         except (ValueError, TypeError, KeyError):
             raise ControlError('资金比例或运行计划无效。') from None
         broker = self.registry.descriptor('broker', value['broker_id'])
-        if not broker['enabled'] or broker['mode'] != 'broker_paper':
-            raise ControlError('策略实例目前使用联网模拟账户。')
+        if not broker['enabled'] or broker['mode'] not in {'broker_paper', 'live'}:
+            raise ControlError('策略实例需要提供执行能力的联网账户模块。')
         if not {'prepare', 'execute', 'reconcile', 'calendar'} <= set(broker['capabilities']):
-            raise ControlError('此模拟账户尚未提供策略运行所需接口。')
+            raise ControlError('此账户尚未提供策略运行所需接口。')
         cfg = self.registry.configuration(value['broker_id'])
         cfg['strategy'] = deepcopy(value['strategy'])
         self.registry.validate_strategy(cfg)
         self.registry.compatible(cfg, value['source_id'])
         source = self.registry.descriptor('data', value['source_id'])
-        if not {'collect', 'paper_signal'} <= set(source['capabilities']):
-            raise ControlError('请选择能够采集数据并准备模拟信号的数据源。')
+        if ('collect' not in source['capabilities'] or not {'execution_signal', 'paper_signal'} & set(source['capabilities'])):
+            raise ControlError('请选择能够采集数据并准备交易信号的数据源。')
         return dict(value, name=name.strip(), budget=str(budget), schedule=schedule)
 
     def create(self, value):
@@ -203,6 +203,9 @@ class StrategyInstances:
     def start(self, ident):
         item = self.get(ident)
         self.validate({k: item[k] for k in ('name', 'strategy', 'broker_id', 'source_id', 'budget', 'schedule')})
+        broker = self.registry.descriptor('broker', item['broker_id'])
+        if not broker.get('execution_enabled', broker['mode'] != 'live'):
+            raise ControlError(broker.get('execution_reason') or '此账户尚未完成独立执行授权；策略配置已保留。')
         if item['enabled']:
             raise ControlError('此实例已开启。')
         if item['broker_id'] in self.data['pending']:
@@ -319,7 +322,9 @@ class StrategyInstances:
         enabled = [x for x in self.data['instances'] if x['enabled']]
         for item in enabled:
             try:
-                valid = item['binding'] == instance_binding(self.registry, item) and item['code_revision'] == code_revision(self.root)
+                broker = self.registry.descriptor('broker', item['broker_id'])
+                valid = (broker.get('execution_enabled', broker['mode'] != 'live')
+                         and item['binding'] == instance_binding(self.registry, item) and item['code_revision'] == code_revision(self.root))
             except Exception:
                 valid = False
             if not valid:
@@ -334,15 +339,16 @@ class StrategyInstances:
         self.active_broker_id = broker_id
         group = [x for x in enabled if x['broker_id'] == broker_id]
         calendar = self.data['calendar'].get(broker_id)
-        if not calendar or calendar['day'] != str(now.astimezone(NY).date()):
+        calendar_zone = ZoneInfo(group[0]['schedule']['timezone'])
+        if not calendar or calendar['day'] != str(now.astimezone(calendar_zone).date()):
             value = worker(self.root, 'calendar', broker_id=broker_id, source_id=group[0]['source_id'])
             if value.get('status') != 'ready':
                 self.pause_account(broker_id, value.get('message', '交易日历无法核对。'))
                 return {'status': 'paused', 'message': '策略账户交易日历无法核对。'}
-            calendar = {'day': str(now.astimezone(NY).date()), 'sessions': value['sessions']}
+            calendar = {'day': str(now.astimezone(calendar_zone).date()), 'sessions': value['sessions']}
             self.data['calendar'][broker_id] = calendar
         from datetime import date
-        sessions = tuple(date.fromisoformat(day) for day in calendar['sessions'])
+        sessions = normalize_sessions(calendar['sessions'])
         due, starts, ends = [], [], []
         shared_prepared = {}
         for item in group:
@@ -363,21 +369,21 @@ class StrategyInstances:
                                 and any(book.get('owners', {}).values()) for b, book in self.data['books'].items())
                 if reference and duplicate:
                     item.update(enabled=False, status='paused', next_run=None,
-                                message='多个账户配置指向同一模拟账户，请统一使用一个账户配置。')
+                                message='多个账户配置指向同一账户，请统一使用一个账户配置。')
                     self.event(item, item['message'], 'error')
                     continue
                 item['account_ref'] = reference
                 item['check_pending'] = False
-                self.event(item, '模拟账户和数据接口已检查。')
+                self.event(item, '账户和数据接口已检查。')
             now = self.clock()
-            local = now.astimezone(NY)
+            local = now.astimezone(ZoneInfo(item['schedule']['timezone']))
             prepared = item.get('prepared')
             configured = self.registry.configuration(broker_id)
             configured['strategy'] = deepcopy(item['strategy'])
             data_key = (item['source_id'], self.registry.data_requirements(configured).fingerprint)
             if prepared and prepared.get('day') == str(local.date()):
                 shared_prepared[data_key] = prepared
-            if local.date() in sessions and local.strftime('%H:%M') >= item['schedule']['prepare_time'] and (
+            if local.date() in session_dates(sessions) and local.strftime('%H:%M') >= item['schedule']['prepare_time'] and (
                     not prepared or prepared.get('day') != str(local.date())):
                 progress('提前更新 ' + item['name'] + ' 的策略数据…')
                 reusable = shared_prepared.get(data_key)
@@ -406,9 +412,9 @@ class StrategyInstances:
                     if end <= now:
                         start, end = initial_window(now + timedelta(seconds=1), sessions, first_config)
                         item['initial_window'] = [start.isoformat(), end.isoformat()]
-                    key = period_key(start.astimezone(NY).date(), item['schedule'])
+                    key = period_key(start.astimezone(ZoneInfo(item['schedule']['timezone'])).date(), item['schedule'])
                 else:
-                    start, end, key = period_window(now.astimezone(NY).date(), sessions, item['schedule'])
+                    start, end, key = period_window(now.astimezone(ZoneInfo(item['schedule']['timezone'])).date(), sessions, item['schedule'])
                     if key == item['last_period'] or end <= now:
                         next_at = next_window(max(now, end + timedelta(seconds=1)), sessions, item['schedule'])
                         item.update(status='waiting', next_run=next_at.isoformat() if next_at else None,

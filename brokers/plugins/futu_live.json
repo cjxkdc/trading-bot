@@ -7,11 +7,15 @@
   "description": "Futu HK real-account adapter; explicit account, live activation and separate durable ledger required",
   "display_name": "Futu 实盘",
   "control": {
-    "entrypoint": "brokers.controls:OpenDPaperControl",
+    "entrypoint": "brokers.controls:OpenDLiveControl",
     "mode": "live",
     "capabilities": [
       "inspect",
-      "execute"
+      "execute",
+      "prepare",
+      "calendar",
+      "reconcile",
+      "observe"
     ],
     "path_fields": [
       "config_dir",
@@ -40,6 +44,18 @@
       "time_in_force": [
         "day"
       ]
+    },
+    "execution_context": {
+      "market": "US",
+      "timezone": "America/New_York",
+      "currency": "USD",
+      "asset_class": "equity",
+      "instrument_rules": {
+        "quantity_step": "1",
+        "min_quantity": "1",
+        "price_tick": "0.001",
+        "contract_multiplier": "1"
+      }
     }
   }
 }

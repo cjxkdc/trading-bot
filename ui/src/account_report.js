@@ -1,11 +1,13 @@
+import { formatZoned } from './execution_context.js';
+
 export const periods = [['1W', '近一周'], ['1M', '近一月'], ['3M', '近三月'], ['YTD', '今年'], ['ALL', '全部']];
 export const finite = value => typeof value === 'number' && Number.isFinite(value);
 export const money = value => finite(value) ? value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 export const signedMoney = value => finite(value) ? `${value > 0 ? '+' : ''}${money(value)}` : '—';
 export const rate = value => finite(value) ? `${value > 0 ? '+' : ''}${(value * 100).toFixed(2)}%` : '—';
 export const tone = value => finite(value) && value !== 0 ? value > 0 ? 'gain' : 'loss' : '';
-export const day = value => value ? new Date(value).toLocaleDateString('zh-CN', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }) : '—';
-export const observedTime = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : '—';
+export const day = (value, timezone) => formatZoned(value, timezone, { year:'numeric', month:'2-digit', day:'2-digit' });
+export const observedTime = (value, timezone) => formatZoned(value, timezone, { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' });
 
 export function chartLayout(points, mode, width = 960) {
   const valid = (points || []).filter(p => finite(p[mode]) && Number.isFinite(Date.parse(p.as_of)));
@@ -24,7 +26,7 @@ export function chartLayout(points, mode, width = 960) {
 }
 
 export function visiblePositions(rows, query, sort) {
-  const filtered = (rows || []).filter(p => p.quantity > 0 && `${p.symbol} ${p.name || ''}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const filtered = (rows || []).filter(p => Number.isFinite(Number(p.quantity)) && Number(p.quantity) !== 0 && `${p.symbol} ${p.name || ''}`.toLowerCase().includes(query.trim().toLowerCase()));
   return filtered.sort((a, b) => {
     const av = a[sort], bv = b[sort];
     if (!finite(av)) return finite(bv) ? 1 : a.symbol.localeCompare(b.symbol);

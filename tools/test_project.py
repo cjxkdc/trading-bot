@@ -22,7 +22,7 @@ def main():
         for name in ('app', 'backtests', 'brokers', 'configs', 'data', 'framework', 'strategies', 'platforms', 'portal', 'tests', 'tools', 'ui', 'deploy', 'docs', 'requirements'):
             if (ROOT / name).is_dir():
                 shutil.copytree(ROOT / name, project / name, ignore=shutil.ignore_patterns(
-                    '__pycache__', 'node_modules', '*.pyc'))
+                    '__pycache__', 'node_modules', '*.pyc', 'execution_policy.json'))
         for name in ('bot.py', 'requirements.txt', 'README.md', '.gitignore'):
             shutil.copyfile(ROOT / name, project / name)
         shutil.copyfile(project / 'tests/fixtures/portfolio_default.json', project / 'configs/portfolio_config.json')

@@ -70,7 +70,7 @@ class TestPreparation(unittest.TestCase):
 
     def test_zero_orders_with_actionable_difference_does_not_claim_success(self):
         with patch('app.paper_preparation.plan_orders',return_value=()):
-            with self.assertRaisesRegex(ControlError,'整股差额'):
+            with self.assertRaisesRegex(ControlError,'数量差额'):
                 self.preparation()
 
     def test_paused_prepared_batch_recovers_after_expiry_with_original_orders(self):
@@ -113,6 +113,33 @@ class TestPreparation(unittest.TestCase):
         self.assertEqual(len(sent),16)
         self.assertEqual(len({o.client_id for o in sent}),16)
         self.assertEqual([str(o.limit_price) for o in sent],[o['limit_price'] for o in raw['orders']])
+
+    def test_legacy_frozen_batch_recovers_without_resending_acknowledged_order(self):
+        from dataclasses import asdict
+        from app.paper_preparation import market_snapshot, LEGACY_SCHEMA
+        from framework.journal import packed
+        original = self.preparation
+        def legacy_preparation():
+            result = original()
+            path = Path(result['snapshot_path'])
+            raw = json.loads(path.read_text(encoding='utf-8'))
+            raw['schema'] = LEGACY_SCHEMA
+            raw.pop('execution_context'); raw.pop('environment')
+            for q in raw['quotes']:
+                q.pop('rules', None); q.pop('currency', None)
+            stamp = datetime.fromisoformat(raw['execution_time'])
+            quotes = {q['symbol']: Quote.from_record(q) for q in raw['quotes']}
+            snapshot = market_snapshot(self.stocks, self.account, raw['instruments'], quotes,
+                                       stamp, self.loaded.schema, legacy=True)
+            decision = self.runner.plan(snapshot)
+            raw['decision_id'] = decision.decision_id
+            raw['orders'] = json.loads(packed([asdict(o) for o in plan_orders(
+                decision, self.account, quotes, stamp, self.runner.policy, self.runner.fees, split_orders=True)]))
+            path.write_text(json.dumps(raw), encoding='utf-8')
+            result['preview_token'] = digest(raw)
+            return result
+        self.preparation = legacy_preparation
+        self.test_paused_prepared_batch_recovers_after_expiry_with_original_orders()
 
     def execution(self,result):
         raw=json.loads(Path(result['snapshot_path']).read_text(encoding='utf-8'))

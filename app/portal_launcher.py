@@ -10,7 +10,7 @@ from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
 from app.launcher import project_root, external_environment, external_dll_search
-from app.execution_policy import CURRENT_EXECUTION_POLICY
+from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
 
 
 def running_url(root):
@@ -67,7 +67,7 @@ def main():
         if args.self_test:
             args.self_test.write_text(json.dumps({'ready': True, 'url': url,
                                                  'execution_policy': CURRENT_EXECUTION_POLICY.identifier,
-                                                 'execution_scope': CURRENT_EXECUTION_POLICY.public(),
+                                                 'execution_scope': load_execution_policy(project_root()).public(),
                                                  'broker_requested': False}), encoding='utf-8')
         else:
             webbrowser.open(url)

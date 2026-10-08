@@ -1,4 +1,4 @@
-from framework.order_capabilities import US_EQUITY_LIMIT_ORDERS
+from framework.order_capabilities import US_EQUITY_LIMIT_ORDERS, OrderRequirements
 """Data-module control adapters; vendor configuration stays in the data module."""
 from datetime import datetime
 from hashlib import sha256
@@ -35,11 +35,20 @@ class SnapshotControl:
                     hasher.update(item.read_bytes())
         return hasher.hexdigest()
 
+    def order_requirements(self, raw):
+        definition = self.entry.get('order_requirements')
+        if definition is not None:
+            return OrderRequirements(**definition)
+        # Explicit compatibility for the original stock schemas only. New modules must declare.
+        if self.entry.get('strategy_schema') in {'us_technology_daily_v1','us_equity_momentum_daily_v1'}:
+            return US_EQUITY_LIMIT_ORDERS
+        raise ControlError('数据模块尚未声明订单要求。')
+
     def load(self, raw):
         snapshot = parse_snapshot(raw)
         return SnapshotInput(self.entry['strategy_schema'], False, raw, snapshot.stocks,
                              self.metadata(raw), {s.asset_id: {'ticker': s.ticker, 'industry': s.industry}
-                                                  for s in snapshot.stocks}, snapshot, order_requirements=US_EQUITY_LIMIT_ORDERS)
+                                                  for s in snapshot.stocks}, snapshot, order_requirements=self.order_requirements(raw))
 
     def metadata(self, raw):
         if not isinstance(raw, dict) or not isinstance(raw.get('stocks'), list):
@@ -53,6 +62,10 @@ class SnapshotControl:
 
 
 class CurrentResearchControl(SnapshotControl):
+    def execution_signal(self, raw, clock):
+        # Original providers keep their old method name as a compatibility API.
+        return self.paper_signal(raw, clock)
+
     @property
     def directory(self):
         return project_path(self.root, self.profile['cache_dir'], under='runs').parent
@@ -84,7 +97,7 @@ class CurrentResearchControl(SnapshotControl):
                         tuple(s['adjusted_closes']), tuple(s['dollar_volumes'])) for s in raw['stocks'])
         labels = {s['asset_id']: {'ticker': s['ticker'], 'industry': s.get('industry_name', s['industry'])}
                   for s in raw['stocks']}
-        return SnapshotInput(self.entry['strategy_schema'], True, raw, stocks, meta, labels, order_requirements=US_EQUITY_LIMIT_ORDERS)
+        return SnapshotInput(self.entry['strategy_schema'], True, raw, stocks, meta, labels, order_requirements=self.order_requirements(raw))
 
 
 class MassiveControl(CurrentResearchControl):
@@ -109,7 +122,7 @@ class MassiveControl(CurrentResearchControl):
         if day > end:
             raise ControlError('基准日线尚未完成。')
         return dict(symbol=symbol, price=number(row['c'], positive=True), session_day=str(day),
-                    source='Massive', return_type='split_adjusted_price', observed_at=saved['observed_at'])
+                    source='Massive', currency='USD', return_type='split_adjusted_price', observed_at=saved['observed_at'])
 
     def configuration_status(self):
         from data.massive import configuration_status

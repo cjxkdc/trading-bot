@@ -1,4 +1,4 @@
-"""Whole-share ownership and net orders for a shared long-only account.
+"""Instrument-unit ownership and net orders for a shared long-only account.
 
 No broker imports. Ownership is an internal bookkeeping convention; one broker
 position may have several owners. Idle owners keep exact shares, not weights.
@@ -6,6 +6,7 @@ position may have several owners. Idle owners keep exact shares, not weights.
 from decimal import Decimal, ROUND_FLOOR
 
 from framework.trading import amount
+from framework.market import InstrumentRules
 
 D = Decimal
 
@@ -18,8 +19,6 @@ def quantities(value):
         if not isinstance(symbol, str) or not symbol:
             raise ValueError('Invalid ownership symbol')
         number = amount(raw, True)
-        if number != number.to_integral_value():
-            raise ValueError('Ownership requires whole shares')
         result[symbol] = number
     return result
 
@@ -44,7 +43,11 @@ def reconcile_ownership(owners, observed, unmanaged=None):
     return {s: str(q - owned.get(s, D(0))) for s, q in actual.items() if q > owned.get(s, D(0))}
 
 
-def owner_plan(owners, unmanaged, due_targets, budgets, equity, asks):
+def _rule(symbol, instrument_rules):
+    return InstrumentRules.from_record(instrument_rules[symbol]) if instrument_rules is not None else InstrumentRules()
+
+
+def owner_plan(owners, unmanaged, due_targets, budgets, equity, asks, *, instrument_rules=None):
     """Keep inactive owners intact; size only due owners within their NAV budgets."""
     result = {owner: {s: str(q) for s, q in quantities(pos).items()} for owner, pos in owners.items()}
     for owner, targets in due_targets.items():
@@ -54,7 +57,10 @@ def owner_plan(owners, unmanaged, due_targets, budgets, equity, asks):
         result[owner] = {}
         for symbol, weight in targets.items():
             w = amount(weight, True)
-            q = (amount(equity, True) * budget * w / amount(asks[symbol], True)).to_integral_value(rounding=ROUND_FLOOR)
+            rule = _rule(symbol, instrument_rules)
+            q = rule.floor_quantity(amount(equity, True) * budget * w / (amount(asks[symbol], True) * rule.contract_multiplier))
+            if q < rule.min_quantity:
+                q = D(0)
             if q:
                 result[owner][symbol] = str(q)
     net = aggregate(result)
@@ -63,8 +69,8 @@ def owner_plan(owners, unmanaged, due_targets, budgets, equity, asks):
     return result, {s: str(q) for s, q in sorted(net.items()) if q}
 
 
-def settle_ownership(planned, previous, unmanaged, observed, due_ids, *, partial=False):
-    """Allocate actual whole shares after a cash/fee constrained net execution.
+def settle_ownership(planned, previous, unmanaged, observed, due_ids, *, partial=False, instrument_rules=None):
+    """Allocate actual instrument quantities after a cash/fee constrained net execution.
 
     Fixed owners and external shares receive their exact holdings first. The
     remaining shares go to due owners by largest remainder, deterministic on ID.
@@ -91,10 +97,17 @@ def settle_ownership(planned, previous, unmanaged, observed, due_ids, *, partial
     result = {key: dict(pos) for key, pos in fixed.items()}
     result.update({key: {} for key in due_ids})
     for symbol, held in actual.items():
-        available = int(held - reserved.get(symbol, D(0)))
-        wanted = {key: int(quantities(planned.get(key, {})).get(symbol, D(0))) for key in due_ids}
+        step = _rule(symbol, instrument_rules).quantity_step
+        units = (held - reserved.get(symbol, D(0))) / step
+        if units != units.to_integral_value():
+            raise ValueError('Observed position does not match the declared instrument quantity step')
+        available = int(units)
+        wanted_quantities = {key: quantities(planned.get(key, {})).get(symbol, D(0)) / step for key in due_ids}
+        if any(q != q.to_integral_value() for q in wanted_quantities.values()):
+            raise ValueError('Planned ownership does not match the declared instrument quantity step')
+        wanted = {key: int(q) for key, q in wanted_quantities.items()}
         if partial and not sum(wanted.values()):
-            wanted = {key: int(quantities(previous.get(key, {})).get(symbol, D(0))) for key in due_ids}
+            wanted = {key: int(quantities(previous.get(key, {})).get(symbol, D(0)) / step) for key in due_ids}
         denominator = sum(wanted.values())
         if available and not denominator:
             raise ValueError('Unattributed fill')
@@ -108,5 +121,5 @@ def settle_ownership(planned, previous, unmanaged, observed, due_ids, *, partial
             assigned[key] += 1
         for key, count in assigned.items():
             if count:
-                result[key][symbol] = str(count)
+                result[key][symbol] = str(D(count) * step)
     return result

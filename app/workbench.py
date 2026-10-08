@@ -19,6 +19,7 @@ from app.diagnostics import failure_details
 from app.operations import WORKBENCH_ACTIONS, BROKER_CHECKS, DATA_CAPABILITIES, context_for
 from app.readiness import operation_states
 from app.module_registry import ModuleRegistry
+from app.market_status import selected_market_session
 from app.task_client import run_worker
 from app.broker_session import BrokerSession
 from app.broker_authorization import BrokerAuthorization
@@ -27,7 +28,7 @@ from app.automation import Automation
 from app.monitoring import Monitoring
 from app.strategy_instances import StrategyInstances
 from app.strategy_files import StrategyFiles
-from app.execution_policy import CURRENT_EXECUTION_POLICY
+from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
@@ -178,7 +179,7 @@ class PortalService:
             if action in {'start', 'once'}:
                 item = manager.get(ident)
                 if value != {'confirmation': ident}:
-                    raise PortalError('请确认所选策略实例和模拟账户。')
+                    raise PortalError('请确认所选策略实例和账户。')
                 if self.automation.data['enabled'] and self.same_account_profile(self.automation.data['binding']['broker_id'], item['broker_id']):
                     raise PortalError('此账户的旧自动计划仍在运行，请先关闭，再启动策略实例。')
                 result = manager.start(ident) if action == 'start' else manager.run_once(ident)
@@ -468,7 +469,7 @@ class PortalService:
                 raise PortalError('授权请求已失效，请从当前券商模块重新开始。')
             try:
                 self.authorization.finish(state, code)
-                self.authorization_notice = '网页授权完成，请选择美股模拟账户并检查连接。'
+                self.authorization_notice = '网页授权完成，请选择返回的账户并检查连接。'
             except ControlError:
                 self.authorization_notice = '网页授权未完成，请重新开始并仅授权账户读取。'
                 raise
@@ -712,7 +713,13 @@ class PortalService:
                 for action in ('execute', 'resolve-remainder', 'close-terminal'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
-                'execution_scope': CURRENT_EXECUTION_POLICY.public(),
+                'execution_scope': load_execution_policy(self.root).public(),
+                'execution_context': broker.get('execution_context'),
+                'market_session': selected_market_session(broker, at=datetime.fromisoformat(now()),
+                    current_context=context,
+                    automation=self.automation.data if not self.automation.corrupt else None,
+                    instances=self.strategy_instances.data if not self.strategy_instances.corrupt else None,
+                    connection_context=lambda: self.registry.connection_context(self.broker_id)),
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
                 'monitoring': self.monitor.public(),
@@ -767,7 +774,7 @@ class PortalService:
             if action == 'execute' and 'execute' not in broker_spec['capabilities']:
                 raise PortalError('此账户模块未声明执行能力。')
             if action == 'prepare' and 'prepare' not in broker_spec['capabilities']:
-                raise PortalError('当前账户模块没有模拟订单准备能力。')
+                raise PortalError('当前账户模块没有订单准备能力。')
             context = context_for(self.registry, action, broker_id, source)
             financial_scope = self.monitor.scope(broker_id) if action == 'observe' else None
             operation_cap = DATA_CAPABILITIES
@@ -849,7 +856,7 @@ class PortalService:
                             if result.get('execution_ready') and result.get('preview_token') and execution_path:
                                 self.preview_private = (Path(execution_path), result['preview_token'])
                                 if action == 'prepare' and safe_result.get('account_details'):
-                                    self.account = {'status':'connected','message':'准备时已核对绑定的模拟账户。',
+                                    self.account = {'status':'connected','message':'准备时已核对绑定的账户。',
                                                     'details':safe_result['account_details'],
                                                     'checked_at':now()}
                     if action == 'execute':

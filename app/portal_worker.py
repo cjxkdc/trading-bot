@@ -1,4 +1,4 @@
-"""One operation against selected modules. No provider-specific dispatch or live session."""
+"""One operation against selected modules. Capabilities and bound environment determine execution."""
 from datetime import datetime, timezone
 import json
 from math import isfinite
@@ -13,7 +13,7 @@ from data.common import DataIssue, write_json
 from framework.decisions import digest
 from framework.contracts import SubmissionRejected
 from framework.execution import ExecutionBlocked
-from framework.order_capabilities import order_capability_issues
+from framework.order_capabilities import order_capability_issues, OrderRequirements
 from framework.trading import fresh
 from app.module_registry import ModuleRegistry
 from app.diagnostics import failure_details
@@ -50,11 +50,11 @@ def research_preview(cfg, runner, loaded, path):
 def execution_issues(loaded, decision, policy, clock, mode):
     raw, snapshot = loaded.raw, loaded.execution
     issues = []
-    if mode == 'broker_paper':
+    if mode in {'broker_paper','live'}:
         if raw.get('synthetic', False) is not False or any(str(s.ticker).startswith('DEMO-') for s in loaded.stocks):
             issues.append('合成数据不能提交到联网券商。')
-        if snapshot.execution_time.astimezone(ZoneInfo('America/New_York')).date() != clock.astimezone(ZoneInfo('America/New_York')).date():
-            issues.append('快照不是当前美股交易日的数据。')
+        if snapshot.execution_time.astimezone(ZoneInfo(snapshot.market.timezone)).date() != clock.astimezone(ZoneInfo(snapshot.market.timezone)).date():
+            issues.append('快照不是当前市场交易日的数据。')
     if not loaded.stocks:
         issues.append('股票池为空。')
     if not snapshot.quotes or any(t.asset_id not in snapshot.quotes for t in decision.targets):
@@ -67,6 +67,16 @@ def execution_issues(loaded, decision, policy, clock, mode):
     except ValueError:
         issues.append('报价不符合当前运行时钟或买卖价格校验，请重新获取数据。')
     return issues
+
+
+
+def require_snapshot_context(loaded, broker, control=None):
+    from brokers.controls import require_account_snapshot, snapshot_instruments
+    if not isinstance(loaded.order_requirements, OrderRequirements):
+        raise ControlError('数据接入未声明证券与订单要求，无法准备或执行订单。')
+    trusted = None if control is None else control.instrument_rules(snapshot_instruments(loaded.execution))
+    require_account_snapshot(loaded.execution, broker['execution_context'], loaded.order_requirements,
+                             trusted_rules=trusted)
 
 
 def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, snapshot_path=None,
@@ -111,13 +121,13 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         control = registry.control('broker', broker_id)
         descriptor = registry.descriptor('broker', broker_id)
         capability = 'reconcile' if action in {'resolve-remainder', 'close-terminal'} else action
-        if descriptor['mode'] != 'broker_paper' or capability not in descriptor['capabilities']:
-            raise ControlError('当前模拟账户模块不支持此操作。')
+        if capability not in descriptor['capabilities']:
+            raise ControlError('当前账户模块不支持此操作。')
         if action == 'calendar':
             from datetime import timedelta
-            today = clock.astimezone(ZoneInfo('America/New_York')).date()
+            today = clock.astimezone(ZoneInfo(descriptor['execution_context']['timezone'])).date()
             sessions = control.trading_sessions(today.replace(day=1) - timedelta(days=7), today + timedelta(days=100))
-            return {'status':'ready','message':'交易日历已更新。','sessions':[str(day) for day in sessions]}
+            return {'status':'ready','message':'交易日历已更新。','sessions':[day if isinstance(day, dict) else str(day) for day in sessions], 'execution_context':descriptor['execution_context']}
         from app.paper_recovery import reconcile_orders, close_unsubmitted, close_terminal
         runner = build_portfolio_runner(registry.configuration(broker_id))
         if action in {'resolve-remainder', 'close-terminal'}:
@@ -151,8 +161,10 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         raise ControlError('此数据模块未声明预览能力。')
     if action == 'execute' and 'execute' not in broker['capabilities']:
         raise ControlError('此账户模块未声明执行能力。')
-    if action == 'prepare' and (broker['mode'] != 'broker_paper' or 'prepare' not in broker['capabilities']):
-        raise ControlError('当前账户模块没有模拟订单准备能力。')
+    if action == 'prepare' and ('prepare' not in broker['capabilities']):
+        raise ControlError('当前账户模块没有订单准备能力。')
+    if action in {'prepare','execute','recover'}:
+        registry.require_execution(broker_id)
     registry.compatible(cfg, source_id)
     runner = build_portfolio_runner(cfg)
     required = runner.engine.strategy.history_requirements
@@ -174,12 +186,12 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
     if path.stat().st_size > 32 * 1024 * 1024:
         raise ControlError('快照超过读取上限。')
     raw = json.loads(path.read_text(encoding='utf-8-sig'))
-    from app.paper_preparation import SCHEMA as PREPARED, prepare, execute_prepared
-    if automation is not None and action in {'execute', 'recover'} and raw.get('schema') != PREPARED:
-        raise ControlError('自动执行只接受已经冻结并核对过的模拟订单预览。')
-    if action in {'execute', 'recover'} and raw.get('schema') == PREPARED:
-        if broker['mode'] != 'broker_paper' or 'prepare' not in broker['capabilities']:
-            raise ControlError('当前账户不支持这份模拟订单预览。')
+    from app.execution_preparation import SCHEMA as PREPARED, LEGACY_SCHEMA, prepare, execute_prepared
+    if automation is not None and action in {'execute', 'recover'} and raw.get('schema') not in {PREPARED,LEGACY_SCHEMA}:
+        raise ControlError('自动执行只接受已经冻结并核对过的订单预览。')
+    if action in {'execute', 'recover'} and raw.get('schema') in {PREPARED,LEGACY_SCHEMA}:
+        if 'prepare' not in broker['capabilities']:
+            raise ControlError('当前账户不支持这份订单预览。')
         method = execute_prepared
         if action == 'recover':
             from app.paper_recovery import recover_prepared
@@ -188,7 +200,7 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
                       runner=runner,control=registry.control('broker',broker_id),cfg=cfg,clock=clock,
                       before_submit=before_submit)
     if action == 'recover':
-        raise ControlError('只能核对已有的冻结模拟订单批次。')
+        raise ControlError('只能核对已有的冻结订单批次。')
     loaded = source.load(raw)
     if loaded.schema != runner.input_schema:
         raise ControlError('数据模块返回的输入格式与策略不兼容。')
@@ -207,11 +219,15 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         else:
             result = research_preview(cfg, runner, loaded, path)
     else:
+        control = registry.control('broker', broker_id)
+        require_snapshot_context(loaded, broker, control)
         decision = runner.plan(loaded.execution)
         token = digest({'context': context, 'snapshot': raw, 'decision': decision.record})
         issues = execution_issues(loaded, decision, runner.policy, clock, broker['mode'])
         _, broker_entry = registry.resolve('broker', broker_id)
         issues.extend(order_capability_issues(broker_entry['control'].get('order_capabilities'), loaded.order_requirements))
+        if not broker.get('execution_enabled', True):
+            issues.append(broker.get('execution_reason') or '此账户尚未获得执行权限。')
         if 'execute' not in broker['capabilities']:
             issues.append('此账户模块未声明执行能力。')
         if action == 'execute':
@@ -221,9 +237,14 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
                 raise ControlError(' '.join(issues))
             control = registry.control('broker', broker_id)
             with control.session(cfg, loaded.execution, runner.fees) as (connection, journal):
-                if connection.mode != broker['mode'] or connection.mode not in {'paper', 'broker_paper'}:
+                if connection.mode != broker['mode'] or connection.mode not in {'paper', 'broker_paper','live'}:
                     raise ControlError('实际账户环境与所选模块不一致。')
-                detail = runner.execute(decision, loaded.execution, connection, journal)
+                def submit_guard():
+                    registry.require_execution(broker_id)
+                    if before_submit:
+                        before_submit()
+                detail = runner.execute(decision, loaded.execution, connection, journal, enable_live=connection.mode == 'live',
+                                        before_submit=submit_guard)
             result = {'status': 'complete', 'message': '本轮执行结束；未启动持续调度。',
                       'details': {k: v for k, v in detail.items() if k != 'account'}}
         else:

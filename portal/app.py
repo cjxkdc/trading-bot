@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.workbench import MAX_FILE, PortalError, PortalService
-from app.execution_policy import CURRENT_EXECUTION_POLICY
+from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
 
 
 class LocalOnly:
@@ -124,7 +124,7 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     def health():
         return {'application': 'trading-bot-portal', 'instance': instance,
                 'execution_policy': CURRENT_EXECUTION_POLICY.identifier,
-                'execution_scope': CURRENT_EXECUTION_POLICY.public()}
+                'execution_scope': load_execution_policy(root).public()}
 
     @app.get('/api/session')
     def session():
@@ -235,7 +235,7 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     @app.post('/api/automation/enable')
     async def automation_enable(request: Request):
         if await body(request):
-            raise PortalError('自动运行只能使用当前选定并已核验的模拟模块。')
+            raise PortalError('自动运行只能使用当前选定并已核验的模块。')
         return service.automation_enable()
 
     @app.post('/api/automation/disable')
@@ -288,7 +288,7 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     async def bind(request: Request):
         value = await body(request)
         if set(value) != {'account'}:
-            raise PortalError('请选择返回的模拟账户。')
+            raise PortalError('请选择返回的账户。')
         return service.bind_authorization(value['account'])
 
     @app.post('/api/strategy')
@@ -305,9 +305,9 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         if action == 'execute' and value.get('confirmation') != service.broker_id:
             raise PortalError('请先核对预览并确认当前账户模块。')
         if action == 'resolve-remainder' and value.get('confirmation') != service.broker_id:
-            raise PortalError('请明确确认当前模拟账户，并确认结束尚未提交的余单。')
+            raise PortalError('请明确确认当前账户，并确认结束尚未提交的余单。')
         if action == 'close-terminal' and value.get('confirmation') != service.broker_id:
-            raise PortalError('请明确确认当前模拟账户，并确认已在券商端核对撤单或拒单。')
+            raise PortalError('请明确确认当前账户，并确认已在券商端核对撤单或拒单。')
         return service.start(action)
 
     @app.post('/api/data/settings')

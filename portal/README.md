@@ -15,7 +15,7 @@ Portal 是五个交易模块之上的控制层。策略、券商和数据分别�
 
 首次默认值来自 `configs/data_sources.json` 和 `configs/broker_profiles.json`，之后记住 `runs/portal/preferences.json` 中的选择。策略保存到 `configs/portfolio_config.json`，原文件备份到 `runs/portal/config-history`。
 
-当前仅允许本地回放和券商模拟环境，已有实盘模块可见但禁用。支持手动单次执行及可选的自动模拟调仓；自动运行默认关闭，详见 [自动模拟交易](../docs/AUTOMATION.md)。
+账户查看和运行配置支持本地回放、券商模拟与实盘。订单执行按模块能力与具体账户授权检查；实盘授权默认空，当前账户仍使用模拟环境。支持手动与计划运行，详见 [模块化执行](../docs/MODULAR_EXECUTION.md) 和 [自动运行](../docs/AUTOMATION.md)。
 
 ## 后台开关与状态
 

@@ -14,7 +14,7 @@ export function automationView(automation, { online = true, runtimeRunning = tru
   else status = ['waiting', 'running', 'paused'].includes(automation.status) ? automation.status : 'paused';
   const tone = ['unknown', 'paused'].includes(status) ? 'amber' : ['waiting', 'running'].includes(status) ? 'blue' : 'muted';
   const message = status === 'unknown' ? '等待后台确认自动运行状态。' : status === 'stopped' ? '后台未运行，定时任务不会执行。' :
-    automation?.message || (status === 'disabled' ? '服务在线；交易操作仍需手动执行。' : '按保存的计划运行模拟交易。');
+    automation?.message || (status === 'disabled' ? '服务在线；交易操作仍需手动执行。' : '按保存的计划运行交易。');
   const startup = automation?.startup?.status;
   const label = enabled && status === 'waiting' && startup === 'pending_check' ? '首次检查中' :
     enabled && status === 'waiting' && startup === 'checked' ? '等待首次建仓' : labels[status];
@@ -26,9 +26,9 @@ export function automationView(automation, { online = true, runtimeRunning = tru
 
 export function automationSchedule(config = {}) {
   return { cadence: config.cadence || 'monthly', day: config.day ?? 1, weekday: config.weekday ?? 0,
-    prepare_time: config.prepare_time || '06:00', trade_time: config.trade_time || '09:35',
+    prepare_time: config.prepare_time || '', trade_time: config.trade_time || '',
     initial_entry: config.initial_entry || 'immediate', window_minutes: config.window_minutes ?? 60,
-    timezone: config.timezone || 'America/New_York', poll_seconds: config.poll_seconds ?? 30 };
+    timezone: config.timezone || '', poll_seconds: config.poll_seconds ?? 30 };
 }
 
 export function scheduleChanged(draft, config) {
@@ -51,10 +51,10 @@ export function automationControls(automation, { online = true, runtimeRunning =
 
 export function scheduleSummary(config = {}) {
   const cfg = automationSchedule(config);
-  const days = ['周一', '周二', '周三', '周四', '周五'];
+  const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   const cadence = cfg.cadence === 'daily' ? '每个交易日' : cfg.cadence === 'weekly' ? `每${days[cfg.weekday]}（休市顺延）` :
     `每月 ${cfg.day} 日起的首个交易日`;
-  return `${cadence} · ${cfg.trade_time} 美东时间`;
+  return `${cadence} · ${cfg.trade_time || '时间未设置'} · ${cfg.timezone || '时区未设置'}`;
 }
 
 export function automationAccountMatches(automation, brokerId) {

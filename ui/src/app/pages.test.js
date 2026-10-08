@@ -155,3 +155,38 @@ test('deleted strategy links cannot quietly open the current global strategy', (
   assert.match(create, /所选策略已不可用/);
   assert.doesNotMatch(create, /保存实例/);
 });
+
+
+test('HK live module is inspectable and its UI does not claim US paper trading', () => {
+  const value=state();
+  Object.assign(value.broker, {mode:'live',mode_label:'实盘账户',execution_enabled:false,execution_reason:'账户待授权',execution_context:{market:'HK',asset_class:'equity',currency:'HKD',timezone:'Asia/Hong_Kong'}});
+  const html=render('BrokerPage', common(value));
+  assert.match(html, /HKD/); assert.match(html, /Asia\/Hong_Kong/); assert.match(html, /账户待授权/);
+  assert.doesNotMatch(html, /美股|美东|仅开放模拟/);
+  value.preview={created_at:'2026-10-08',orders:[{ticker:'00700',quantity:100,limit_price:500,notional:50000}],targets:[]};
+  assert.match(render('ManualRun', common(value)), /限价（HKD）/);
+});
+
+test('instance execution uses that account permission and never the global paper account', () => {
+  const value=state();
+  const other={id:'hk-live',enabled:true,mode:'live',mode_label:'实盘账户',execution_enabled:false,execution_reason:'账户待授权'};
+  value.brokers.push(other);
+  const item={id:'hk',name:'HK run',strategy:value.strategy,broker_id:other.id,source_id:'snapshot',budget:0.5,status:'stopped',enabled:false,schedule:{timezone:'Asia/Hong_Kong'},positions:[],events:[]};
+  value.strategy_manager.instances=[item];
+  const props={...common(value),route:{page:'runs',view:'instances',instance:'hk'}};
+  let html=render('StrategyRuns',props);
+  assert.match(html, /实盘账户/); assert.match(html, /账户待授权/);
+  assert.match(html, /<button[^>]*disabled[^>]*><span>启动实例/);
+  other.execution_enabled=true;
+  html=render('StrategyRuns',props);
+  assert.doesNotMatch(html, /<button[^>]*disabled[^>]*><span>启动实例/);
+});
+
+test('instance header reports its own market even when the selected global account differs', () => {
+  const value=state();
+  value.broker.execution_context={market:'US',timezone:'America/New_York'};
+  value.brokers.push({id:'crypto',execution_context:{market:'CRYPTO',timezone:'UTC'}});
+  value.strategy_manager.instances=[{id:'x',broker_id:'crypto'}];
+  const html=render('PortalShell',{route:{page:'runs',view:'instances',instance:'x'},navigate:noop,access:{enabled:false},session:{state:value,online:true},runtimeStatus:{},toggleRuntime:noop});
+  assert.match(html,/CRYPTO/); assert.doesNotMatch(html,/America\/New_York/); assert.match(html,/交易时段待确认/);
+});

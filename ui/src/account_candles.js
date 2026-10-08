@@ -1,3 +1,5 @@
+import { validTimezone } from './execution_context.js';
+
 export const candlePeriods = [
   { id: '1m', label: '1分钟' }, { id: '5m', label: '5分钟' },
   { id: '1h', label: '小时K' }, { id: '1d', label: '日K' }, { id: '1w', label: '周K' },
@@ -43,20 +45,21 @@ export function moveCandle(index, key, count) {
   return current;
 }
 
-const dateFormat = options => new Intl.DateTimeFormat('zh-CN', { timeZone:'America/New_York', ...options });
-export function candleLabel(bar, interval) {
-  if (!bar || !Number.isFinite(Date.parse(bar.start))) return '';
+const dateFormat = (timezone, options) => new Intl.DateTimeFormat('zh-CN', { timeZone:timezone, ...options });
+export function candleLabel(bar, interval, timezone) {
+  if (!bar || !Number.isFinite(Date.parse(bar.start)) || !validTimezone(timezone)) return '—';
   if (interval === '1w') {
-    const f = dateFormat({ year:'numeric',month:'2-digit',day:'2-digit' });
+    const f = dateFormat(timezone, { year:'numeric',month:'2-digit',day:'2-digit' });
     return `${f.format(new Date(bar.start))} — ${f.format(new Date(Date.parse(bar.end)-1))}`;
   }
-  return dateFormat({ year:'numeric',month:'2-digit',day:'2-digit',
+  return dateFormat(timezone, { year:'numeric',month:'2-digit',day:'2-digit',
     ...(interval === '1d' ? {} : {hour:'2-digit',minute:'2-digit',hour12:false,timeZoneName:'short'}),
   }).format(new Date(bar.start));
 }
 
-export function candleAxisLabel(bar, interval) {
-  return dateFormat(['1d','1w'].includes(interval) ? {month:'2-digit',day:'2-digit'}
+export function candleAxisLabel(bar, interval, timezone) {
+  if (!bar || !Number.isFinite(Date.parse(bar.start)) || !validTimezone(timezone)) return '—';
+  return dateFormat(timezone, ['1d','1w'].includes(interval) ? {month:'2-digit',day:'2-digit'}
     : interval === '1h' ? {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}
     : {hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(bar.start));
 }

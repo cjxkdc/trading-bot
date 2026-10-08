@@ -28,7 +28,7 @@ def parse_snapshot(data):
         raise ValueError("Invalid portfolio context in snapshot")
     context = None if raw is None else PortfolioContext(
         date.fromisoformat(raw["as_of"]), tuple(raw["held_asset_ids"]))
-    return MarketSnapshot(SCHEMA, stocks, quotes, now, context)
+    return MarketSnapshot(data["input_schema"], stocks, quotes, now, context, execution_context=data.get("execution_context"))
 
 
 def load_snapshot(path):
@@ -53,8 +53,7 @@ def _parse_snapshot(data):
     for q in data["quotes"]:
         if q["asset_id"] in quotes:
             raise ValueError("Duplicate quote")
-        quotes[q["asset_id"]] = Quote(q["asset_id"], amount(q["bid"], True),
-            amount(q["ask"], True), datetime.fromisoformat(q["as_of"]))
+        quotes[q['asset_id']] = Quote.from_record(q)
     return stocks, quotes, now
 
 

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import json
 import math
+import re
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -35,6 +36,23 @@ def number(value, *, optional=False, positive=False):
     return result
 
 
+def observation_context(item):
+    currency = item.get('currency')
+    environment = item.get('environment')
+    if not isinstance(currency, str) or not re.fullmatch(r'[A-Z][A-Z0-9]{1,11}', currency):
+        raise ValueError('An explicit reporting currency is required')
+    if environment not in {'SIMULATE','REAL','paper','broker_paper','live'}:
+        raise ValueError('An explicit account environment is required')
+    zone = item.get('timezone')
+    # Compatibility for old observations only. Other currencies need an explicit zone.
+    if zone is None and environment == 'SIMULATE' and currency == 'USD':
+        zone = 'America/New_York'
+    if not isinstance(zone,str):
+        raise ValueError('An explicit accounting timezone is required')
+    ZoneInfo(zone)
+    return currency, environment, zone
+
+
 class PerformanceStore:
     def __init__(self, path):
         self.path = Path(path)
@@ -58,8 +76,9 @@ class PerformanceStore:
     def record(self, scope, observation):
         item = deepcopy(observation)
         at = stamp(item['as_of'])
-        if (item.get('environment') != 'SIMULATE' or item.get('currency') != 'USD'
-                or not item.get('account_ref') or len(item.get('positions', [])) > 1000):
+        currency, environment, market_timezone = observation_context(item)
+        item['timezone'] = market_timezone
+        if not item.get('account_ref') or len(item.get('positions', [])) > 1000:
             raise ValueError('Unsupported accounting observation')
         item['equity'] = number(item['equity'], positive=True)
         for key in ('cash_total', 'cash_available', 'market_value', 'fees'):
@@ -69,24 +88,27 @@ class PerformanceStore:
             if not isinstance(p.get('symbol'), str) or p['symbol'] in seen:
                 raise ValueError('Duplicate or invalid accounting position')
             seen.add(p['symbol'])
+            if p.get('currency', currency) != currency:
+                raise ValueError('Position valuation must use the account reporting currency; explicit FX conversion is required')
             for key in ('quantity', 'market_value', 'cost_price', 'unrealized_pnl',
                         'last_price', 'position_pnl', 'pnl_rate', 'day_pnl'):
                 p[key] = number(p.get(key), optional=key != 'quantity')
-            if p['quantity'] < 0:
-                raise ValueError('Short positions are not supported by this observer')
+            # Read-only accounting can represent shorts even where execution cannot.
         item['as_of'] = at.isoformat()
         if isinstance(item.get('benchmark'), dict):
             item['benchmark']['price'] = number(item['benchmark']['price'], positive=True)
         encoded = json.dumps(item, ensure_ascii=False, allow_nan=False)
         with closing(self.connect()) as db, db:
             last = db.execute('SELECT body FROM observations WHERE scope=? ORDER BY as_of DESC LIMIT 1', (scope,)).fetchone()
-            if last and json.loads(last[0])['account_ref'] != item['account_ref']:
-                raise ValueError('Account identity changed; rebind before observing')
+            if last:
+                previous = json.loads(last[0])
+                if previous['account_ref'] != item['account_ref'] or observation_context(previous) != observation_context(item):
+                    raise ValueError('Account identity, environment, reporting currency or timezone changed; start a separate scope')
             old = db.execute('SELECT body FROM observations WHERE scope=? AND as_of=?', (scope,item['as_of'])).fetchone()
             if old and old[0] != encoded:
                 raise ValueError('Conflicting observation timestamp')
             db.execute('INSERT OR IGNORE INTO observations VALUES(?,?,?,?)',
-                       (scope,item['as_of'],str(at.astimezone(ZoneInfo('America/New_York')).date()),encoded))
+                       (scope,item['as_of'],str(at.astimezone(ZoneInfo(market_timezone)).date()),encoded))
         return item
 
     def cycle(self, scope, result, *, strategy=None):
@@ -142,14 +164,17 @@ class PerformanceStore:
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
             raise ValueError('Candle clock requires a timezone')
-        result = dict(interval=interval, timezone='America/New_York', currency='USD',
+        result = dict(interval=interval, timezone=None, currency=None,
                       basis='account_equity', sampling_only=True, as_of=None, bars=[])
         with closing(self.connect()) as db:
-            latest = db.execute('SELECT MAX(as_of) FROM observations WHERE scope=?', (scope,)).fetchone()[0]
-            if latest is None:
+            last_row = db.execute('SELECT body FROM observations WHERE scope=? ORDER BY as_of DESC LIMIT 1', (scope,)).fetchone()
+            if last_row is None:
                 return result
-            result['as_of'] = latest
-            lower = window_start(stamp(latest), interval, limit).isoformat()
+            latest_item = json.loads(last_row[0])
+            latest = latest_item['as_of']
+            currency, environment, market_timezone = observation_context(latest_item)
+            result.update(as_of=latest, currency=currency, timezone=market_timezone, environment=environment)
+            lower = window_start(stamp(latest), interval, limit, market_timezone).isoformat()
             reset = db.execute("SELECT MAX(as_of) FROM cash_events WHERE scope=? AND kind='reset'", (scope,)).fetchone()[0]
             if reset:
                 lower = max(lower, reset)
@@ -172,7 +197,7 @@ class PerformanceStore:
                 ORDER BY g.first_at
             ''', (scope,lower,scope,scope)).fetchall()
         for first,last,high,low,samples,opened,closed in rows:
-            start,end = bounds(stamp(first), interval)
+            start,end = bounds(stamp(first), interval, market_timezone)
             values = [number(v, positive=True) for v in (opened,high,low,closed)]
             if not values[2] <= min(values[0],values[3]) <= max(values[0],values[3]) <= values[1]:
                 raise ValueError('Invalid stored equity candle')
@@ -210,6 +235,7 @@ class PerformanceStore:
         if not items:
             return dict(latest=None,curve=[],cycles=cycles,cash_events=flows,metrics={},flow_reviewed_through=None)
         latest, base = items[-1],items[0]
+        currency, environment, market_timezone = observation_context(latest)
         reviewed = bool(review and review[0] >= latest['as_of'])
         nav, peak, curve, max_dd = 1.,1.,[],0.
         for i,item in enumerate(items):
@@ -237,9 +263,9 @@ class PerformanceStore:
                       if isinstance((b := item.get('benchmark')), dict)}
         bench=[]
         for p in curve:
-            b=benchmarks.get(str(stamp(p['as_of']).astimezone(ZoneInfo('America/New_York')).date()))
+            b=benchmarks.get(str(stamp(p['as_of']).astimezone(ZoneInfo(market_timezone)).date()))
             p['benchmark'] = b
-            if isinstance(b,dict) and b.get('price') is not None and b.get('session_day')==str(stamp(p['as_of']).astimezone(ZoneInfo('America/New_York')).date()) and stamp(p['as_of']).astimezone(ZoneInfo('America/New_York')).hour>=16:
+            if isinstance(b,dict) and b.get('price') is not None and b.get('session_day')==str(stamp(p['as_of']).astimezone(ZoneInfo(market_timezone)).date()) and (b.get('currency', 'USD' if market_timezone == 'America/New_York' and currency == 'USD' else None) == currency) and (stamp(b['completed_at']) <= stamp(p['as_of']) if b.get('completed_at') else market_timezone == 'America/New_York' and currency == 'USD' and stamp(p['as_of']).astimezone(ZoneInfo(market_timezone)).hour >= 16):
                 bench.append((p,b))
         benchmark_return=None
         benchmark_period=None
@@ -264,13 +290,14 @@ class PerformanceStore:
         if review_point and review[0] >= base['as_of']:
             analytic_items[review[0]] = json.loads(review_point[0])
         analytics = period_reports(sorted(analytic_items.values(), key=lambda item: item['as_of']),
-                                   flows, review[0] if review else None)
+                                   flows, review[0] if review else None, market_timezone)
         metrics=dict(asset_change=latest['equity']/base['equity']-1,return_rate=nav-1 if reviewed else None,
                      max_drawdown=max_dd if reviewed else None,benchmark_return=benchmark_return, benchmark_period=benchmark_period,
                      return_method='Daily linked Modified Dietz; user-reviewed cash flows',flow_review_required=not reviewed)
         for p in curve:
             if not reviewed:
                 p['index']=None
-        return dict(latest=latest,curve=curve,cycles=cycles,positions=positions,cash_events=flows,
+        return dict(currency=currency,timezone=market_timezone,environment=environment,
+                    latest=latest,curve=curve,cycles=cycles,positions=positions,cash_events=flows,
                     analytics=analytics, position_summary=position_summary(latest['positions']),
                     metrics=metrics,flow_reviewed_through=review[0] if review else None)

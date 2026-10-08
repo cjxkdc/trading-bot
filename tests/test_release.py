@@ -22,7 +22,9 @@ class ReleaseTests(unittest.TestCase):
                  'secrets/portal/server.json': 'PASSWORD-HASH', 'runs/paper/journal.sqlite': 'LEDGER',
                  '.venv/pyvenv.cfg': 'PRIVATE', 'ui/node_modules/extra.js': 'DEPENDENCY',
                  'configs/connection.json': 'ACCOUNT-ID', 'app/secrets/nested.json': 'TOKEN',
-                 'configs/portal/cloud.json': 'PRIVATE-CLOUD-URL'}
+                 'configs/portal/cloud.json': 'PRIVATE-CLOUD-URL',
+                 'configs/execution_policy.json': 'PRIVATE-LIVE-ACCOUNT-GRANT',
+                 'configs/execution_policy.example.json': '{"version":1,"live_accounts":{}}'}
         for name, content in files.items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +41,8 @@ class ReleaseTests(unittest.TestCase):
             all_content = b''.join(bundle.read(name) for name in names)
             for private in (b'PRIVATE', b'PASSWORD-HASH', b'LEDGER', b'ACCOUNT-ID', b'TOKEN', b'DEPENDENCY', b'PRIVATE-CLOUD-URL'):
                 self.assertNotIn(private, all_content)
+            self.assertNotIn('Trading-bot/configs/execution_policy.json', names)
+            self.assertIn('Trading-bot/configs/execution_policy.example.json', names)
             self.assertIn('Trading-bot/ui/dist/index.html', names)
             self.assertIn('Trading-bot/deploy/server/install.sh', names)
             self.assertFalse(any(name.endswith('.exe') for name in names))
@@ -53,6 +57,7 @@ class ReleaseTests(unittest.TestCase):
             with zipfile.ZipFile(path) as bundle:
                 record = json.loads(bundle.read('Trading-bot/release-manifest.json'))
                 self.assertFalse(record['credentials_included'])
+                self.assertEqual(record['execution_policy'], 'account_scoped')
                 for name, digest in record['sha256'].items():
                     self.assertEqual(sha256(bundle.read('Trading-bot/' + name)).hexdigest(), digest)
                 records.append(record)
