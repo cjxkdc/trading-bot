@@ -12,9 +12,11 @@ from app.control_contracts import ControlError, project_path
 from framework.configuration import load_config, normalize_config
 from framework.decisions import digest
 from app.strategy_documentation import strategy_documentation
+from app.execution_policy import ACCOUNT_ENVIRONMENTS, CURRENT_EXECUTION_POLICY
 
-ALLOWED_MODES = {'paper', 'broker_paper'}
-MODE_LABELS = {'paper': '本地回放', 'broker_paper': '模拟账户', 'live': '实盘'}
+# Compatibility names for callers; policy and environment definitions have one owner.
+ALLOWED_MODES = CURRENT_EXECUTION_POLICY.allowed_environments
+MODE_LABELS = ACCOUNT_ENVIRONMENTS
 
 
 def load_class(entrypoint, namespace):
@@ -87,7 +89,7 @@ class ModuleRegistry:
         profile, entry = self.resolve(kind, ident)
         control = entry['control']
         mode = control.get('mode')
-        enabled = kind != 'broker' or mode in ALLOWED_MODES
+        enabled = kind != 'broker' or CURRENT_EXECUTION_POLICY.allows(mode)
         if enabled:
             cls = load_class(control['entrypoint'], {'data': 'data', 'broker': 'brokers'}[kind])
             methods = ({'collect': ('collect',), 'inspect': ('inspect',), 'configure': ('configure',),
@@ -106,7 +108,7 @@ class ModuleRegistry:
                 'mode_label': MODE_LABELS.get(mode, ''), 'enabled': enabled,
                 'authentication': control.get('authentication', {'mode': 'local' if mode == 'paper' else 'external',
                     'title': '本地回放' if mode == 'paper' else '券商客户端或 API 配置'}),
-                'reason': None if enabled else '当前工作台仅启用模拟与本地回放。'}
+                'reason': None if enabled else CURRENT_EXECUTION_POLICY.rejection_reason(mode)}
 
     def descriptors(self, kind):
         result = []
@@ -126,8 +128,8 @@ class ModuleRegistry:
 
     def control(self, kind, ident, *, config=None, bind_request=True):
         profile, entry = self.resolve(kind, ident)
-        if kind == 'broker' and entry['control'].get('mode') not in ALLOWED_MODES:
-            raise ControlError('当前执行权限不允许使用此账户环境。')
+        if kind == 'broker':
+            CURRENT_EXECUTION_POLICY.require(entry['control'].get('mode'))
         cls = load_class(entry['control']['entrypoint'], {'data': 'data', 'broker': 'brokers'}[kind])
         adapter = cls(self.root, profile, entry)
         adapter.instance_id = ident
@@ -159,8 +161,7 @@ class ModuleRegistry:
         profile, entry = self.resolve('broker', broker_id)
         cfg['broker'] = deepcopy(profile)
         # Connection construction and canonical ledger ownership belong to the adapter.
-        if entry['control'].get('mode') not in ALLOWED_MODES:
-            raise ControlError('当前执行权限不允许实盘。')
+        CURRENT_EXECUTION_POLICY.require(entry['control'].get('mode'))
         return cfg
 
     def version(self):

@@ -39,9 +39,9 @@ export function PortalShell({ route, navigate, access, onLogout, session, runtim
   return <div className="app-shell">
     <button className="skip-link" onClick={() => document.getElementById('main-content')?.focus()}>跳至内容</button>
     <aside className="sidebar">
-      <div className="brand"><Icon name="chart" size={18}/><strong>Trading Bot</strong><small>PAPER</small></div>
+      <div className="brand"><Icon name="chart" size={18}/><strong>Trading Bot</strong></div>
       <nav aria-label="主导航">
-        {navigation.map(item => <button key={item.id} className={cls('nav-item', route.page === item.id && 'active', item.id === 'research' && 'nav-secondary-start')}
+        {navigation.map(item => <button key={item.id} className={cls('nav-item', route.page === item.id && 'active', item.id === 'connections' && 'nav-secondary-start')}
           aria-current={route.page === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
           <Icon name={item.icon}/><span>{item.label}</span>
           {item.id === 'overview' && attention > 0 && <span className="nav-badge" aria-label={`${attention} 项需要处理`}>{attention}</span>}
@@ -59,7 +59,7 @@ export function PortalShell({ route, navigate, access, onLogout, session, runtim
           <span className="clock" title="纽约当地时间">{newYorkClock(now)}<small>ET</small></span>
           <span className={cls('session', market.tone)} title="按美股常规时段推算，未计入交易所假日；以券商交易日历为准。">{market.label}</span>
           <span className="divider" aria-hidden="true"/>
-          <span className="deployment-label">{isServerDeployment(access) ? '云端工作台' : '本地工作台'} · <b>仅模拟账户</b></span>
+          <span className="deployment-label">{isServerDeployment(access) ? '云端工作台' : '本地工作台'}</span>
         </div>
         <div className="topbar-controls">
           {state?.strategy_manager?.running_count > 0 && <button className="text-link run-indicator" onClick={() => navigate('instances')}>{state.strategy_manager.running_count} 份实例已开启</button>}

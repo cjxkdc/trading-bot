@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.workbench import MAX_FILE, PortalError, PortalService
+from app.execution_policy import CURRENT_EXECUTION_POLICY
 
 
 class LocalOnly:
@@ -121,7 +122,9 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
 
     @app.get('/health')
     def health():
-        return {'application': 'trading-bot-portal', 'instance': instance, 'execution_policy': 'simulation_only'}
+        return {'application': 'trading-bot-portal', 'instance': instance,
+                'execution_policy': CURRENT_EXECUTION_POLICY.identifier,
+                'execution_scope': CURRENT_EXECUTION_POLICY.public()}
 
     @app.get('/api/session')
     def session():
@@ -352,7 +355,9 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         start, end, slip, note = (value.get(k) for k in ('start', 'end', 'slippage_bps', 'note'))
         if not isinstance(start, str) or not isinstance(end, str) or not isinstance(note or '', str) or len(note or '') > 2000:
             raise PortalError('回测日期或备注格式无效。')
-        return await run_in_threadpool(service.export, start, end, slip, note or '')
+        expected = ({'expected_strategy_type': value['expected_strategy_type']}
+                    if 'expected_strategy_type' in value else {})
+        return await run_in_threadpool(service.export, start, end, slip, note or '', **expected)
 
     @app.get('/api/experiments/{ident}/code')
     def code(ident: str):

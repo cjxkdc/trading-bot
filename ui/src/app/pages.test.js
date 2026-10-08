@@ -126,3 +126,32 @@ test('dialog does not restore focus to a trigger removed by the confirmed action
   const html = render('Dialog', { labelledBy: 'confirm-heading', onDismiss: noop, children: React.createElement('h2', { id: 'confirm-heading' }, '确认操作') });
   assert.match(html, /^<dialog[^>]*aria-modal="true"[^>]*aria-labelledby="confirm-heading"/);
 });
+
+test('platform shell does not present one account environment as the whole product', () => {
+  const html = render('PortalShell', { route: { page: 'strategies' }, navigate: noop,
+    access: { enabled: false }, session: { state: state(), runtime: null, online: true }, runtimeStatus: {}, toggleRuntime: noop });
+  assert.doesNotMatch(html, /PAPER|仅模拟账户/);
+  assert.match(html, /Strategy Workspace/);
+});
+
+test('strategy workspace shows only related deployments and preserves their account environment', () => {
+  const value = state();
+  value.strategy_manager.instances = [
+    { id: 'a', name: 'Alpha deployment', strategy: { type: 'alpha' }, broker_id: 'paper', budget: .4, status: 'stopped' },
+    { id: 'b', name: 'Other deployment', strategy: { type: 'beta' }, broker_id: 'paper', budget: .4, status: 'stopped' },
+  ];
+  const html = render('StrategyWorkspace', { ...common(value), route: { page: 'strategies', strategy: 'alpha', tab: 'runs' } });
+  assert.match(html, /Alpha deployment/);
+  assert.match(html, /模拟账户/);
+  assert.doesNotMatch(html, /Other deployment/);
+  assert.match(html, /创建运行实例/);
+});
+
+test('deleted strategy links cannot quietly open the current global strategy', () => {
+  const html = render('StrategyWorkspace', { ...common(state()), route: { page: 'strategies', strategy: 'deleted', tab: 'research' } });
+  assert.match(html, /这个策略已不存在/);
+  assert.doesNotMatch(html, /创建回测实验/);
+  const create = render('StrategyRuns', { ...common(state()), route: { page: 'runs', view: 'instances', create: true, strategy: 'deleted' } });
+  assert.match(create, /所选策略已不可用/);
+  assert.doesNotMatch(create, /保存实例/);
+});

@@ -3,14 +3,14 @@ import test from 'node:test';
 import { resolveDestination, routeFromHash, routeHash } from './navigation.js';
 
 test('existing backend destinations retain precise functional targets', () => {
-  assert.deepEqual(resolveDestination('data'), { page: 'modules', view: 'data' });
-  assert.deepEqual(resolveDestination('broker'), { page: 'modules', view: 'broker' });
-  assert.deepEqual(resolveDestination('strategy'), { page: 'modules', view: 'strategies' });
-  assert.deepEqual(resolveDestination('strategies'), { page: 'modules', view: 'strategies' });
+  assert.deepEqual(resolveDestination('data'), { page: 'connections', view: 'data' });
+  assert.deepEqual(resolveDestination('broker'), { page: 'connections', view: 'broker' });
+  assert.deepEqual(resolveDestination('strategy'), { page: 'strategies' });
+  assert.deepEqual(resolveDestination('strategies'), { page: 'strategies' });
   assert.deepEqual(resolveDestination('positions'), { page: 'account', view: 'positions' });
   assert.deepEqual(resolveDestination('logs'), { page: 'system', view: 'logs' });
   assert.deepEqual(resolveDestination('automation'), { page: 'runs', view: 'plan' });
-  assert.deepEqual(resolveDestination('backtests'), { page: 'research' });
+  assert.deepEqual(resolveDestination('backtests'), { page: 'strategies', tab: 'research' });
 });
 
 test('desktop cannot deep-link a server-only view and unknown routes are safe', () => {
@@ -21,17 +21,17 @@ test('desktop cannot deep-link a server-only view and unknown routes are safe', 
 });
 
 test('strategy workspace preserves selected module and editor tab through browser navigation', () => {
-  const route = { page: 'modules', view: 'strategies', strategy: 'mom8', tab: 'code' };
+  const route = { page: 'strategies', strategy: 'mom8', tab: 'code' };
   assert.deepEqual(routeFromHash(routeHash(route)), route);
   assert.deepEqual(routeFromHash('#/strategies?strategy=mom8&tab=code'), route);
-  assert.deepEqual(routeFromHash('#/modules/strategies?strategy=../private&tab=unknown'), { page: 'modules', view: 'strategies' });
+  assert.deepEqual(routeFromHash('#/modules/strategies?strategy=../private&tab=unknown'), { page: 'strategies' });
 });
 
 test('instance deep links survive reload and browser navigation', () => {
   const route = { page: 'runs', view: 'instances', instance: 'run a/2' };
   assert.deepEqual(routeFromHash(routeHash(route)), route);
   assert.deepEqual(routeFromHash('#/runs/instances?create=1'), { page: 'runs', view: 'instances', create: true });
-  assert.deepEqual(routeFromHash('#/data'), { page: 'modules', view: 'data' });
+  assert.deepEqual(routeFromHash('#/data'), { page: 'connections', view: 'data' });
 });
 
 test('a stale lazy chunk reloads the page once, then surfaces the error instead of looping', async () => {
@@ -71,4 +71,20 @@ test('missing, getter-blocked or write-blocked storage uses manual retry without
     }
   }
   assert.equal(reloads, 0);
+});
+
+test('old configuration and experiment links resolve into the new workflow', () => {
+  assert.deepEqual(routeFromHash('#/modules/strategies?strategy=mom8&tab=code'), { page: 'strategies', strategy: 'mom8', tab: 'code' });
+  assert.deepEqual(routeFromHash('#/modules/data'), { page: 'connections', view: 'data' });
+  assert.deepEqual(routeFromHash('#/modules/broker'), { page: 'connections', view: 'broker' });
+  assert.deepEqual(routeFromHash('#/research'), { page: 'strategies', tab: 'research' });
+  const route = { page: 'strategies', strategy: 'alpha', tab: 'runs' };
+  assert.deepEqual(routeFromHash(routeHash(route)), route);
+});
+
+test('creating an instance carries only the chosen strategy, not an execution instruction', () => {
+  const route = { page: 'runs', view: 'instances', create: true, strategy: 'alpha' };
+  assert.deepEqual(routeFromHash(routeHash(route)), route);
+  assert.deepEqual(resolveDestination({ ...route, strategy: '../secrets', start: true, account: 'live' }), { page: 'runs', view: 'instances', create: true });
+  assert.deepEqual(resolveDestination({ page: 'runs', view: 'instances', strategy: 'alpha' }), { page: 'runs', view: 'instances' });
 });

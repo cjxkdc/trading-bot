@@ -5,10 +5,14 @@ export function runnableBroker(item) {
     ['prepare', 'execute', 'reconcile', 'calendar'].every(capability => item.capabilities?.includes(capability));
 }
 
-export function instanceDraft(state, item) {
+export function instanceDraft(state, item, strategyType) {
+  const selected = strategyType ? state.strategies?.find(x => x.type === strategyType && x.enabled) : null;
+  if (!item && strategyType && !selected) throw new Error('所选策略已不可用，请返回策略工作区重新选择。');
+  const strategy = selected && selected.type !== state.strategy.type ? { ...selected.defaults, type: selected.type } : state.strategy;
+  const name = selected?.name || state.strategy_name;
   return item ? { name: item.name, strategy: { ...item.strategy }, broker_id: item.broker_id,
     source_id: item.source_id, budget: Number(item.budget) * 100, schedule: automationSchedule(item.schedule) } :
-    { name: `${state.strategy_name} · 新实例`, strategy: { ...state.strategy },
+    { name: `${name} · 新实例`, strategy: { ...strategy },
       broker_id: runnableBroker(state.broker) ? state.broker.id : state.brokers.find(runnableBroker)?.id || '',
       source_id: state.sources.find(x => x.id === state.source && x.capabilities.includes('collect'))?.id || state.sources.find(x => x.enabled && x.capabilities.includes('collect'))?.id || '',
       budget: 50, schedule: automationSchedule(state.automation?.config) };

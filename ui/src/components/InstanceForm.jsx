@@ -8,8 +8,8 @@ import { StrategyReadme } from './StrategyReadme';
 import { percent, time } from '../format';
 
 
-export function InstanceForm({ state, item, busy, act, close }) {
-  const [draft, setDraft] = useState(() => instanceDraft(state, item));
+export function InstanceForm({ state, item, busy, act, close, initialStrategy }) {
+  const [draft, setDraft] = useState(() => instanceDraft(state, item, initialStrategy));
   const selected = state.strategies.find(x => x.type === draft.strategy.type);
   const schedule = draft.schedule;
   const setSchedule = (key, value) => setDraft({ ...draft, schedule: { ...schedule, [key]: value } });
@@ -22,7 +22,7 @@ export function InstanceForm({ state, item, busy, act, close }) {
     <form onSubmit={save}><div className="form-grid">
       <label>实例名称<input required maxLength="80" value={draft.name} disabled={busy} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
       <label>策略<select value={draft.strategy.type} disabled={busy} onChange={e => { const strategy = state.strategies.find(x => x.type === e.target.value); setDraft({ ...draft, strategy: { type: strategy.type, ...strategy.defaults } }); }}>{state.strategies.filter(x => x.enabled).map(x => <option key={x.type} value={x.type}>{x.name}</option>)}</select></label>
-      <label>模拟账户<select value={draft.broker_id} disabled={busy} onChange={e => setDraft({ ...draft, broker_id: e.target.value })}>{state.brokers.filter(runnableBroker).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+      <label>运行账户<select value={draft.broker_id} disabled={busy} onChange={e => setDraft({ ...draft, broker_id: e.target.value })}>{state.brokers.filter(runnableBroker).map(x => <option key={x.id} value={x.id}>{x.name} · {x.mode_label || '环境待核验'}</option>)}</select></label>
       <label>数据源<select value={draft.source_id} disabled={busy} onChange={e => setDraft({ ...draft, source_id: e.target.value })}>{state.sources.filter(x => x.enabled && x.capabilities.includes('collect')).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
       <label>账户资金比例 (%)<input type="number" min="0.01" max="100" step="0.01" required value={draft.budget} disabled={busy} onChange={e => setDraft({ ...draft, budget: e.target.value })}/></label>
     </div><p className="small muted">比例按账户净值分配。此账户运行或保留持仓的实例已占用 {percent(budgetSummary(state.strategy_manager.instances.filter(x => x.id !== item?.id), draft.broker_id))}。</p>

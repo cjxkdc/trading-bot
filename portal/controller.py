@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.control_contracts import ControlError
+from app.execution_policy import CURRENT_EXECUTION_POLICY
 from portal.app import LocalOnly, body
 from portal.runtime import BackendRuntime
 from portal.access import COOKIE, OwnerSessions, RemoteOnly
@@ -42,7 +43,8 @@ def create_controller(root, *, port, instance, shutdown=None, runtime=None, acce
     @app.get('/health')
     async def health():
         return {'application': 'trading-bot-portal', 'instance': instance,
-                'execution_policy': 'simulation_only', 'runtime_controls': True}
+                'execution_policy': CURRENT_EXECUTION_POLICY.identifier,
+                'execution_scope': CURRENT_EXECUTION_POLICY.public(), 'runtime_controls': True}
 
     @app.get('/api/session')
     def session():

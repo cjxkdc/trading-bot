@@ -30,7 +30,6 @@ const StrategyWorkspace = lazyPage(() => import('../pages/StrategyWorkspace'), '
 const DataPage = lazyPage(() => import('../pages/ModuleSettings'), 'DataPage');
 const BrokerPage = lazyPage(() => import('../pages/ModuleSettings'), 'BrokerPage');
 const PositionsPage = lazyPage(() => import('../pages/AccountPage'), 'PositionsPage');
-const ResearchPage = lazyPage(() => import('../pages/ResearchPage'), 'ResearchPage');
 const SystemPage = lazyPage(() => import('../pages/SystemPage'), 'SystemPage');
 const StrategyRuns = lazyPage(() => import('../components/StrategyRuns'), 'StrategyRuns');
 const AutomationCard = lazyPage(() => import('../components/AutomationCard'), 'AutomationCard');
@@ -110,12 +109,11 @@ export function App({ access, onLogout }) {
       if (route.view === 'performance') return <PerformancePanel key={state.broker.id} {...common} chooseBroker={chooseBroker} navigate={navigate}/>;
       return <><div className="context-toolbar"><label>查看账户<select value={state.broker.id} disabled={busy} onChange={event => chooseBroker(event.target.value)}>{state.brokers.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}</option>)}</select></label><button className="text-link" onClick={() => navigate('broker')}>连接设置</button></div><PositionsPage key={state.broker.id} {...common}/></>;
     }
-    if (route.page === 'modules') {
+    if (route.page === 'strategies') return <StrategyWorkspace {...common} route={route} navigate={navigate}/>;
+    if (route.page === 'connections') {
       if (route.view === 'data') return <DataPage key={state.source} {...common} chooseSource={chooseSource} upload={upload} selectedFile={selectedFile}/>;
       if (route.view === 'broker') return <BrokerPage {...common} chooseBroker={chooseBroker} authorize={authorize} bind={account => act(() => api('broker-auth/bind', { account }))} disconnect={() => act(() => api('broker/disconnect', {}))}/>;
-      return <StrategyWorkspace {...common} route={route} navigate={navigate}/>;
     }
-    if (route.page === 'research') return <ResearchPage {...common} navigate={navigate}/>;
     return <SystemPage view={route.view} {...common} navigate={navigate} access={access} shutdown={() => setDialog({ kind: 'stop' })} refresh={refresh}/>;
   }
 
@@ -142,6 +140,6 @@ export function App({ access, onLogout }) {
 function ContextSelection({ state, busy, chooseBroker, navigate }) {
   return <div className="context-toolbar">
     <label>操作账户<select value={state.broker.id} disabled={busy} onChange={event => chooseBroker(event.target.value)}>{state.brokers.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}</option>)}</select></label>
-    <div><span className="small muted">手动配置 · {state.strategy_name}</span><button className="text-link" onClick={() => navigate('strategies')}>修改策略参数</button></div>
+    <div><span className="small muted">手动配置 · {state.strategy_name}</span><button className="text-link" onClick={() => navigate({ page: 'strategies', strategy: state.strategy.type, tab: 'parameters' })}>修改策略参数</button></div>
   </div>;
 }

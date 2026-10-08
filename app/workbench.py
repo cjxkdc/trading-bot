@@ -27,9 +27,25 @@ from app.automation import Automation
 from app.monitoring import Monitoring
 from app.strategy_instances import StrategyInstances
 from app.strategy_files import StrategyFiles
+from app.execution_policy import CURRENT_EXECUTION_POLICY
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
+_UNSPECIFIED_STRATEGY = object()
+
+
+def check_expected_strategy(expected, actual):
+    """Bind new workspace exports to the strategy the user is viewing.
+
+    Omission keeps older clients compatible; explicit null or other malformed
+    values are rejected. Call under the service lock, before writing files.
+    """
+    if expected is _UNSPECIFIED_STRATEGY:
+        return
+    if not isinstance(expected, str) or not expected.strip():
+        raise PortalError('预期策略编号必须为非空文本。')
+    if expected != actual:
+        raise PortalError('配置的策略已变化，请刷新策略工作区后重新导出。')
 
 
 def now():
@@ -213,9 +229,12 @@ class PortalService:
     def export_instance(self, ident, value):
         with self.lock:
             self.idle()
-            if not isinstance(value, dict) or set(value) != {'start', 'end', 'slippage_bps'}:
+            if (not isinstance(value, dict) or not {'start', 'end', 'slippage_bps'} <= set(value)
+                    or set(value) - {'start', 'end', 'slippage_bps', 'expected_strategy_type'}):
                 raise PortalError('请填写回测区间和滑点。')
             item = self.strategy_instances.get(ident)
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY),
+                                    item['strategy']['type'])
             cfg = load_config(self.root / 'configs/portfolio_config.json')
             cfg['strategy'] = deepcopy(item['strategy'])
             instance_file = self.folder / 'instance-configs' / (uuid4().hex + '.json')
@@ -693,6 +712,7 @@ class PortalService:
                 for action in ('execute', 'resolve-remainder', 'close-terminal'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
+                'execution_scope': CURRENT_EXECUTION_POLICY.public(),
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
                 'monitoring': self.monitor.public(),
@@ -995,14 +1015,22 @@ class PortalService:
                 items.append({'id': path.name, 'invalid': True, 'results': []})
         return items
 
-    def export(self, start, end, slippage_bps, note=''):
+    def export(self, start, end, slippage_bps, note='', *, expected_strategy_type=_UNSPECIFIED_STRATEGY):
         with self.lock:
             self.idle()
-            self.config()
+            cfg, _ = self.config()
+            check_expected_strategy(expected_strategy_type, cfg['strategy']['type'])
             ident = 'exp-' + uuid4().hex[:16]
             out = self.folder / 'experiments' / ident
-            export_backtest(self.root / 'configs/portfolio_config.json', out, start=start, end=end,
-                            slippage_bps=slippage_bps, note=note, schedule=self.automation.data['config'])
+            # Export exactly the configuration checked under this lock. A local
+            # file edit after the check must not change the exported strategy.
+            config_file = self.folder / ('export-config-' + uuid4().hex + '.json')
+            atomic_json(config_file, cfg)
+            try:
+                export_backtest(config_file, out, start=start, end=end,
+                                slippage_bps=slippage_bps, note=note, schedule=self.automation.data['config'])
+            finally:
+                config_file.unlink(missing_ok=True)
             return {'id': ident, 'message': '代码已导出；请在 QuantConnect 中运行。'}
 
     def import_backtest(self, ident, content):

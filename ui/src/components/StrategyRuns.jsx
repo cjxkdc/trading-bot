@@ -16,7 +16,7 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
   const [editing, setEditing] = useState(route.create ? {} : null);
   const [confirm, setConfirm] = useState(null);
   const [limits, setLimits] = useState(manager.limits);
-  useEffect(() => { setEditing(route.create ? {} : null); }, [route.instance, route.create]);
+  useEffect(() => { setEditing(route.create ? {} : null); }, [route.instance, route.create, route.strategy]);
   const back = () => onNavigate('instances');
   async function confirmed() {
     const { item, action } = confirm;
@@ -32,12 +32,14 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
       {!selected ? <Empty title="此实例已不存在">返回列表，查看当前保存的实例。</Empty> : <>
         <div className="instance-detail-heading"><div><h2>{selected.name}</h2><p>{moduleName(state.strategies, selected.strategy.type, 'type')} · {moduleName(state.brokers, selected.broker_id)}</p></div><Tag tone={instanceStatus(selected).tone}>{instanceStatus(selected).label}</Tag></div>
         <div className="instance-facts">
+          <div><span>账户环境</span><strong>{state.brokers.find(b => b.id === selected.broker_id)?.mode_label || '环境待核验'}</strong></div>
           <div><span>账户资金比例</span><strong>{percent(selected.budget)}</strong></div>
           <div><span>运行计划</span><strong>{scheduleSummary(selected.schedule)}</strong></div>
           <div><span>下次执行 · 本地时间</span><strong>{selected.enabled ? time(selected.next_run) : '—'}</strong>{selected.enabled && selected.next_run && <small className="relative">{relativeTime(selected.next_run)}</small>}</div>
         </div>
         <p className={selected.pending || selected.status === 'paused' ? 'inline-warning' : 'small muted'} role="status">{selected.message}</p>
         {terminal > 0 && selected.pending && <p className="inline-warning">最近一次核对发现 {terminal} 笔委托已被券商撤销或拒绝。先在券商端确认原因；确认后停止此账户的实例，再用「关闭已撤单/拒单」结束本批次。</p>}
+        <div className="button-row"><button className="text-link" onClick={() => onNavigate({ page: 'strategies', strategy: selected.strategy.type, tab: 'readme' })}>查看策略</button><button className="text-link" onClick={() => onNavigate({ page: 'strategies', strategy: selected.strategy.type, tab: 'research' })}>查看回测实验</button></div>
         <div className="instance-action-bar">
           {selected.pending && <Button primary disabled={busy} onClick={() => act(() => api(`strategy-instances/${selected.id}/reconcile`, {}))}>核对订单与归属</Button>}
           {selected.enabled ? <Button disabled={pending} onClick={() => act(() => api(`strategy-instances/${selected.id}/stop`, {}))}>停止实例</Button> : <Button primary={!selected.pending} disabled={busy || selected.pending || manager.corrupt} onClick={() => setConfirm({ item: selected, action: 'start' })}>启动实例</Button>}
@@ -59,7 +61,7 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
       </>}
     </> : <>
       <div className="section-toolbar"><p className="page-intro">每份实例独立配置与运行，共用账户时合并目标下单。</p><Button primary disabled={busy || manager.corrupt} onClick={() => onNavigate({ page: 'runs', view: 'instances', create: true })}>创建实例</Button></div>
-      {editing && <InstanceForm key="new" state={state} item={null} busy={busy} act={act} close={closeEditor}/>}
+      {editing && (route.strategy && !state.strategies.some(item => item.type === route.strategy && item.enabled) ? <Empty title="所选策略已不可用">返回策略工作区重新选择，再创建运行实例。</Empty> : <InstanceForm key={`new-${route.strategy || "default"}`} state={state} item={null} initialStrategy={route.strategy} busy={busy} act={act} close={closeEditor}/>)}
       {!items.length && !editing ? <Empty title="创建第一份策略实例">选择策略、账户资金比例和调仓计划。保存后再确认启动。</Empty> : <div className="instance-list">
         {items.map(item => <article className="instance-row" key={item.id}>
           <div className="instance-row-name"><h3>{item.name}</h3><small>{moduleName(state.strategies, item.strategy.type, 'type')} · {moduleName(state.brokers, item.broker_id)}</small></div>

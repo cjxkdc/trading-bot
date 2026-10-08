@@ -1,16 +1,16 @@
 export const navigation = [
   { id: 'overview', label: '总览', caption: 'Dashboard', icon: 'grid' },
-  { id: 'runs', label: '策略运行', caption: 'Strategy Runs', icon: 'clock' },
+  { id: 'strategies', label: '策略', caption: 'Strategy Workspace', icon: 'layers' },
+  { id: 'runs', label: '运行', caption: 'Deployments', icon: 'clock' },
   { id: 'account', label: '账户', caption: 'Portfolio', icon: 'briefcase' },
-  { id: 'modules', label: '模块配置', caption: 'Algorithm Lab', icon: 'layers' },
-  { id: 'research', label: '研究', caption: 'Backtests', icon: 'chart', secondary: true },
+  { id: 'connections', label: '连接', caption: 'Connections', icon: 'link', secondary: true },
   { id: 'system', label: '系统', caption: 'System', icon: 'server', secondary: true },
 ];
 
 export const sections = {
   runs: [['instances', '策略实例'], ['manual', '手动调仓'], ['plan', '单策略计划']],
   account: [['performance', '账户总览'], ['positions', '持仓与订单']],
-  modules: [['strategies', '策略'], ['data', '数据'], ['broker', '券商']],
+  connections: [['broker', '券商账户'], ['data', '数据源']],
   system: [['logs', '运行与日志'], ['monitoring', '监控与通知'], ['server', '服务器']],
 };
 
@@ -19,31 +19,45 @@ const aliases = {
   instances: { page: 'runs', view: 'instances' },
   manual: { page: 'runs', view: 'manual' },
   automation: { page: 'runs', view: 'plan' },
-  strategy: { page: 'modules', view: 'strategies' },
-  strategies: { page: 'modules', view: 'strategies' },
-  data: { page: 'modules', view: 'data' },
-  broker: { page: 'modules', view: 'broker' },
+  strategy: { page: 'strategies' },
+  data: { page: 'connections', view: 'data' },
+  broker: { page: 'connections', view: 'broker' },
   positions: { page: 'account', view: 'positions' },
   performance: { page: 'account', view: 'performance' },
-  backtests: { page: 'research' },
+  research: { page: 'strategies', tab: 'research' },
+  backtests: { page: 'strategies', tab: 'research' },
   logs: { page: 'system', view: 'logs' },
   server: { page: 'system', view: 'server' },
 };
 
+function canonical(input) {
+  // Keep bookmarks, notification destinations and editor links from older releases.
+  if (input.page === 'modules') {
+    return ['data', 'broker'].includes(input.view)
+      ? { ...input, page: 'connections' }
+      : { ...input, page: 'strategies', view: undefined };
+  }
+  return aliases[input.page] ? { ...input, ...aliases[input.page] } : input;
+}
+
 export function resolveDestination(destination, server = true) {
-  const input = typeof destination === 'string' ? aliases[destination] || { page: destination } : destination || {};
+  const input = canonical(typeof destination === 'string' ? { page: destination } : destination || {});
   const page = navigation.some(item => item.id === input.page) ? input.page : 'overview';
   const views = sections[page]?.filter(([id]) => server || id !== 'server') || [];
   const view = views.some(([id]) => id === input.view) ? input.view : views[0]?.[0];
-  const strategy = page === 'modules' && view === 'strategies';
-  return { page, ...(view ? { view } : {}), ...(page === 'runs' && view === 'instances' && input.instance ? { instance: input.instance } : {}), ...(page === 'runs' && view === 'instances' && input.create ? { create: true } : {}), ...(strategy && /^[a-zA-Z0-9_-]+$/.test(input.strategy || '') ? { strategy: input.strategy } : {}), ...(strategy && ['code', 'readme', 'parameters'].includes(input.tab) ? { tab: input.tab } : {}) };
+  const strategyContext = page === 'strategies' || (page === 'runs' && view === 'instances' && input.create);
+  return { page, ...(view ? { view } : {}),
+    ...(page === 'runs' && view === 'instances' && input.instance ? { instance: input.instance } : {}),
+    ...(page === 'runs' && view === 'instances' && input.create ? { create: true } : {}),
+    ...(strategyContext && /^[a-zA-Z0-9_-]+$/.test(input.strategy || '') ? { strategy: input.strategy } : {}),
+    ...(page === 'strategies' && ['code', 'readme', 'parameters', 'research', 'runs'].includes(input.tab) ? { tab: input.tab } : {}) };
 }
 
 export function routeFromHash(hash, server = true) {
   const [location, query = ''] = String(hash || '').replace(/^#\/?/, '').split('?');
   const [page, view] = location.split('/');
   const params = new URLSearchParams(query);
-  return resolveDestination({ ...(view ? { page, view } : aliases[page] || { page }), instance: params.get('instance'), create: params.get('create') === '1', strategy: params.get('strategy'), tab: params.get('tab') }, server);
+  return resolveDestination({ page, view, instance: params.get('instance'), create: params.get('create') === '1', strategy: params.get('strategy'), tab: params.get('tab') }, server);
 }
 
 export function routeHash(route) {
