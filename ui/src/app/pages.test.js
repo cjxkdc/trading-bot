@@ -38,15 +38,15 @@ test('all retained feature pages render an unconfigured module set without an ac
   for (const name of ['ManualRun', 'StrategyWorkspace', 'DataPage', 'BrokerPage', 'PositionsPage', 'ResearchPage', 'PerformancePanel']) {
     assert.ok(render(name, props).length > 40, name);
   }
-  assert.match(render('SystemPage', { ...props, view: 'logs' }), /运行与日志/);
+  assert.match(render('SystemPage', { ...props, view: 'logs' }), /诊断日志[\s\S]*操作记录/);
   assert.match(render('SystemPage', { ...props, view: 'monitoring' }), /监控与通知/);
   assert.match(render('SystemPage', { ...props, view: 'server' }), /下载诊断/);
 });
 
 test('overview has no charts, module form, or trading execution button', () => {
   const html = render('OverviewPage', { ...common(state()), runtimeStatus: { label: '后台运行中' } });
-  assert.match(html, /创建策略实例/);
-  assert.match(html, /当前没有待处理事项/);
+  assert.match(html, /新建运行/);
+  assert.match(html, /一切正常/);
   assert.doesNotMatch(html, /<select|账户表现|一键测试并准备|提交模拟订单|自动建仓与调仓/);
 });
 
@@ -57,7 +57,7 @@ test('overview limits current blockers to three and links to the complete list',
   assert.match(html, /当前异常1/);
   assert.match(html, /当前异常3/);
   assert.doesNotMatch(html, /当前异常4/);
-  assert.match(html, /查看全部/);
+  assert.match(html, /全部 4 项/);
 });
 
 test('instance list reveals no operational actions or form until a specific detail is opened', () => {
@@ -65,7 +65,7 @@ test('instance list reveals no operational actions or form until a specific deta
   const item = { id: 'one', name: '月度策略', strategy: value.strategy, broker_id: 'paper', source_id: 'snapshot', budget: 0.5, status: 'waiting', enabled: true, schedule: {}, positions: [], events: [], message: '等待计划时间' };
   value.strategy_manager.instances = [item];
   const list = render('StrategyRuns', { ...common(value), route: { page: 'runs', view: 'instances' } });
-  assert.match(list, /查看详情/);
+  assert.match(list, /详情 →/);
   assert.doesNotMatch(list, /停止实例|执行一轮|创建策略实例|运行计划.*<select/);
   const detail = render('StrategyRuns', { ...common(value), busy: true, pending: false, route: { page: 'runs', view: 'instances', instance: 'one' } });
   assert.match(detail, /停止实例/);
@@ -131,7 +131,8 @@ test('platform shell does not present one account environment as the whole produ
   const html = render('PortalShell', { route: { page: 'strategies' }, navigate: noop,
     access: { enabled: false }, session: { state: state(), runtime: null, online: true }, runtimeStatus: {}, toggleRuntime: noop });
   assert.doesNotMatch(html, /PAPER|仅模拟账户/);
-  assert.match(html, /Strategy Workspace/);
+  // Every section opens with one line saying what it is for.
+  assert.match(html, /写和改策略的代码与说明/);
 });
 
 test('strategy workspace shows only related deployments and preserves their account environment', () => {
@@ -153,7 +154,7 @@ test('deleted strategy links cannot quietly open the current global strategy', (
   assert.doesNotMatch(html, /创建回测实验/);
   const create = render('StrategyRuns', { ...common(state()), route: { page: 'runs', view: 'instances', create: true, strategy: 'deleted' } });
   assert.match(create, /所选策略已不可用/);
-  assert.doesNotMatch(create, /保存实例/);
+  assert.doesNotMatch(create, /保存运行|保存实例/);
 });
 
 

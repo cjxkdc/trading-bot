@@ -10,7 +10,8 @@ test('existing backend destinations retain precise functional targets', () => {
   assert.deepEqual(resolveDestination('positions'), { page: 'account', view: 'positions' });
   assert.deepEqual(resolveDestination('logs'), { page: 'system', view: 'logs' });
   assert.deepEqual(resolveDestination('automation'), { page: 'runs', view: 'plan' });
-  assert.deepEqual(resolveDestination('backtests'), { page: 'strategies', tab: 'research' });
+  assert.deepEqual(resolveDestination('backtests'), { page: 'backtests' });
+  assert.deepEqual(resolveDestination({ page: 'backtests', strategy: 'mom8' }), { page: 'backtests', strategy: 'mom8' });
 });
 
 test('desktop cannot deep-link a server-only view and unknown routes are safe', () => {
@@ -77,7 +78,9 @@ test('old configuration and experiment links resolve into the new workflow', () 
   assert.deepEqual(routeFromHash('#/modules/strategies?strategy=mom8&tab=code'), { page: 'strategies', strategy: 'mom8', tab: 'code' });
   assert.deepEqual(routeFromHash('#/modules/data'), { page: 'connections', view: 'data' });
   assert.deepEqual(routeFromHash('#/modules/broker'), { page: 'connections', view: 'broker' });
-  assert.deepEqual(routeFromHash('#/research'), { page: 'strategies', tab: 'research' });
+  // Research moved into its own section; old strategy-tab links follow it.
+  assert.deepEqual(routeFromHash('#/research'), { page: 'backtests' });
+  assert.deepEqual(routeFromHash('#/strategies?strategy=mom8&tab=research'), { page: 'backtests', strategy: 'mom8' });
   const route = { page: 'strategies', strategy: 'alpha', tab: 'runs' };
   assert.deepEqual(routeFromHash(routeHash(route)), route);
 });

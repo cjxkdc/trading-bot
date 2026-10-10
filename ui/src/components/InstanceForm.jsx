@@ -19,9 +19,9 @@ export function InstanceForm({ state, item, busy, act, close, initialStrategy })
     const result = await act(() => api(item ? `strategy-instances/${item.id}` : 'strategy-instances', instancePayload(draft, selected.fields)));
     if (result) close();
   }
-  return <section className="card instance-form"><div className="card-heading"><h2>{item ? '编辑实例' : '创建策略实例'}</h2><button className="button" disabled={busy} onClick={close}>收起</button></div>
+  return <section className="card instance-form"><div className="card-heading"><div><h2>{item ? '修改运行设置' : '运行设置'}</h2><p>策略、账户、数据源、资金比例和计划。</p></div><button className="button" disabled={busy} onClick={close}>取消</button></div>
     <form onSubmit={save}><div className="form-grid">
-      <label>实例名称<input required maxLength="80" value={draft.name} disabled={busy} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
+      <label>运行名称<input required maxLength="80" value={draft.name} disabled={busy} onChange={e => setDraft({ ...draft, name: e.target.value })}/></label>
       <label>策略<select value={draft.strategy.type} disabled={busy} onChange={e => { const strategy = state.strategies.find(x => x.type === e.target.value); setDraft({ ...draft, strategy: { type: strategy.type, ...strategy.defaults } }); }}>{state.strategies.filter(x => x.enabled).map(x => <option key={x.type} value={x.type}>{x.name}</option>)}</select></label>
       <label>运行账户<select value={draft.broker_id} disabled={busy} onChange={e => { const next = state.brokers.find(x => x.id === e.target.value); setDraft({ ...draft, broker_id: e.target.value, schedule: { ...draft.schedule, ...next?.execution_context?.schedule_defaults, timezone: next?.execution_context?.timezone || '' } }); }}>{state.brokers.filter(runnableBroker).map(x => <option key={x.id} value={x.id}>{x.name} · {x.mode_label || '环境待核验'}</option>)}</select></label>
       <label>数据源<select value={draft.source_id} disabled={busy} onChange={e => setDraft({ ...draft, source_id: e.target.value })}>{state.sources.filter(x => x.enabled && x.capabilities.includes('collect')).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
@@ -40,6 +40,6 @@ export function InstanceForm({ state, item, busy, act, close, initialStrategy })
     </div><p className="small muted">自动处理夏令时与休市顺延；窗口外等待，不补发上一窗口订单。</p></details>
     <details className="details"><summary>策略参数</summary><div className="form-grid"><ModuleFields fields={selected?.fields || []} values={draft.strategy} disabled={busy} onChange={(key, value) => setDraft({ ...draft, strategy: { ...draft.strategy, [key]: value } })}/></div></details>
     <StrategyReadme content={selected?.readme?.content} filename={selected?.readme?.path} issue={selected?.readme_issue}/>
-    <div className="form-footer"><span className="small muted">保存后使用各自参数运行，不修改策略库的当前配置。</span><button className="button primary" disabled={busy}>保存实例</button></div></form>
+    <div className="form-footer"><span className="small muted">保存后使用各自参数运行，不修改策略库的当前配置。</span><button className="button primary" disabled={busy}>{item ? '保存修改' : '保存运行'}</button></div></form>
   </section>;
 }

@@ -36,16 +36,16 @@ export function scheduleChanged(draft, config) {
   return Object.keys(saved).some(key => String(draft[key]) !== String(saved[key]));
 }
 
-export function automationControls(automation, { online = true, runtimeRunning = true, pending = false, busy = false, dirty = false, brokerVerified = false, reconcileReady = false, resolveRemainderReady = false, closeTerminalReady = false } = {}) {
+export function automationControls(automation, { online = true, runtimeRunning = true, pending = false, busy = false, dirty = false, brokerVerified = false, reconcileReady = false, resolveRemainderReady = false, closeTerminalReady = false, closeUntransmittedReady = false } = {}) {
   const view = automationView(automation, { online, runtimeRunning });
+  const idle = automation?.enabled === false && online && runtimeRunning && !pending && !busy && reconcileReady === true;
   return { canEnable: view.available && !view.enabled && !pending && !busy && !dirty && !view.blockers.length,
     // Pausing must remain available while a data or order task is running.
     canDisable: view.enabled && online && runtimeRunning && !pending,
     canEdit: !view.enabled && online && runtimeRunning && !pending && !busy,
-    canResolveRemainder: automation?.enabled === false && online && runtimeRunning && !pending && !busy &&
-      reconcileReady === true && resolveRemainderReady === true,
-    canCloseTerminal: automation?.enabled === false && online && runtimeRunning && !pending && !busy &&
-      reconcileReady === true && closeTerminalReady === true,
+    canResolveRemainder: idle && resolveRemainderReady === true,
+    canCloseTerminal: idle && closeTerminalReady === true,
+    canCloseUntransmitted: idle && closeUntransmittedReady === true,
   };
 }
 
@@ -69,7 +69,7 @@ export function automationOrderCheck(automation, jobs = [], selectedBrokerId) {
     ? automation.binding?.broker_id : selectedBrokerId;
   if (!brokerId) return null;
   const checks = jobs.filter(job => job.broker === brokerId &&
-    ['reconcile', 'resolve-remainder', 'close-terminal'].includes(job.action) && job.finished_at &&
+    ['reconcile', 'resolve-remainder', 'close-terminal', 'close-untransmitted'].includes(job.action) && job.finished_at &&
     Number.isFinite(Date.parse(job.finished_at)));
   const job = checks.reduce((latest, item) => !latest || Date.parse(item.finished_at) > Date.parse(latest.finished_at) ? item : latest, null);
   if (!job) return null;
@@ -80,6 +80,9 @@ export function automationOrderCheck(automation, jobs = [], selectedBrokerId) {
     : recovered && job.status === 'complete' ? '核对通过 · 无未完成委托'
     : job.message || '核对结果待确认';
   const terminal = job.action === 'reconcile' ? Number(job.result?.details?.terminal) : 0;
-  return { at: job.finished_at, title: job.action === 'resolve-remainder' ? '最近余单处理' : job.action === 'close-terminal' ? '最近关闭撤单/拒单' : '最近订单核对', message,
-    terminal: Number.isInteger(terminal) && terminal > 0 ? terminal : 0 };
+  const untransmitted = job.action === 'reconcile' ? Number(job.result?.details?.untransmitted) : 0;
+  const titles = { 'resolve-remainder': '最近余单处理', 'close-terminal': '最近关闭撤单/拒单', 'close-untransmitted': '最近关闭未发送委托' };
+  return { at: job.finished_at, title: titles[job.action] || '最近订单核对', message,
+    terminal: Number.isInteger(terminal) && terminal > 0 ? terminal : 0,
+    untransmitted: Number.isInteger(untransmitted) && untransmitted > 0 ? untransmitted : 0 };
 }

@@ -5,20 +5,20 @@ import { ReadmeMarkdown } from '../readme';
 import { editorBlockedReason } from '../strategy_editor';
 import { recallDraft } from '../strategy_editor_drafts';
 import { downloadBlob, instanceStatus } from '../strategy_instances';
-import { ResearchPage } from './ResearchPage';
 import { percent } from '../format';
 
 const Editor = lazy(() => import('../components/StrategyEditor').then(m => ({ default: m.StrategyEditor })));
-const tabs = [['readme', '策略说明'], ['parameters', '参数'], ['code', 'Python 代码'], ['research', '回测实验'], ['runs', '运行记录']];
+const tabs = [['readme', '策略说明'], ['parameters', '参数'], ['code', 'Python 代码'], ['runs', '运行记录']];
 
-export function StrategyWorkspace({ state, busy, act, route, navigate }) {
+export function StrategyWorkspace({ state, busy, editorBusy, act, route, navigate }) {
   const input = useRef(null);
   const [, updateDrafts] = useState(0);
   const [search, setSearch] = useState('');
   const [parameterDrafts, setParameterDrafts] = useState({});
   const selected = route.strategy ? state.strategies.find(s => s.type === route.strategy) : state.strategies.find(s => s.type === state.strategy.type) || state.strategies[0];
   const tab = route.tab || 'readme';
-  const reason = editorBlockedReason(state, busy);
+  // Background account observations do not make the code read-only.
+  const reason = editorBlockedReason(state, editorBusy ?? busy);
   const list = state.strategies.filter(s => `${s.name} ${s.type}`.toLowerCase().includes(search.trim().toLowerCase()));
   const instances = state.strategy_manager?.instances?.filter(s => s.strategy?.type === selected?.type) || [];
   function select(type, nextTab = tab) { navigate({ page: 'strategies', strategy: type, tab: nextTab }); }
@@ -40,9 +40,9 @@ export function StrategyWorkspace({ state, busy, act, route, navigate }) {
       <div className="workspace-tabs" role="tablist" aria-label="策略工作区">{tabs.map(([id, name]) => <button key={id} role="tab" id={`strategy-tab-${id}`} aria-selected={tab === id} aria-controls={`strategy-panel-${id}`} onClick={() => select(selected.type, id)}>{name}{id === 'code' && recallDraft(selected.type) && <span className="tab-draft" aria-label="有未保存代码"/>}</button>)}</div>
       {!selected.enabled && <p className="inline-warning">{selected.reason}</p>}
       <section className="workspace-content" role="tabpanel" id={`strategy-panel-${tab}`} aria-labelledby={`strategy-tab-${tab}`}>
-        {tab === 'research' ? <ResearchPage key={selected.type} strategyType={selected.type} state={state} busy={busy} act={act} navigate={navigate}/> : tab === 'runs' ? <StrategyDeployments strategy={selected} instances={instances} state={state} busy={busy} navigate={navigate}/> : tab === 'code' ? <Suspense fallback={<p role="status">正在打开编辑器…</p>}><Editor key={selected.type} strategyType={selected.type} state={state} busy={busy} act={act} onDraftChange={() => updateDrafts(n => n + 1)}/></Suspense> : tab === 'parameters' ? <StrategyParameters key={selected.type} strategy={selected} state={state} busy={busy} act={act} draft={parameterDrafts[selected.type]} setDraft={value => setParameterDrafts(prev => ({ ...prev, [selected.type]: value }))}/> : <>
+        {tab === 'runs' ? <StrategyDeployments strategy={selected} instances={instances} state={state} busy={busy} navigate={navigate}/> : tab === 'code' ? <Suspense fallback={<p role="status">正在打开编辑器…</p>}><Editor key={selected.type} strategyType={selected.type} state={state} busy={busy} act={act} onDraftChange={() => updateDrafts(n => n + 1)}/></Suspense> : tab === 'parameters' ? <StrategyParameters key={selected.type} strategy={selected} state={state} busy={busy} act={act} draft={parameterDrafts[selected.type]} setDraft={value => setParameterDrafts(prev => ({ ...prev, [selected.type]: value }))}/> : <>
           {selected.readme_issue ? <p className="inline-warning">{selected.readme_issue}</p> : selected.readme?.content ? <div className="readme-markdown workspace-readme"><ReadmeMarkdown content={selected.readme.content}/></div> : <div className="readme-empty"><h3>还没有策略说明</h3><p>在策略包中加入 README.md，便可在这里查看交易规则和使用说明。</p><button className="text-link" onClick={() => select(selected.type, 'code')}>查看 Python 代码 →</button></div>}
-          <div className="strategy-next"><span>策略定义交易规则，运行实例管理账户、资金和调仓计划。</span><div className="button-row"><button className="text-link" onClick={() => select(selected.type, 'research')}>查看回测实验 →</button><button className="text-link" onClick={() => select(selected.type, 'runs')}>查看运行记录 →</button></div></div>
+          <div className="strategy-next"><span>策略定义交易规则；回测在「回测」，账户、资金和计划在「运行」。</span><div className="button-row"><button className="text-link" onClick={() => navigate({ page: 'backtests', strategy: selected.type })}>去回测 →</button><button className="text-link" onClick={() => select(selected.type, 'runs')}>查看运行记录 →</button></div></div>
         </>}
       </section>
     </div>}

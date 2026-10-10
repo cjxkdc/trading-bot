@@ -18,13 +18,20 @@ export function usePortalActions({ state, stopped, refresh }) {
     if (locked.current || stopped) return;
     locked.current = true; setPending(true); setError(''); setNotice('');
     try {
-      const result = await fn();
+      let result;
+      try { result = await fn(); }
+      catch (failure) { setError(failure.message); return undefined; }
       if (result?.job_id) lastJob.current = result.job_id;
       setNotice(success || result?.message || '');
-      if (refreshAfter) await refresh();
+      if (refreshAfter) {
+        // The server already accepted the operation. A failed status refresh is
+        // reported separately so callers never mistake it for a failed operation
+        // (and ask the user to submit it again).
+        try { await refresh(); }
+        catch (failure) { if (!failure?.stale) setError(`操作已提交，但刷新工作台状态失败：${failure.message}`); }
+      }
       return result;
-    } catch (failure) { setError(failure.message); }
-    finally { locked.current = false; setPending(false); }
+    } finally { locked.current = false; setPending(false); }
   }
   return { act, pending, error, notice, setError, setNotice, run: action => act(() => api('jobs', { action })) };
 }

@@ -8,21 +8,24 @@ import { executionContext, currencyLabel, timezoneLabel } from '../execution_con
 
 const kinds = { deposit: '入金', withdrawal: '出金', dividend: '股息（已计入净资产）', fee: '费用（已计入净资产）', reset: '重置统计起点' };
 
-export function PerformancePanel({ state, busy, run, act, chooseBroker, navigate }) {
+export function PerformancePanel({ state, busy, run, act, brokerId, viewBroker, chooseBroker, navigate }) {
   const [report, setReport] = useState(null), [error, setError] = useState('');
   const [period, setPeriod] = useState('ALL'), [mode, setMode] = useState('equity');
   const [review, setReview] = useState(false), [query, setQuery] = useState(''), [sort, setSort] = useState('market_value');
   const [flow, setFlow] = useState({ as_of: '', kind: 'deposit', amount: '', note: '' });
   const flowDetails = useRef(null), generation = useRef(0);
-  const broker = state.broker.id;
-  async function load() { const id = ++generation.current; try { const result = await api('performance'); if (id === generation.current) { setReport(result); setError(''); } } catch (failure) { if (id === generation.current) setError(failure.message); } }
+  // The viewed account is a page parameter; the operating account is untouched.
+  const viewed = state.brokers.find(item => item.id === brokerId) || state.broker;
+  const broker = viewed.id, operating = broker === state.broker.id;
+  const endpoint = `performance?broker=${encodeURIComponent(broker)}`;
+  async function load() { const id = ++generation.current; try { const result = await api(endpoint); if (id === generation.current) { setReport(result); setError(''); } } catch (failure) { if (id === generation.current) setError(failure.message); } }
   useEffect(() => {
     const id = ++generation.current; setReview(false);
-    api('performance').then(data => { if (id === generation.current) { setReport(data); setError(''); } }).catch(e => { if (id === generation.current) setError(e.message); });
+    api(endpoint).then(data => { if (id === generation.current) { setReport(data); setError(''); } }).catch(e => { if (id === generation.current) setError(e.message); });
     return () => { generation.current++; };
   }, [broker, state.monitoring?.last_success, state.jobs[0]?.id, state.jobs[0]?.status]);
   const current = report?.broker_id === broker ? report : null, latest = current?.latest;
-  const context = executionContext(state.broker, { currency:current?.currency || latest?.currency, timezone:current?.timezone || latest?.timezone });
+  const context = executionContext(viewed, { currency:current?.currency || latest?.currency, timezone:current?.timezone || latest?.timezone });
   const currency = currencyLabel(context.currency), timezone = context.timezone, zone = timezoneLabel(timezone);
   const analysis = current?.analytics?.[period], summary = current?.position_summary || {};
   const complete = analysis?.metrics?.profit != null, stats = complete ? analysis.metrics : analysis?.verified || {};
@@ -31,15 +34,15 @@ export function PerformancePanel({ state, busy, run, act, chooseBroker, navigate
   function openFlows() { if (flowDetails.current) { flowDetails.current.open = true; flowDetails.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }
   async function submitFlow(event) {
     event.preventDefault();
-    const result = await act(() => api('performance/cash-event', { ...flow, amount: Number(flow.amount), as_of: new Date(flow.as_of).toISOString(), view_token: current.view_token }));
+    const result = await act(() => api('performance/cash-event', { ...flow, amount: Number(flow.amount), as_of: new Date(flow.as_of).toISOString(), view_token: current.view_token, broker }));
     if (result) { setFlow({ ...flow, amount: '', note: '' }); setReview(false); await load(); }
   }
   async function reviewFlows() {
-    const result = await act(() => api('performance/review', { through: latest.as_of, view_token: current.view_token }));
+    const result = await act(() => api('performance/review', { through: latest.as_of, view_token: current.view_token, broker }));
     if (result) { setReview(false); await load(); }
   }
   return <div className="account-overview">
-    <div className="account-heading"><div><select className="account-selector" aria-label="查看账户" value={broker} disabled={busy} onChange={e => chooseBroker(e.target.value)}>{state.brokers.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}</option>)}</select><p>{latest ? `${time(latest.as_of)} 更新${stale ? ' · 数据待更新' : ''}` : current?.message || '首次更新后开始记录账户表现。'}</p></div><div className="button-row"><button className="text-link" onClick={() => navigate('broker')}>连接设置</button><button className="button" disabled={busy || !state.actions?.observe?.enabled} title={state.actions?.observe?.message} onClick={() => run('observe')}>刷新账户</button></div></div>
+    <div className="account-heading"><div><select className="account-selector" aria-label="查看账户" value={broker} onChange={e => (viewBroker || chooseBroker)(e.target.value)}>{state.brokers.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}</option>)}</select><p>{latest ? `${time(latest.as_of)} 更新${stale ? ' · 数据待更新' : ''}` : current?.message || '首次更新后开始记录账户表现。'}{!operating && ` · 操作账户仍是 ${state.broker.name}`}</p></div><div className="button-row"><button className="text-link" onClick={() => navigate('broker')}>连接设置</button>{operating ? <button className="button" disabled={busy || !state.actions?.observe?.enabled} title={state.actions?.observe?.message} onClick={() => run('observe')}>刷新账户</button> : <button className="button" disabled={busy || !viewed.enabled} title="切换操作账户会清除旧的订单预览和网页授权" onClick={() => chooseBroker(broker)}>设为操作账户</button>}</div></div>
     {error && <p className="inline-warning" role="alert">{error}</p>}{state.monitoring?.error && <p className="inline-warning">{state.monitoring.error}</p>}
     {!current ? <section className="card chart-no-data" role="status"><strong>{error ? '暂时无法读取账户记录' : '正在读取账户记录…'}</strong><span>{error ? '连接恢复后会重新读取。' : '正在获取资产、持仓和收益表现。'}</span></section> : !latest ? <section className="card chart-no-data"><strong>还没有账户资产记录</strong><span>{current.message || '连接账户后点击「刷新账户」，查看资产、持仓和盈亏。'}</span></section> : <>
       <section className="card asset-summary" aria-label="账户资产摘要">
@@ -63,7 +66,7 @@ export function PerformancePanel({ state, busy, run, act, chooseBroker, navigate
       <details className="card account-details" ref={flowDetails}><summary>资金流水与收益核对 <span>{current.metrics?.flow_review_required ? '待核对' : '已核对'}</span></summary>
         <p className="small muted">请登记本统计区间的全部入金、出金及账户重置。股息与费用已体现在净资产中，不再作为出入金扣除。</p>
         <form onSubmit={submitFlow} className="monitor-form"><label>发生时间 · 本地<input type="datetime-local" required value={flow.as_of} onChange={e => setFlow({ ...flow, as_of: e.target.value })}/></label><label>类型<select value={flow.kind} onChange={e => setFlow({ ...flow, kind: e.target.value })}>{Object.entries(kinds).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>金额 · {currency}<input type="number" min="0" step="0.01" required value={flow.amount} onChange={e => setFlow({ ...flow, amount: e.target.value })}/></label><label>备注<input maxLength="500" value={flow.note} onChange={e => setFlow({ ...flow, note: e.target.value })}/></label><button className="button" disabled={busy}>登记</button></form>
-        {(current.cash_events || []).map(item => <div className="log-line" key={item.id}><time>{time(item.as_of)}</time><span>{kinds[item.kind]} · {money(item.amount)} · {item.note}</span><button className="text-link" disabled={busy} onClick={async () => { const r = await act(() => api('performance/cash-event/remove', { id: item.id, view_token: current.view_token })); if (r) await load(); }}>移除错误记录</button></div>)}
+        {(current.cash_events || []).map(item => <div className="log-line" key={item.id}><time>{time(item.as_of)}</time><span>{kinds[item.kind]} · {money(item.amount)} · {item.note}</span><button className="text-link" disabled={busy} onClick={async () => { const r = await act(() => api('performance/cash-event/remove', { id: item.id, view_token: current.view_token, broker })); if (r) await load(); }}>移除错误记录</button></div>)}
         <label className="review-check"><input type="checkbox" checked={review} onChange={e => setReview(e.target.checked)}/>已核对本区间，全部出入金和重置均已登记（没有则无需登记）。</label><button className="button" disabled={busy || !review} onClick={reviewFlows}>确认核对并计算收益</button><p className="small muted">最近核对：{time(current.flow_reviewed_through)}。后续未核对的观测仅展示净资产，已核对收益仍可查看。</p>
       </details>
       <details className="card account-details"><summary>调仓复盘 <span>{current.cycles?.length || 0} 次</span></summary>{current.cycles?.map(c => <article key={c.decision_id} className="rebalance-review"><strong>{time(c.recorded_at)} · {c.status === 'complete' ? '执行完成' : '尚未确认完成'}</strong><p>{c.message}</p><div className="table-wrap"><table><thead><tr><th>标的</th><th>方向</th><th>委托数量</th><th>已成交</th><th>均价</th></tr></thead><tbody>{(c.fills?.length ? c.fills : c.orders || []).map((o, i) => <tr key={o.id || i}><td>{o.ticker || o.symbol}</td><td>{o.side === 'BUY' ? '买入' : '卖出'}</td><td>{decimal(o.quantity)}</td><td>{decimal(o.filled_quantity)}</td><td>{decimal(o.average_price)}</td></tr>)}</tbody></table></div></article>)}</details>

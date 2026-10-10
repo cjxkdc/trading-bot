@@ -2,21 +2,23 @@ import React, { useState } from 'react';
 import { MonitoringPanel } from '../components/MonitoringPanel';
 import { ServerPage } from '../components/ServerPage';
 import { PreflightProgress } from '../components/PreflightProgress';
+import { LogViewer } from '../components/LogViewer';
 import { Button, Empty, Tag } from '../ui';
 import { actions, statuses, time } from '../format';
 import { isServerDeployment } from '../server';
 import { attentionItems } from '../app/overview';
 
-export function SystemPage({ view, state, busy, act, navigate, access, shutdown, refresh }) {
+export function SystemPage({ view, state, busy, act, navigate, access, shutdown, refresh, incident = '' }) {
   const [includeObservations, setIncludeObservations] = useState(false);
   if (view === 'server') return <ServerPage onNavigate={navigate} onRuntimeChange={() => refresh().catch(() => {})}/>;
   if (view === 'monitoring') return <MonitoringPanel state={state} busy={busy} act={act} onNavigate={navigate}/>;
   const jobs = (state.jobs || []).filter(job => includeObservations || job.action !== 'observe');
   const attention = attentionItems(state);
   return <>
-    {attention.length > 0 && <section className="overview-section"><div className="section-heading"><h2>当前需要处理</h2></div><div className="attention-list">{attention.map(item => <div key={item.id}><p>{item.message}</p><button className="text-link" onClick={() => navigate(item.destination)}>查看</button></div>)}</div></section>}
+    {attention.length > 0 && <section className="card list-card"><div className="card-heading"><h2>当前需要处理</h2></div><div className="attention-list">{attention.map(item => <div key={item.id}><p>{item.message}</p><button className="text-link" onClick={() => navigate(item.destination)}>查看</button></div>)}</div></section>}
+    <LogViewer initialQuery={incident}/>
     <div className="section-toolbar">
-      <div><h2>运行与日志</h2><p className="small muted">后台返回的最近 {state.jobs?.length || 0} 条操作；更早记录不在此列表。</p></div>
+      <div><h2>操作记录</h2><p className="small muted">后台返回的最近 {state.jobs?.length || 0} 条操作；更早记录不在此列表。</p></div>
       <label className="inline-check"><input type="checkbox" checked={includeObservations} onChange={event => setIncludeObservations(event.target.checked)}/>显示账户定时观测</label>
     </div>
     <section className="job-list">

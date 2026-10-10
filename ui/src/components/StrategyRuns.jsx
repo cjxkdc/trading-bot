@@ -7,6 +7,7 @@ import { percent, decimal, relativeTime, time } from '../format';
 import { Button, Empty, Tag } from '../ui';
 import { InstanceForm } from './InstanceForm';
 import { InstanceDetails } from './InstanceDetails';
+import { RunWizard } from './RunWizard';
 import { Dialog } from './Dialog';
 
 export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
@@ -31,10 +32,9 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
   return <div className="runs-page">
     {manager.corrupt && <div className="alert error">运行状态无法核对，实例已停用；原文件保留供检查。</div>}
     {selected || route.instance ? <>
-      <button className="text-link back-link" onClick={back}>返回策略实例</button>
-      {!selected ? <Empty title="此实例已不存在">返回列表，查看当前保存的实例。</Empty> : <>
-        <div className="instance-detail-heading"><div><h2>{selected.name}</h2><p>{moduleName(state.strategies, selected.strategy.type, 'type')} · {moduleName(state.brokers, selected.broker_id)}</p></div><Tag tone={instanceStatus(selected).tone}>{instanceStatus(selected).label}</Tag></div>
+      {!selected ? <Empty title="此运行已不存在">返回列表，查看当前保存的运行。</Empty> : <>
         <div className="instance-facts">
+          <div><span>状态</span><Tag tone={instanceStatus(selected).tone}>{instanceStatus(selected).label}</Tag></div>
           <div><span>账户环境</span><strong>{state.brokers.find(b => b.id === selected.broker_id)?.mode_label || '环境待核验'}</strong></div>
           <div><span>账户资金比例</span><strong>{percent(selected.budget)}</strong></div>
           <div><span>运行计划</span><strong>{scheduleSummary(selected.schedule)}</strong></div>
@@ -64,16 +64,14 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
         </details>
       </>}
     </> : <>
-      <div className="section-toolbar"><p className="page-intro">每份实例独立配置与运行，共用账户时合并目标下单。</p><Button primary disabled={busy || manager.corrupt} onClick={() => onNavigate({ page: 'runs', view: 'instances', create: true })}>创建实例</Button></div>
-      {editing && (route.strategy && !state.strategies.some(item => item.type === route.strategy && item.enabled) ? <Empty title="所选策略已不可用">返回策略工作区重新选择，再创建运行实例。</Empty> : <InstanceForm key={`new-${route.strategy || "default"}`} state={state} item={null} initialStrategy={route.strategy} busy={busy} act={act} close={closeEditor}/>)}
-      {!items.length && !editing ? <Empty title="创建第一份策略实例">选择策略、账户资金比例和调仓计划。保存后再确认启动。</Empty> : <div className="instance-list">
+      {editing ? (route.strategy && !state.strategies.some(item => item.type === route.strategy && item.enabled) ? <Empty title="所选策略已不可用">返回策略工作区重新选择，再新建运行。</Empty> : <RunWizard key={`new-${route.strategy || "default"}`} state={state} initialStrategy={route.strategy} busy={busy} pending={pending} act={act} navigate={onNavigate}/>) : <>
+      {!items.length ? <section className="card"><Empty title="还没有运行" icon="play">点右上角「新建运行」，选好策略、账户、资金比例和计划；保存后再确认启动。</Empty></section> : <div className="instance-list">
         {items.map(item => <article className="instance-row" key={item.id}>
-          <div className="instance-row-name"><h3>{item.name}</h3><small>{moduleName(state.strategies, item.strategy.type, 'type')} · {moduleName(state.brokers, item.broker_id)}</small></div>
-          <div className="instance-row-budget"><small>资金比例</small><span>{percent(item.budget)}</span><span className="budget-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, Number(item.budget) * 100)}%` }}/></span></div>
-          <div className="instance-row-holdings"><small>持仓</small><span>{item.positions?.length || 0} 只</span></div>
-          <div className="instance-row-next"><small>下次执行 · 本地时间</small><span>{item.enabled && item.next_run ? <>{time(item.next_run)} <em>{relativeTime(item.next_run)}</em></> : '—'}</span></div>
-          <Tag tone={item.pending || item.status === 'paused' ? 'amber' : 'muted'}>{instanceStatus(item).label}</Tag>
-          <Button onClick={() => onNavigate({ page: 'runs', view: 'instances', instance: item.id })}>查看详情</Button>
+          <div className="instance-row-name"><h3>{item.name}</h3><small>{moduleName(state.strategies, item.strategy.type, 'type')} · {scheduleSummary(item.schedule)}</small></div>
+          <div className="instance-row-account"><span>{moduleName(state.brokers, item.broker_id)}</span><small className="num">{percent(item.budget)} 资金 · 持仓 {item.positions?.length || 0} 只</small></div>
+          <Tag tone={instanceStatus(item).tone}>{instanceStatus(item).label}</Tag>
+          <div className="instance-row-next num">{item.enabled && item.next_run ? <>{time(item.next_run)}<em>{relativeTime(item.next_run)}</em></> : <span className="muted">{item.enabled ? '等待确认时间' : item.last_run?.at ? `上次 ${time(item.last_run.at)}` : '尚未执行'}</span>}</div>
+          <button className="text-link" onClick={() => onNavigate({ page: 'runs', view: 'instances', instance: item.id })}>详情 →</button>
         </article>)}
       </div>}
       {manager.accounts?.length > 0 && <details className="details account-allocation"><summary>账户资金比例</summary>
@@ -88,6 +86,8 @@ export function StrategyRuns({ state, busy, pending, act, route, onNavigate }) {
         <label>保留执行记录（轮）<input type="number" min="20" max="500" value={limits.log_retention_runs || 100} onChange={event => setLimits({ ...limits, log_retention_runs: Number(event.target.value) })}/></label>
         <Button type="submit" disabled={busy || manager.running_count > 0 || items.some(item => item.pending)}>保存限制</Button>
       </form><p className="small muted">修改前停止所有实例并核对未完成批次。策略计算超时不会强制终止下单进程。</p></details>
+      <p className="quiet-links">其他方式：<button className="text-link" onClick={() => onNavigate('manual')}>手动调仓（只跑一次）</button><span aria-hidden="true"> · </span><button className="text-link" onClick={() => onNavigate('automation')}>旧版单策略计划{state.automation?.enabled ? '（已开启）' : state.automation?.status === 'paused' ? '（待核对）' : ''}</button></p>
+      </>}
     </>}
     {confirm && <Dialog labelledBy="instance-confirm-title" onDismiss={() => setConfirm(null)}>
       <h2 id="instance-confirm-title">{confirm.action === 'remove' ? '删除策略实例' : confirm.action === 'resolve' ? '结束未提交余单' : confirm.action === 'close-terminal' ? '关闭已撤单/拒单' : confirm.action === 'once' ? '执行一轮交易' : '启动策略实例'}</h2>

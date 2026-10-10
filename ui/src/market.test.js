@@ -18,18 +18,18 @@ test('market status comes from a fresh calendar observation and never a US clock
 test('display preferences fall back safely when storage is missing, invalid or throws', () => {
   const store = new Map();
   const storage = { getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
-  assert.equal(readPreference('theme', storage), 'dark');
-  savePreference('theme', 'light', storage);
   assert.equal(readPreference('theme', storage), 'light');
+  savePreference('theme', 'dark', storage);
+  assert.equal(readPreference('theme', storage), 'dark');
   store.set('trading-portal:updown', 'purple');
   assert.equal(readPreference('updown', storage), 'us');
   const broken = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
-  assert.equal(readPreference('theme', broken), 'dark');
+  assert.equal(readPreference('theme', broken), 'light');
   assert.equal(savePreference('updown', 'cn', broken), 'cn');
   assert.throws(() => savePreference('theme', 'neon', storage));
   const root = { dataset: {} };
   applyPreferences(root, storage);
-  assert.deepEqual(root.dataset, { theme: 'light', updown: 'us' });
+  assert.deepEqual(root.dataset, { theme: 'dark', updown: 'us' });
 });
 
 test('relative time reads naturally for upcoming and past moments', () => {
@@ -60,11 +60,11 @@ test('a throwing localStorage getter cannot prevent the initial page from render
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
   try {
-    assert.equal(readPreference('theme'), 'dark');
-    assert.equal(savePreference('theme', 'light'), 'light');
+    assert.equal(readPreference('theme'), 'light');
+    assert.equal(savePreference('theme', 'dark'), 'dark');
     const root = { dataset: {} };
     applyPreferences(root);
-    assert.deepEqual(root.dataset, { theme: 'dark', updown: 'us' });
+    assert.deepEqual(root.dataset, { theme: 'light', updown: 'us' });
   } finally {
     if (original) Object.defineProperty(globalThis, 'localStorage', original);
     else delete globalThis.localStorage;

@@ -22,7 +22,7 @@ export function AccountCandles({ brokerId, accountKey, revision, intervalSeconds
   useEffect(() => {
     let live = true;
     setLoading(true); setData(null); setError(''); setSelected(null);
-    const query = `performance/candles?interval=${interval}&limit=96${accountKey ? `&account_key=${encodeURIComponent(accountKey)}` : ''}`;
+    const query = `performance/candles?interval=${interval}&limit=96&broker=${encodeURIComponent(brokerId)}${accountKey ? `&account_key=${encodeURIComponent(accountKey)}` : ''}`;
     api(query).then(result => {
       if (!live) return;
       if (result.broker_id !== brokerId || (accountKey && result.account_key !== accountKey)) throw new Error('账户已变化，请刷新账户表现。');

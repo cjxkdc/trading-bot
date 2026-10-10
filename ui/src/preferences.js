@@ -1,6 +1,6 @@
 // Per-browser display preferences. Storage can be unavailable (private mode,
 // blocked site data); the page must still render with the defaults.
-export const defaults = { theme: 'dark', updown: 'us' };
+export const defaults = { theme: 'light', updown: 'us' };
 const allowed = { theme: ['dark', 'light'], updown: ['us', 'cn'] };
 const key = name => `trading-portal:${name}`;
 
@@ -28,5 +28,5 @@ export function applyPreferences(root = globalThis.document?.documentElement, st
   const theme = allowed.theme.includes(values.theme) ? values.theme : readPreference('theme', storage);
   root.dataset.theme = theme;
   root.dataset.updown = allowed.updown.includes(values.updown) ? values.updown : readPreference('updown', storage);
-  globalThis.document?.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0e1219' : '#ffffff');
+  globalThis.document?.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#121315' : '#f4f4f1');
 }

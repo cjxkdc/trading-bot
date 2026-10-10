@@ -19,9 +19,12 @@ export function usePortalSession() {
       const data = await api('state');
       if (mounted.current && !stoppedRef.current && request === version.current) setState(data);
     } catch (error) {
-      if (mounted.current && !stoppedRef.current && request === version.current) {
-        setOnline(false); setState(null); setConnectionError(error.message);
+      if (!mounted.current || stoppedRef.current || request !== version.current) {
+        // A superseded request (a newer refresh already answered) must not
+        // overwrite the fresh online state with its own late timeout.
+        throw Object.assign(error, { stale: true });
       }
+      setOnline(false); setState(null); setConnectionError(error.message);
       throw error;
     }
   }, []);
@@ -31,7 +34,7 @@ export function usePortalSession() {
     let timer;
     async function poll(first = false) {
       try { if (first) await connect(); await refresh(); }
-      catch (error) { if (mounted.current && !stoppedRef.current) { setOnline(false); setConnectionError(error.message); } }
+      catch (error) { if (!error?.stale && mounted.current && !stoppedRef.current) { setOnline(false); setConnectionError(error.message); } }
       if (mounted.current && !stoppedRef.current) timer = setTimeout(poll, 2500);
     }
     poll(true);

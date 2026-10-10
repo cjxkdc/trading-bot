@@ -1,103 +1,107 @@
-/* Trading-terminal tokens. Dark is the default; light keeps the same hierarchy.
-   Market direction colours are separate from status colours so the
-   red-up / green-down convention can be switched without touching alerts. */
-:root, :root[data-theme='dark'] {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 13px;
+/* Design tokens ("青石"): a light workbench by default, with a neutral dark
+   theme that keeps the same roles. One action colour; status colours are
+   separate from market direction colours so red-up / green-down can be
+   switched without touching alerts. */
+:root, :root[data-theme='light'] {
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px;
   color: var(--ink);
   background: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  color-scheme: dark;
+  color-scheme: light;
   --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
-  --bg: #0b0e14;
-  --sidebar: #0e1219;
-  --surface: #121721;
-  --surface-raised: #182030;
-  --surface-inset: #0f141c;
-  --surface-hover: #1b2333;
-  --field: #0f141c;
-  --ink: #e4e8f0;
-  --body-ink: #c3cad7;
-  --secondary: #8b95a8;
-  --faint: #5f6a7e;
-  --border: #222a38;
-  --border-strong: #323c4e;
-  --border-hover: #4a5568;
-  --accent: #f5a623;
-  --accent-hover: #ffb845;
-  --accent-ink: #1b1204;
-  --accent-soft: rgba(245, 166, 35, .12);
-  --accent-border: rgba(245, 166, 35, .38);
-  --info: #5aa2ff;
-  --info-soft: rgba(90, 162, 255, .12);
-  --info-border: rgba(90, 162, 255, .35);
-  --success: #2ebd85;
-  --success-soft: rgba(46, 189, 133, .12);
-  --warning: #e9c15b;
-  --warning-soft: rgba(233, 193, 91, .1);
-  --warning-border: rgba(233, 193, 91, .35);
-  --danger: #f6465d;
-  --danger-soft: rgba(246, 70, 93, .12);
-  --danger-border: rgba(246, 70, 93, .38);
-  --gain: #2ebd85;
-  --loss: #f6465d;
-  --switch-knob: #f4f6fa;
-  --shadow: 0 18px 60px rgba(0, 0, 0, .55);
+  --bg: #f4f4f1;
+  --sidebar: #fafaf8;
+  --surface: #ffffff;
+  --surface-raised: #f7f7f4;
+  --surface-inset: #efefeb;
+  --surface-hover: #f3f3ef;
+  --field: #ffffff;
+  --ink: #1a1a18;
+  --body-ink: #33332f;
+  --secondary: #5b5b56;
+  --faint: #8a8a84;
+  --border: #e4e4df;
+  --border-strong: #cfcfc8;
+  --border-hover: #b3b3ab;
+  --accent: #2451c7;
+  --accent-hover: #1c43a6;
+  --accent-ink: #ffffff;
+  --accent-soft: #e9eefb;
+  --accent-border: #b9c8f2;
+  --info: #2451c7;
+  --info-soft: #e9eefb;
+  --info-border: #b9c8f2;
+  --success: #1a7f4b;
+  --success-soft: #e6f4ec;
+  --warning: #9a5b00;
+  --warning-soft: #fbf1df;
+  --warning-border: #f3d9a4;
+  --danger: #c0392b;
+  --danger-soft: #fbe9e7;
+  --danger-border: #f3c4be;
+  --gain: #1a7f4b;
+  --loss: #c0392b;
+  --switch-knob: #ffffff;
+  --shadow: 0 24px 60px rgba(26, 26, 24, .22);
+  --shadow-card: 0 1px 2px rgba(26, 26, 24, .04);
+  --code-keyword: #b5520c;
+  --code-string: #2f7d32;
+  --code-number: #9a5b00;
+  --code-comment: #8a8a84;
+  --code-function: #2451c7;
+  --code-type: #7c3aed;
+  --radius: 8px;
+  --radius-card: 12px;
+  --sidebar-width: 232px;
+  --content-width: 1200px;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #121315;
+  --sidebar: #17181b;
+  --surface: #1c1d21;
+  --surface-raised: #232428;
+  --surface-inset: #141518;
+  --surface-hover: #222327;
+  --field: #141518;
+  --ink: #ecece8;
+  --body-ink: #cfcfca;
+  --secondary: #a3a39e;
+  --faint: #74746f;
+  --border: #2b2c31;
+  --border-strong: #3a3b41;
+  --border-hover: #4a4b52;
+  --accent: #7e9dff;
+  --accent-hover: #98b1ff;
+  --accent-ink: #0b1430;
+  --accent-soft: rgba(126, 157, 255, .14);
+  --accent-border: rgba(126, 157, 255, .4);
+  --info: #7e9dff;
+  --info-soft: rgba(126, 157, 255, .14);
+  --info-border: rgba(126, 157, 255, .4);
+  --success: #4cc38a;
+  --success-soft: rgba(76, 195, 138, .14);
+  --warning: #e6b254;
+  --warning-soft: rgba(230, 178, 84, .14);
+  --warning-border: rgba(230, 178, 84, .4);
+  --danger: #f07167;
+  --danger-soft: rgba(240, 113, 103, .14);
+  --danger-border: rgba(240, 113, 103, .4);
+  --gain: #4cc38a;
+  --loss: #f07167;
+  --switch-knob: #ecece8;
+  --shadow: 0 24px 60px rgba(0, 0, 0, .6);
+  --shadow-card: none;
   --code-keyword: #ff9d5c;
   --code-string: #9fd88b;
   --code-number: #f5c26b;
-  --code-comment: #6b778c;
+  --code-comment: #74746f;
   --code-function: #7cb7ff;
   --code-type: #d7a8ff;
-  --radius: 4px;
-  --sidebar-width: 196px;
-  --content-width: 1440px;
-}
-
-:root[data-theme='light'] {
-  color-scheme: light;
-  --bg: #eef1f5;
-  --sidebar: #ffffff;
-  --surface: #ffffff;
-  --surface-raised: #f5f7fa;
-  --surface-inset: #f7f9fb;
-  --surface-hover: #f0f3f7;
-  --field: #ffffff;
-  --ink: #18202e;
-  --body-ink: #3a4456;
-  --secondary: #5a6476;
-  --faint: #7c8697;
-  --border: #dde2ea;
-  --border-strong: #c3cad6;
-  --border-hover: #98a2b3;
-  --accent: #e8890c;
-  --accent-hover: #f59a22;
-  --accent-ink: #1b1204;
-  --accent-soft: rgba(232, 137, 12, .1);
-  --accent-border: rgba(232, 137, 12, .4);
-  --info: #2a6fdb;
-  --info-soft: rgba(42, 111, 219, .08);
-  --info-border: rgba(42, 111, 219, .3);
-  --success: #12825a;
-  --success-soft: rgba(18, 130, 90, .08);
-  --warning: #9a6200;
-  --warning-soft: rgba(214, 152, 0, .1);
-  --warning-border: rgba(154, 98, 0, .3);
-  --danger: #d02f46;
-  --danger-soft: rgba(208, 47, 70, .07);
-  --danger-border: rgba(208, 47, 70, .3);
-  --gain: #12825a;
-  --loss: #d02f46;
-  --switch-knob: #ffffff;
-  --shadow: 0 18px 60px rgba(20, 28, 43, .18);
-  --code-keyword: #b5520c;
-  --code-string: #2f7d32;
-  --code-number: #9a6200;
-  --code-comment: #7c8697;
-  --code-function: #2a6fdb;
-  --code-type: #8a3fc2;
 }
 
 /* 红涨绿跌：中国内地及港股习惯。 */
