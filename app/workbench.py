@@ -1,6 +1,6 @@
 """Portal state and jobs. No trading logic or vendor SDK lives in the UI layer."""
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 import logging
@@ -13,8 +13,10 @@ from uuid import uuid4
 
 from backtests.experiments import (compare_results, import_result, read_json,
                                   validate_export, verified_record)
-from backtests.quantconnect.results import parse_result
+from backtests.replay import parse_any, replay
 from bot import export_backtest
+from app.assembly import build_portfolio_strategy
+from data.snapshot import load_snapshot
 from framework.configuration import load_config, normalize_config
 from app.control_contracts import ControlError
 from app.diagnostics import failure_details
@@ -1129,9 +1131,10 @@ class PortalService:
                 for result in sorted(path.glob('result-*')):
                     try:
                         record = verified_record(result)
-                        if parse_result(read_json(result / 'raw-result.json')) != record['result']:
+                        if parse_any(read_json(result / 'raw-result.json')) != record['result']:
                             raise ValueError('Changed summary')
                         entry['results'].append({'id': path.name + '/' + result.name,
+                                                 'provider': record['result'].get('provider', 'quantconnect'),
                                                  'metrics': record['result']['metrics'],
                                                  'completion': record['result']['completion'],
                                                  'code_evidence': record['code_evidence'],
@@ -1170,7 +1173,7 @@ class PortalService:
             path = self.folder / ('upload-' + uuid4().hex + '.json')
             path.write_bytes(content)
             try:
-                out = import_result(experiment, path, parse_result)
+                out = import_result(experiment, path, parse_any)
             except FileExistsError:
                 raise PortalError('该结果已经导入。') from None
             finally:
@@ -1187,4 +1190,93 @@ class PortalService:
                 if not isinstance(ident, str) or not re.fullmatch(r'exp-[0-9a-f]{16}/result-[0-9a-f]{16}', ident):
                     raise PortalError('回测结果编号无效。')
                 folders.append(self._experiment(ident.split('/')[0]) / ident.split('/')[1])
-            return compare_results(folders, parse_result, self.folder / 'comparisons' / uuid4().hex)
+            return compare_results(folders, parse_any, self.folder / 'comparisons' / uuid4().hex)
+
+    def replay_series(self):
+        """Dated snapshots saved for the manual data source, oldest first.
+
+        Every collection and upload leaves a file; one file per price date is
+        kept (the newest). Replays run on this series only: it is the data the
+        workbench actually had, not a reconstructed history.
+        """
+        with self.lock:
+            cfg, _ = self.config()
+            source = self.source
+            adapter = self.registry.control('data', source, config=cfg)
+            folders = [Path(adapter.directory), self.folder / 'snapshots']
+        found = {}
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            for path in [*sorted(folder.glob('*/*.json')), *sorted(folder.glob('*.json'))]:
+                if path.name in {'progress.json', 'failure.json', 'latest.json'} or path.stat().st_size > MAX_FILE:
+                    continue
+                try:
+                    raw = read_json(path)
+                    meta = adapter.metadata(raw)
+                    day = meta.get('price_as_of')
+                    if not day and isinstance(raw.get('stocks'), list):
+                        # Uploaded files may carry the date per stock only.
+                        days = [s.get('price_as_of') for s in raw['stocks'] if isinstance(s, dict) and s.get('price_as_of')]
+                        day = max(days) if days else None
+                    day = date.fromisoformat(str(day)).isoformat()
+                except (ControlError, ValueError, TypeError, OSError, KeyError):
+                    continue
+                entry = found.get(day)
+                if entry is None or path.stat().st_mtime > entry['mtime']:
+                    found[day] = {'date': day, 'path': path, 'mtime': path.stat().st_mtime,
+                                  'candidate_count': meta.get('candidate_count'), 'research_only': meta.get('research_only', False)}
+        return source, [found[day] for day in sorted(found)]
+
+    def replay_backtest(self, value):
+        """Replay the manual configuration over the saved snapshot series and archive the result."""
+        if not isinstance(value, dict):
+            raise PortalError('回放参数无效。')
+        start, end, slip = value.get('start'), value.get('end'), value.get('slippage_bps', 10)
+        cadence = value.get('cadence', 'monthly')
+        try:
+            start, end = date.fromisoformat(str(start)).isoformat(), date.fromisoformat(str(end)).isoformat()
+        except (TypeError, ValueError):
+            raise PortalError('请填写回放的开始和结束日期。') from None
+        if start > end or cadence not in {'daily', 'weekly', 'monthly'}:
+            raise PortalError('回放区间或调仓周期无效。')
+        if isinstance(slip, bool) or not isinstance(slip, (int, float)) or not 0 <= slip <= 9999:
+            raise PortalError('滑点应为 0–9999 bps。')
+        with self.lock:
+            self.idle()
+            cfg, _ = self.config()
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY), cfg['strategy']['type'])
+        source, items = self.replay_series()
+        chosen = [item for item in items if start <= item['date'] <= end]
+        if len(chosen) < 2:
+            raise PortalError(f'所选区间内只有 {len(chosen)} 份已保存的快照；本地回放至少需要 2 份不同日期的快照。')
+        strategy = build_portfolio_strategy(cfg['strategy'])
+        series = []
+        for item in chosen:
+            try:
+                stocks = load_snapshot(item['path'])[0]
+            except (ValueError, KeyError, TypeError):
+                adapter = self.registry.control('data', source, config=cfg)
+                stocks = tuple(adapter.load(read_json(item['path'])).stocks)
+            series.append((date.fromisoformat(item['date']), stocks))
+        try:
+            result = replay(series, strategy, max_gross=cfg['limits']['max_gross'], max_weight=cfg['limits']['max_weight'],
+                            initial_cash=cfg['initial_cash'], fee_per_order=cfg['fees']['per_order'],
+                            fee_bps=cfg['fees']['bps'], slippage_bps=slip, cadence=cadence)
+        except ValueError as exc:
+            raise PortalError(f'本地回放未能完成：{exc}') from None
+        result.update(source=source, strategy=cfg['strategy'],
+                      snapshots=[{'date': item['date'], 'file': str(item['path'].relative_to(self.root)),
+                                  'candidate_count': item['candidate_count']} for item in chosen])
+        exported = self.export(result['period']['start'], result['period']['end'], slip,
+                               note=f'本地回放 · {len(chosen)} 份快照 · {cadence}', expected_strategy_type=cfg['strategy']['type'])
+        experiment = self._experiment(exported['id'])
+        path = self.folder / ('replay-' + uuid4().hex + '.json')
+        atomic_json(path, result)
+        try:
+            out = import_result(experiment, path, parse_any)
+        finally:
+            path.unlink(missing_ok=True)
+        return {'id': exported['id'] + '/' + out.name, 'experiment': exported['id'], 'metrics': result['metrics'],
+                'snapshot_count': len(chosen), 'rebalance_count': result['rebalance_count'], 'warnings': result['warnings'],
+                'message': f'本地回放完成：{len(chosen)} 份快照，{result["rebalance_count"]} 次调仓。'}

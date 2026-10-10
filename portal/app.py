@@ -386,6 +386,16 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
                     if 'expected_strategy_type' in value else {})
         return await run_in_threadpool(service.export, start, end, slip, note or '', **expected)
 
+    @app.get('/api/experiments/replay-series')
+    def replay_series():
+        source, items = service.replay_series()
+        return {'source': source, 'count': len(items), 'dates': [item['date'] for item in items]}
+
+    @app.post('/api/experiments/replay')
+    async def replay_backtest(request: Request):
+        value = await body(request)
+        return await run_in_threadpool(service.replay_backtest, value)
+
     @app.get('/api/experiments/{ident}/code')
     def code(ident: str):
         folder = service._experiment(ident)

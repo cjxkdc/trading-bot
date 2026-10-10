@@ -323,5 +323,133 @@ class LogReaderTests(unittest.TestCase):
         self.assertEqual(client.get('/api/runtime/logs', headers={}).status_code, 403)
 
 
+class _TopCloseStrategy:
+    """Holds half the book in whichever stock closed highest; enough to check the ledger arithmetic."""
+    from framework.portfolio import HistoryRequirements as _H
+    history_requirements = _H(2, 1)
+
+    def select(self, stocks):
+        from framework.portfolio import StockTarget
+        ranked = sorted(stocks, key=lambda s: -s.adjusted_closes[-1])
+        return (StockTarget(ranked[0].asset_id, 0.5, 1.0),) if ranked else ()
+
+
+def _stock(asset_id, day, closes):
+    from framework.portfolio import StockSnapshot
+    return StockSnapshot(asset_id, asset_id, day, day, 'tech', 1.0, tuple(float(c) for c in closes), (1e7,))
+
+
+class ReplayEngineTests(unittest.TestCase):
+    def test_whole_share_ledger_values_positions_at_each_snapshot(self):
+        from datetime import date
+        from backtests.replay import replay
+        days = [date(2026, 6, 30), date(2026, 7, 31), date(2026, 8, 31)]
+        series = [(days[0], [_stock('A', days[0], [9, 10]), _stock('B', days[0], [10, 10])]),
+                  (days[1], [_stock('A', days[1], [10, 12]), _stock('B', days[1], [10, 9])]),
+                  (days[2], [_stock('A', days[2], [12, 15]), _stock('B', days[2], [9, 8])])]
+        result = replay(series, _TopCloseStrategy(), max_gross=0.95, max_weight=0.5, initial_cash=1000,
+                        fee_per_order=0, fee_bps=0, slippage_bps=0)
+        self.assertEqual(result['provider'], 'local_replay')
+        self.assertEqual([value for _, value in result['nav']], [1000.0, 1100.0, 1235.0])
+        self.assertEqual(result['metrics']['total_orders'], 3.0)
+        self.assertAlmostEqual(result['metrics']['total_return'], 0.235)
+        self.assertEqual(result['metrics']['max_drawdown'], 0.0)
+        self.assertEqual(result['final_positions'], {'A': 41})
+        self.assertEqual([event['orders'] for event in result['rebalances']], [1, 1, 1])
+        self.assertEqual(result['period'], {'start': '2026-06-30', 'end': '2026-08-31'})
+
+    def test_costs_slippage_and_a_vanishing_stock_are_applied_and_flagged(self):
+        from datetime import date
+        from backtests.replay import replay
+        days = [date(2026, 6, 30), date(2026, 7, 31), date(2026, 8, 31)]
+        series = [(days[0], [_stock('A', days[0], [9, 10])]),
+                  (days[1], [_stock('A', days[1], [10, 12])]),
+                  (days[2], [_stock('B', days[2], [10, 10])])]
+        result = replay(series, _TopCloseStrategy(), max_gross=0.95, max_weight=0.5, initial_cash=1000,
+                        fee_per_order=1, fee_bps=10, slippage_bps=100, cadence='monthly')
+        # Day 1: 50 shares at 10.10 (1% slippage) cost 505 + 1 + 0.505 fees.
+        self.assertAlmostEqual(result['rebalances'][0]['cash_after'], round(1000 - 505 - 1 - 0.505, 2), places=2)
+        self.assertTrue(any('A left the universe on 2026-08-31' in warning for warning in result['warnings']))
+        # A is valued at its last known close (12) once it is gone from the snapshot.
+        self.assertEqual(result['nav'][-1][0], '2026-08-31')
+        with self.assertRaises(ValueError):
+            replay(series[:1], _TopCloseStrategy(), max_gross=0.95, max_weight=0.5, initial_cash=1000,
+                   fee_per_order=0, fee_bps=0, slippage_bps=0)
+
+    def test_parsers_share_one_archive_entry_point(self):
+        from backtests.replay import parse_any, parse_replay, rebalance_days
+        from datetime import date
+        payload = {'provider': 'local_replay', 'schema_version': 1, 'completion': 'reported_complete',
+                   'period': {'start': '2026-06-30', 'end': '2026-08-31'},
+                   'metrics': {'total_return': 0.1, 'annual_return': None, 'max_drawdown': 0.05, 'sharpe': 1.2, 'total_orders': 3.0}}
+        normalized = parse_any(payload)
+        self.assertEqual(normalized['provider'], 'local_replay')
+        self.assertEqual(normalized['completion'], 'reported_complete')
+        self.assertEqual(normalized['metrics']['total_orders'], 3.0)
+        self.assertEqual(parse_replay(payload), normalized)
+        with self.assertRaises(ValueError):
+            parse_any({})
+        with self.assertRaises(ValueError):
+            parse_replay(dict(payload, metrics=dict(payload['metrics'], max_drawdown=1.5)))
+        self.assertEqual(rebalance_days([date(2026, 6, 30), date(2026, 7, 1), date(2026, 7, 15), date(2026, 8, 3)], 'monthly'),
+                         [date(2026, 6, 30), date(2026, 7, 1), date(2026, 8, 3)])
+
+
+class ReplayWorkbenchTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        from app import assembly
+        from app.workbench import PortalService, atomic_json
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        source_root = Path(__file__).resolve().parents[1]
+        for folder in ('configs', 'strategies', 'framework'):
+            shutil.copytree(source_root / folder, self.root / folder, ignore=shutil.ignore_patterns('__pycache__'))
+        for folder in ('data', 'brokers'):
+            shutil.copytree(source_root / folder / 'plugins', self.root / folder / 'plugins')
+        config_path = self.root / 'configs/portfolio_config.json'
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        config['strategy'] = {'type': 'tech_profit_momentum', 'count': 5, 'weight': .19}
+        atomic_json(config_path, config)
+        patcher = patch('app.assembly.ROOT', self.root); patcher.start(); self.addCleanup(patcher.stop)
+        self.service = PortalService(self.root, worker=lambda *a, **kw: self.fail('replay must not call a worker'))
+        self.addCleanup(self.service.close) if hasattr(self.service, 'close') else None
+        self.service.select_source('snapshot_file')
+
+    def snapshot(self, day, bump):
+        from data.snapshot import demo_snapshot
+        value = demo_snapshot()
+        value['execution_time'] = f'{day}T09:35:00-04:00'
+        for index, stock in enumerate(value['stocks']):
+            stock['price_as_of'] = day
+            stock['known_on'] = day
+            stock['adjusted_closes'] = [*stock['adjusted_closes'][:-1], 100.0 + bump * (index + 1)]
+        return json.dumps(value).encode()
+
+    def test_replay_runs_on_saved_snapshots_and_lands_in_the_experiment_archive(self):
+        self.assertEqual(self.service.replay_series()[1], [])
+        for day, bump in (('2026-06-30', 0), ('2026-07-31', 2), ('2026-08-31', 4)):
+            self.service.upload_snapshot(self.snapshot(day, bump))
+        source, series = self.service.replay_series()
+        self.assertEqual(source, 'snapshot_file')
+        self.assertEqual([item['date'] for item in series], ['2026-06-30', '2026-07-31', '2026-08-31'])
+        with self.assertRaises(Exception):
+            self.service.replay_backtest({'start': '2026-08-01', 'end': '2026-08-31', 'slippage_bps': 10})
+        result = self.service.replay_backtest({'start': '2026-06-01', 'end': '2026-09-30', 'slippage_bps': 10,
+                                               'expected_strategy_type': 'tech_profit_momentum'})
+        self.assertEqual(result['snapshot_count'], 3)
+        self.assertEqual(result['rebalance_count'], 3)
+        self.assertGreater(result['metrics']['total_orders'], 0)
+        listed = self.service.experiments()
+        self.assertEqual(listed[0]['id'], result['experiment'])
+        self.assertEqual(listed[0]['results'][0]['provider'], 'local_replay')
+        self.assertEqual(listed[0]['results'][0]['id'], result['id'])
+        self.assertNotIn('invalid', listed[0]['results'][0])
+        second = self.service.replay_backtest({'start': '2026-06-01', 'end': '2026-09-30', 'slippage_bps': 50})
+        report = self.service.compare([result['id'], second['id']])
+        self.assertEqual(len(report['rows']), 2)
+        self.assertIn('slippage_bps', report['comparison_differences'])
+
+
 if __name__ == '__main__':
     unittest.main()
