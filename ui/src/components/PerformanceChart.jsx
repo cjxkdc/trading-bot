@@ -14,7 +14,7 @@ export function PerformanceChart({ points, mode, timezone, currency, daily = fal
   const when = p => daily ? day(p.as_of, timezone) : `${observedTime(p.as_of, timezone)} · ${timezoneLabel(timezone)}`;
   return <div className="performance-chart" ref={host}>
     {!layout ? <div className="chart-no-data"><strong>收益等待资金核对</strong><span>完成下方资金核对后，这里会显示投资收益走势。净资产记录可以直接查看。</span></div> : <>
-      <div className="chart-point"><time>{when(point)}</time><strong className={mode === 'equity' ? '' : tone(point[mode])}>{format(point[mode])}{mode !== 'return_rate' && currency && <small> {currency}</small>}</strong></div>
+      <div className="chart-point" aria-live="polite"><time>{when(point)}</time><strong className={mode === 'equity' ? '' : tone(point[mode])}>{format(point[mode])}{mode !== 'return_rate' && currency && <small> {currency}</small>}</strong></div>
       <svg viewBox={`0 0 ${layout.width} ${layout.height}`} role="img" tabIndex="0" aria-label={`${mode === 'equity' ? '净资产' : mode === 'profit' ? '投资盈亏' : '收益率'}走势，${layout.dots.length} 个观测点；方向键查看数值。`}
         onPointerMove={event => { const bounds = event.currentTarget.getBoundingClientRect(); const x = (event.clientX - bounds.left) * layout.width / bounds.width; setSelected(layout.dots.reduce((best, p, i, all) => Math.abs(p.x - x) < Math.abs(all[best].x - x) ? i : best, 0)); }}
         onPointerLeave={() => setSelected(null)} onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const index = selected ?? layout.dots.length - 1; setSelected(event.key === 'Home' ? 0 : event.key === 'End' ? layout.dots.length - 1 : Math.max(0, Math.min(layout.dots.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1)))); } }}>

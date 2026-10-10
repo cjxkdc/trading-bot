@@ -48,10 +48,10 @@
 .runtime-control > .green, .runtime-control > .success, .runtime-control > .on { color: var(--success); }
 .runtime-control > .amber, .runtime-control > .warning { color: var(--warning); }
 .runtime-control > .red, .runtime-control > .error { color: var(--danger); }
-.runtime-switch { display: flex; align-items: center; width: 36px; height: 20px; flex: 0 0 36px; padding: 2px; border: 0; border-radius: 10px; background: var(--border-strong); }
-.runtime-switch > span { width: 16px; height: 16px; border-radius: 50%; background: var(--switch-knob); transition: transform 160ms ease; }
+.runtime-switch { display: flex; align-items: center; width: 44px; height: 24px; flex: 0 0 44px; padding: 2px; border: 0; border-radius: 12px; background: var(--border-strong); }
+.runtime-switch > span { width: 20px; height: 20px; border-radius: 50%; background: var(--switch-knob); transition: transform 160ms ease; }
 .runtime-switch.checked { background: var(--success); }
-.runtime-switch.checked > span { transform: translateX(16px); }
+.runtime-switch.checked > span { transform: translateX(20px); }
 .runtime-switch:disabled { opacity: .5; }
 .logout { min-height: 28px; font-size: 12.5px; padding: 2px 10px; }
 #main-content { width: 100%; max-width: calc(var(--content-width) + 80px); padding: 12px 40px 56px; outline: none; }
@@ -90,11 +90,11 @@
 .login-card .subtitle { font-size: 13px; margin-bottom: 20px; }
 .login-card form { display: flex; flex-direction: column; gap: 14px; }
 .login-card form > small { font-size: 12.5px; }
-@media (max-width: 1100px) {
+@media (max-width: 1150px) {
   .topbar { padding-inline: 24px; }
   #main-content { padding-inline: 24px; }
 }
-@media (max-width: 850px) and (min-width: 681px) {
+@media (max-width: 1000px) and (min-width: 681px) {
   :root { --sidebar-width: 188px; }
 }
 @media (max-width: 680px) {
@@ -105,8 +105,9 @@
   .nav-group { display: none; }
   .nav-item { width: 100%; min-width: 0; justify-content: center; min-height: 40px; gap: 6px; padding: 6px; font-size: 13px; white-space: nowrap; }
   .nav-item .nav-badge { margin-left: 0; }
-  .sidebar-foot { display: none; }
-  .topbar { position: static; padding: 8px 16px; }
+  .sidebar-foot { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0; padding: 4px 16px 10px; border-top: 0; font-size: 12.5px; }
+  .sidebar-foot small { display: none; }
+  .topbar { position: sticky; top: 0; min-height: 44px; padding: 6px 16px; border-bottom: 1px solid var(--border); }
   .status-strip { gap: 6px 10px; }
   .status-strip .divider { display: none; }
   .topbar-controls { justify-content: flex-start; gap: 8px 10px; }

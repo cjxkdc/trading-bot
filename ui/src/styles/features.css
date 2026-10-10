@@ -97,9 +97,6 @@
 .authorization-panel > div { flex: 1 1 300px; }
 .authorization-panel label { flex: 1 1 200px; }
 .result-message { margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--border); color: var(--secondary); font-size: 13px; }
-.strategy-file-panel.card { margin-top: 16px; }
-.strategy-file-panel > summary { font-size: 14px; }
-.strategy-file-panel .instance-export label { flex-grow: 0; flex-basis: 250px; }
 .python-editor { height: min(58dvh, 660px); min-height: 220px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .editor-buttons { display: flex; flex-shrink: 0; gap: 8px; }
 .editor-notice { padding: 8px 12px; background: var(--surface-inset); font-size: 13px; }
@@ -181,7 +178,6 @@
 .result-metrics > div { min-width: 0; }
 .result-metrics span { display: block; margin-bottom: 7px; color: var(--secondary); font-size: 12px; }
 .result-metrics strong { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.performance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); padding-bottom: 24px; border-bottom: 1px solid var(--border); }
 .research-source { max-width: 340px; margin-bottom: 16px; }
 .backtest-form, .instance-export, .monitor-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 20px; }
 .backtest-form > label, .instance-export > label, .monitor-form > label { flex: 1 1 180px; max-width: 280px; }
@@ -289,13 +285,12 @@
   .instance-row { grid-template-columns: minmax(170px, 1.4fr) minmax(130px, 1fr) auto auto; gap: 12px; }
   .instance-row-next { display: none; }
 }
-@media (max-width: 950px) {
+@media (max-width: 1000px) {
   .status-cards { grid-template-columns: 1fr 1fr; }
   .status-cards > .status-card:last-child { grid-column: 1 / -1; }
 
   .automation-schedule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .result-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .server-services { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 680px) {
@@ -327,7 +322,6 @@
   .allocation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 14px; }
   .allocation-row > strong { grid-column: 1 / -1; }
   .data-source-row { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .strategy-file-panel .instance-export label { flex-basis: 100%; }
   .summary-row strong { font-size: 15px; }
   .preflight-workflow { align-items: stretch; }
   .preflight-workflow > label { flex-basis: 100%; }
@@ -355,7 +349,6 @@
   .server-services { gap: 22px; }
 }
 .order-filter { display: flex; align-items: center; gap: 12px; }
-.order-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 
 .broker-configuration { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
 .broker-configuration .form-grid { margin: 12px 0; }
@@ -364,4 +357,4 @@
 .field-help { display: block; color: var(--secondary); font-size: 11px; font-weight: 400; line-height: 1.5; }
 
 .broker-configuration .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (max-width: 640px) { .broker-configuration .form-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 680px) { .broker-configuration .form-grid { grid-template-columns: minmax(0, 1fr); } }

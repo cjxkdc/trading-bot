@@ -11,7 +11,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   color-scheme: light;
-  --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', monospace;
+  --font-mono: 'Cascadia Mono', 'SF Mono', 'JetBrains Mono', Consolas, 'Liberation Mono', 'Microsoft YaHei UI', 'PingFang SC', monospace;
   --bg: #f4f4f1;
   --sidebar: #fafaf8;
   --surface: #ffffff;
@@ -25,6 +25,7 @@
   --faint: #8a8a84;
   --border: #e4e4df;
   --border-strong: #cfcfc8;
+  --field-border: #9c9c95;
   --border-hover: #b3b3ab;
   --accent: #2451c7;
   --accent-hover: #1c43a6;
@@ -74,6 +75,7 @@
   --faint: #74746f;
   --border: #2b2c31;
   --border-strong: #3a3b41;
+  --field-border: #5c5d65;
   --border-hover: #4a4b52;
   --accent: #7e9dff;
   --accent-hover: #98b1ff;

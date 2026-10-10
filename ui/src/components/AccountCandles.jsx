@@ -42,7 +42,7 @@ export function AccountCandles({ brokerId, accountKey, revision, intervalSeconds
       : error ? <div className="candle-empty inline-warning" role="alert">{error}</div>
       : !bars.length ? <div className="candle-empty">{data?.message || '暂无这个周期的观测记录，首次采集后开始显示。'}</div>
       : !layout ? <div className="candle-empty inline-warning" role="alert">K 线记录未通过校验，请重新读取账户表现。</div>
-      : <><div className="candle-readout"><strong>{candleLabel(point,interval,zone)}</strong><span>{point.in_progress ? '形成中 · ' : ''}{point.sample_count} 个观测点</span><dl>{[['开',point.open],['高',point.high],['低',point.low],['收',point.close]].map(([name,value]) => <div key={name}><dt>{name}</dt><dd>{money(value)}</dd></div>)}</dl></div>
+      : <><div className="candle-readout" aria-live="polite"><strong>{candleLabel(point,interval,zone)}</strong><span>{point.in_progress ? '形成中 · ' : ''}{point.sample_count} 个观测点</span><dl>{[['开',point.open],['高',point.high],['低',point.low],['收',point.close]].map(([name,value]) => <div key={name}><dt>{name}</dt><dd>{money(value)}</dd></div>)}</dl></div>
         <svg className="candle-chart" viewBox={`0 0 ${layout.width} ${layout.height}`} role="img" tabIndex="0" aria-label={`${unit} 账户净资产 K 线，共 ${bars.length} 根。左右方向键切换观测周期。`}
           onPointerMove={e => { const box=e.currentTarget.getBoundingClientRect(); setSelected(nearestCandle(layout.points,(e.clientX-box.left)*layout.width/box.width)); }}
           onPointerLeave={() => setSelected(null)} onKeyDown={e => { if (['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) { e.preventDefault(); setSelected(moveCandle(selected,e.key,bars.length)); } }}>
