@@ -57,7 +57,8 @@
   --radius: 8px;
   --radius-card: 12px;
   --sidebar-width: 232px;
-  --content-width: 1200px;
+  /* The reading column grows with the window up to 1440px; wider screens center it. */
+  --content-width: clamp(1200px, 78vw, 1440px);
 }
 
 :root[data-theme='dark'] {
