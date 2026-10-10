@@ -19,7 +19,9 @@ def main():
     if not (ROOT / "tests/fixtures/strategy_samples").is_dir():
         raise SystemExit("Run regression tests from the full source checkout; release packages omit test strategy fixtures.")
     with tempfile.TemporaryDirectory(prefix='trading-bot-tests-', ignore_cleanup_errors=True) as directory:
-        project = Path(directory) / 'project'
+        # Windows CI can expose TEMP through an 8.3 alias (RUNNER~1).
+        # Use one canonical root for cwd, imports, and account path comparisons.
+        project = (Path(directory) / 'project').resolve()
         project.mkdir()
         for name in ('app', 'backtests', 'brokers', 'configs', 'data', 'framework', 'strategies', 'platforms', 'portal', 'tests', 'tools', 'ui', 'deploy', 'docs', 'requirements'):
             if (ROOT / name).is_dir():
