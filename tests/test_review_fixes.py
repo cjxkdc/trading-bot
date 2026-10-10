@@ -743,5 +743,126 @@ class BackfillWorkbenchTests(unittest.TestCase):
             perform('backfill', root=self.root, broker_id=self.broker, source_id='massive', as_of='not-a-date')
 
 
+@unittest.skipUnless(__import__('importlib').util.find_spec('tigeropen') is not None, 'Install requirements/tiger.txt for Tiger paper contracts')
+class TigerReconcileTests(unittest.TestCase):
+    """Tiger paper gains the same read-only reconciliation as OpenD: query, prove, close; never submit."""
+    def setUp(self):
+        import os
+        from types import SimpleNamespace as NS
+        from brokers.tiger_paper import TigerPaperConnector, TigerPaperBroker
+        from framework.journal import Journal
+        from framework.trading import ExecutionPolicy, Quote
+        from test_tiger_paper import fixture_client, ACCOUNT, NOW
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.config = self.root / 'secrets/tiger_paper'; self.config.mkdir(parents=True)
+        (self.config / 'tiger_openapi_config.properties').write_text(
+            f'tiger_id=TEST\naccount={ACCOUNT}\nlicense=TBAU\nprivate_key_pk8=TEST-ONLY\nenv=PROD\n')
+        environment = patch.dict(os.environ, {}, clear=True); environment.start(); self.addCleanup(environment.stop)
+        self.state = self.root / 'runs/tiger-paper'; self.state.mkdir(parents=True)
+        self.account, self.now = ACCOUNT, NOW
+        TigerPaperConnector(str(self.config), str(self.state)).initialize(self.state, '0')
+        self.client = fixture_client()
+        self.remotes = {}
+        def place(*, order):
+            oid = len(self.remotes) + 1
+            self.remotes[oid] = NS(account=order.account, id=oid, contract=order.contract, action=order.action,
+                                   order_type=order.order_type, quantity=order.quantity, limit_price=order.limit_price,
+                                   quantity_scale=0, filled_scale=0, filled=0, avg_fill_price=0, commission=0,
+                                   user_mark=order.user_mark, status='Submitted')
+            return oid
+        self.client.place_order.side_effect = place
+        self.client.get_order.side_effect = lambda **kw: self.remotes.get(kw['id'])
+        self.client.get_orders.side_effect = lambda **kw: NS(result=list(self.remotes.values()), next_page_token=None)
+        self.policy = ExecutionPolicy(max_gross=D('.9'), max_weight=D('.45'))
+        self.path = self.state / 'tiger-paper.sqlite'
+        self.Journal, self.Quote, self.Broker = Journal, Quote, TigerPaperBroker
+
+    def control(self):
+        from brokers.controls import TigerPaperControl
+        entry = json.loads((Path(__file__).resolve().parents[1] / 'brokers/plugins/tiger_paper.json').read_text(encoding='utf-8'))
+        return TigerPaperControl(self.root, {'config_dir': 'secrets/tiger_paper', 'state_dir': 'runs/tiger-paper'}, entry)
+
+    def run_cycle(self, symbol, day, clock):
+        from test_execution import decision
+        broker = self.Broker(self.client, self.account, self.path, clock=lambda: clock)
+        journal = self.Journal(self.state / 'journal.sqlite')
+        try:
+            quotes = {symbol: self.Quote(symbol, D(99), D(100), clock)}
+            try:
+                return Executor(broker, journal, self.policy, broker.fees).run(decision(((symbol, .45),), day=day), quotes, clock)
+            except Exception as exc:  # ExecutionBlocked, or the adapter's own transport error on a lost submission
+                return str(exc)
+        finally:
+            journal.close(); broker.close()
+
+    def test_read_only_session_reconciles_fills_without_submitting_or_cancelling(self):
+        from app.paper_recovery import reconcile_orders
+        self.assertIn('accepted', self.run_cycle('AAPL', '2026-10-01', self.now))
+        with patch('brokers.tiger_paper._connect_paper', return_value=(self.client, self.account)):
+            report = reconcile_orders(control=self.control(), policy=self.policy, fees=Fees())
+            self.assertEqual((report['status'], report['recovery_state']), ('paused', 'waiting'))
+            self.assertEqual(report['details']['orders'][0]['status'], 'accepted')
+            remote = self.remotes[1]
+            remote.status, remote.filled, remote.avg_fill_price = 'Filled', remote.quantity, 100
+            report = reconcile_orders(control=self.control(), policy=self.policy, fees=Fees())
+        self.assertEqual((report['status'], report['recovery_state']), ('complete', 'complete'))
+        self.assertEqual(self.client.place_order.call_count, 1)
+        self.client.cancel_order.assert_not_called()
+
+    def test_untransmitted_intent_is_proven_and_closed_on_a_later_day(self):
+        from app.paper_recovery import close_untransmitted, reconcile_orders
+        from brokers.tiger_paper import TigerPaperError
+        self.run_cycle('AAPL', '2026-10-01', self.now)
+        remote = self.remotes[1]
+        remote.status, remote.filled, remote.avg_fill_price = 'Filled', remote.quantity, 100
+        self.assertEqual(self.run_cycle('AAPL', '2026-10-01', self.now)['status'], 'complete')
+        self.client.place_order.side_effect = TimeoutError('SECRET')
+        self.assertIsInstance(self.run_cycle('MSFT', '2026-10-02', self.now + timedelta(days=1)), str)
+        same_day = self.Broker(self.client, self.account, self.path, clock=lambda: self.now + timedelta(days=1), read_only=True)
+        try:
+            with self.assertRaisesRegex(TigerPaperError, 'Read-only'):
+                same_day.cancel('1')
+            lost = [c for (c,) in same_day.db.execute("SELECT client_id FROM orders WHERE broker_id IS NULL")]
+            sent = [c for (c,) in same_day.db.execute("SELECT client_id FROM orders WHERE broker_id IS NOT NULL")]
+            self.assertEqual((len(lost), len(sent)), (1, 1))
+            self.assertTrue(same_day.transmission_evidence(sent[0])['transmitted'])
+            with self.assertRaisesRegex(TigerPaperError, 'later trading day'):
+                same_day.transmission_evidence(lost[0])
+        finally:
+            same_day.close()
+        with patch('brokers.tiger_paper._connect_paper', return_value=(self.client, self.account)):
+            report = reconcile_orders(control=self.control(), policy=self.policy, fees=Fees())
+            self.assertEqual(report['recovery_state'], 'blocked')
+            self.assertEqual(report['details']['untransmitted'], 1)
+            self.assertIn('从未送达', report['message'])
+            closed = close_untransmitted(control=self.control(), policy=self.policy, fees=Fees())
+        self.assertEqual((closed['status'], closed['details']['newly_closed'], closed['recovery_state']), ('complete', 1, 'complete'))
+        windows = [kw for kw in (c.kwargs for c in self.client.get_orders.call_args_list) if 'start_time' in kw]
+        self.assertTrue(windows and all(kw['end_time'] - kw['start_time'] == 86400000 for kw in windows))
+        self.assertEqual(self.client.place_order.call_count, 2)
+        self.client.cancel_order.assert_not_called()
+
+    def test_old_ledgers_gain_the_creation_column_and_refuse_proof_for_undated_rows(self):
+        import sqlite3
+        from brokers.tiger_paper import TigerPaperError
+        db = sqlite3.connect(self.path)
+        try:
+            db.executescript('DROP TABLE orders; CREATE TABLE orders (client_id TEXT PRIMARY KEY, body TEXT NOT NULL, broker_id TEXT UNIQUE, state TEXT);')
+            db.execute("INSERT INTO orders VALUES ('old-1', 'x', NULL, NULL)")
+            db.commit()
+        finally:
+            db.close()
+        broker = self.Broker(self.client, self.account, self.path, clock=lambda: self.now, read_only=True)
+        try:
+            self.assertIn('created_at', {row[1] for row in broker.db.execute('PRAGMA table_info(orders)')})
+            with self.assertRaisesRegex(TigerPaperError, 'creation time'):
+                broker.transmission_evidence('old-1')
+            with self.assertRaisesRegex(TigerPaperError, 'creation time'):
+                broker.retire_untransmitted('old-1')
+        finally:
+            broker.close()
+
+
 if __name__ == '__main__':
     unittest.main()

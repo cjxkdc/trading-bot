@@ -4,14 +4,15 @@
   "version": "1.0.0",
   "entrypoint": "brokers.tiger_paper:TigerPaperConnector",
   "account_status": true,
-  "description": "Tiger-hosted PAPER account only; USD whole-share DAY limit orders with durable reconciliation",
+  "description": "Tiger-hosted PAPER account only; USD whole-share DAY limit orders with durable, read-only reconciliation",
   "display_name": "Tiger 模拟盘",
   "control": {
     "entrypoint": "brokers.controls:TigerPaperControl",
     "mode": "broker_paper",
     "capabilities": [
       "inspect",
-      "execute"
+      "execute",
+      "reconcile"
     ],
     "path_fields": [
       "config_dir",

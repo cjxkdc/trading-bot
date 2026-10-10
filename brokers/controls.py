@@ -282,6 +282,24 @@ class TigerPaperControl(BrokerControl):
         from brokers.tiger_paper import _configured_account
         _configured_account(connector.config_dir)
 
+    @contextmanager
+    def reconciliation_session(self, fees, snapshot=None):
+        """Query existing durable intents at Tiger; never initialize state or place/cancel orders."""
+        from framework.journal import Journal
+        connector = self.connector()
+        self.validate_binding(connector)
+        if not all((self.state_dir / name).is_file() for name in (*connector.state_files, 'journal.sqlite')):
+            raise ControlError('执行账本不存在或不完整，不能自动重建账户历史。')
+        connection = connector.connect(self.state_dir, snapshot, fees, read_only=True)
+        try:
+            journal = Journal(self.journal_path)
+            try:
+                yield connection, journal
+            finally:
+                journal.close()
+        finally:
+            connection.close()
+
 
 class LocalPaperControl(BrokerControl):
     def connector_config(self):
