@@ -37,6 +37,7 @@ from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
 from app.logs import incident_id, log_exception
 from app.atomic import replace_file
 from app.backfill import Backfill, CADENCES, MAX_DATES, covered, estimate_requests, schedule_dates
+from app.instance_attribution import attribute
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
@@ -261,6 +262,23 @@ class PortalService:
             finally:
                 instance_file.unlink(missing_ok=True)
             return {'id': experiment, 'message': '已按此实例参数和计划导出 QuantConnect 回测代码。'}
+
+    def instance_attribution(self, ident):
+        """Valuation and P&L of one instance from its share of the broker's book."""
+        with self.lock:
+            item = self.strategy_instances.get(ident)
+            broker_id = item['broker_id']
+            cycles = self.strategy_instances.cycle_history(broker_id)
+            observations = []
+            try:
+                observations = self.monitor.performance.positions_history(self.monitor.scope(broker_id))
+            except (ControlError, ValueError, OSError):
+                pass  # no observation capability or history: value stays unknown, not zero
+            try:
+                fills = self.orders(broker_id).get('items', [])
+            except (ControlError, ValueError, OSError):
+                fills = []
+        return self._public(attribute(ident, cycles, observations, fills))
 
     def strategy_instance_job(self, ident, action):
         with self.lock:

@@ -111,6 +111,18 @@ class PerformanceStore:
                        (scope,item['as_of'],str(at.astimezone(ZoneInfo(market_timezone)).date()),encoded))
         return item
 
+    def positions_history(self, scope, limit=400):
+        """Each day's last observation with its priced positions, oldest first."""
+        if type(limit) is not int or not 1 <= limit <= 2000:
+            raise ValueError('Invalid history limit')
+        with closing(self.connect()) as db:
+            rows = db.execute('''SELECT o.body FROM observations o JOIN
+                (SELECT day,MAX(as_of) at FROM observations WHERE scope=? GROUP BY day) d
+                ON o.as_of=d.at AND o.scope=? ORDER BY o.as_of DESC LIMIT ?''', (scope, scope, limit)).fetchall()
+        items = [json.loads(row[0]) for row in rows]
+        return [dict(as_of=item['as_of'], equity=item.get('equity'), currency=item.get('currency'),
+                     positions=item.get('positions', [])) for item in reversed(items)]
+
     def cycle(self, scope, result, *, strategy=None):
         ident = result.get('decision_id')
         if not ident or 'targets' not in result:

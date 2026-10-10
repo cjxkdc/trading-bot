@@ -162,6 +162,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     def instance_logs(ident: str):
         return service._public({'items': service.strategy_instances.logs(ident)})
 
+    @app.get('/api/strategy-instances/{ident}/attribution')
+    async def instance_attribution(ident: str):
+        return await run_in_threadpool(service.instance_attribution, ident)
+
     @app.post('/api/strategy-instances/{ident}/export')
     async def instance_export(ident: str, request: Request):
         return await run_in_threadpool(service.export_instance, ident, await body(request))

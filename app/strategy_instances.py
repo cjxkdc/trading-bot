@@ -492,6 +492,20 @@ class StrategyInstances:
             return None
         return json.loads(project_path(self.root, path, under='runs/strategy_manager/cycles').read_text(encoding='utf-8'))
 
+    def cycle_history(self, broker_id):
+        """Every retained cycle log that touched this broker's shared book, oldest first."""
+        ids = {x['id'] for x in self.data['instances'] if x['broker_id'] == broker_id}
+        result = []
+        for path in (self.folder / 'logs').glob('cycle-*.json'):
+            try:
+                value = json.loads(path.read_text(encoding='utf-8'))
+            except (ValueError, OSError):
+                continue
+            owners = value.get('owner_positions') if isinstance(value.get('owner_positions'), dict) else {}
+            if ids & set(value.get('instance_ids') or []) or ids & set(owners):
+                result.append(value)
+        return sorted(result, key=lambda value: str(value.get('created_at', '')))
+
     def logs(self, ident):
         self.get(ident)
         result = []

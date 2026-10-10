@@ -864,5 +864,85 @@ class TigerReconcileTests(unittest.TestCase):
             broker.close()
 
 
+class InstanceAttributionTests(unittest.TestCase):
+    def test_share_changes_are_priced_by_fills_then_observations_and_valued_daily(self):
+        from app.instance_attribution import attribute
+        cycles = [
+            {'cycle_id': 'c1', 'created_at': '2026-10-01T15:00:00+00:00', 'instance_ids': ['a'],
+             'owner_positions': {'a': {'AAPL': '10'}, 'b': {'AAPL': '5'}},
+             'orders': [{'ticker': 'AAPL', 'side': 'BUY', 'quantity': '15', 'client_order_id': 'o1'}]},
+            {'cycle_id': 'c0', 'created_at': '2026-09-01T15:00:00+00:00', 'instance_ids': ['b'],
+             'owner_positions': {'b': {'MSFT': '3'}}, 'orders': []},
+            {'cycle_id': 'c2', 'created_at': '2026-10-05T15:00:00+00:00', 'instance_ids': ['a', 'b'],
+             'owner_positions': {'a': {'AAPL': '6', 'MSFT': '3'}, 'b': {'AAPL': '9'}},
+             'orders': [{'ticker': 'MSFT', 'side': 'SELL', 'quantity': '0', 'client_order_id': 'none'}]},
+        ]
+        observations = [
+            {'as_of': '2026-10-02T20:00:00+00:00', 'currency': 'USD', 'equity': 5000,
+             'positions': [{'symbol': 'AAPL', 'quantity': 15, 'last_price': 110}, {'symbol': 'MSFT', 'quantity': 3, 'last_price': 300}]},
+            {'as_of': '2026-10-06T20:00:00+00:00', 'currency': 'USD', 'equity': 5200,
+             'positions': [{'symbol': 'AAPL', 'quantity': 15, 'last_price': 120}, {'symbol': 'MSFT', 'quantity': 3, 'market_value': 930}]},
+        ]
+        fills = [{'id': 'o1', 'filled_quantity': '15', 'average_price': '100'}]
+        report = attribute('a', cycles, observations, fills)
+        self.assertEqual(report['cycle_count'], 2)  # the September cycle predates instance a
+        trades = {(t['cycle_id'], t['ticker']): t for t in report['trades']}
+        self.assertEqual((trades[('c1', 'AAPL')]['basis'], trades[('c1', 'AAPL')]['cost']), ('fill', 1000.0))
+        # Shares moved from a to b without an account trade: priced at the last observation before the cycle.
+        self.assertEqual((trades[('c2', 'AAPL')]['basis'], trades[('c2', 'AAPL')]['delta'], trades[('c2', 'AAPL')]['cost']), ('observation', '-4', -440.0))
+        self.assertEqual((trades[('c2', 'MSFT')]['basis'], trades[('c2', 'MSFT')]['cost']), ('observation', 900.0))
+        self.assertEqual([(p['value'], p['invested'], p['pnl']) for p in report['curve']],
+                         [(1100.0, 1000.0, 100.0), (1650.0, 1460.0, 190.0)])
+        value = report['valuation']
+        self.assertEqual((value['value'], value['pnl'], value['currency'], value['stale']), (1650.0, 190.0, 'USD', False))
+        self.assertAlmostEqual(value['return_rate'], 190 / 1460)
+        self.assertEqual([(p['ticker'], p['quantity'], p['value']) for p in value['positions']], [('AAPL', '6', 720.0), ('MSFT', '3', 930.0)])
+        self.assertEqual(report['unpriced'], [])
+        self.assertEqual(report['message'], '')
+
+    def test_missing_prices_and_observations_are_reported_not_zeroed(self):
+        from app.instance_attribution import attribute
+        cycles = [{'cycle_id': 'c1', 'created_at': '2026-10-01T15:00:00+00:00', 'instance_ids': ['a'],
+                   'owner_positions': {'a': {'NEW': '4'}}, 'orders': []}]
+        report = attribute('a', cycles, [], [])
+        self.assertIsNone(report['valuation'])
+        self.assertEqual(report['unpriced'], ['NEW'])
+        self.assertIn('观测', report['message'])
+        self.assertEqual(attribute('a', [], [], [])['message'], '还没有完成的调仓记录，暂无可归因的持仓。')
+        later = [{'as_of': '2026-09-30T20:00:00+00:00', 'currency': 'USD', 'equity': 1, 'positions': []}]
+        report = attribute('a', cycles, later, [])
+        self.assertTrue(report['valuation']['stale'])
+        self.assertEqual(report['curve'][0]['value'], 0.0)
+
+    def test_store_history_and_cycle_logs_feed_the_endpoint(self):
+        import shutil
+        from app.strategy_instances import StrategyInstances
+        from app.module_registry import ModuleRegistry
+        from framework.performance import PerformanceStore
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        store = PerformanceStore(root / 'performance.sqlite')
+        base = {'account_ref': 'acct', 'currency': 'USD', 'environment': 'paper', 'timezone': 'America/New_York', 'equity': 100,
+                'positions': [{'symbol': 'AAPL', 'quantity': 1, 'last_price': 10}]}
+        for stamp in ('2026-10-01T14:00:00+00:00', '2026-10-01T20:00:00+00:00', '2026-10-02T20:00:00+00:00'):
+            store.record('scope', dict(base, as_of=stamp))
+        history = store.positions_history('scope')
+        self.assertEqual([h['as_of'] for h in history], ['2026-10-01T20:00:00+00:00', '2026-10-02T20:00:00+00:00'])
+        self.assertEqual(history[0]['positions'][0]['last_price'], 10.0)
+        source_root = Path(__file__).resolve().parents[1]
+        for folder in ('configs', 'strategies', 'framework'):
+            shutil.copytree(source_root / folder, root / folder, ignore=shutil.ignore_patterns('__pycache__'))
+        for folder in ('data', 'brokers'):
+            shutil.copytree(source_root / folder / 'plugins', root / folder / 'plugins')
+        manager = StrategyInstances(root, ModuleRegistry(root))
+        manager.data['instances'].append({'id': 'inst-a', 'broker_id': 'paper', 'enabled': False, 'events': []})
+        logs = manager.folder / 'logs'; logs.mkdir(parents=True, exist_ok=True)
+        for name, body in (('cycle-2', {'cycle_id': 'cycle-2', 'created_at': '2026-10-02T15:00:00+00:00', 'instance_ids': ['inst-a'], 'owner_positions': {'inst-a': {'AAPL': '1'}}}),
+                           ('cycle-1', {'cycle_id': 'cycle-1', 'created_at': '2026-10-01T15:00:00+00:00', 'instance_ids': ['other'], 'owner_positions': {'inst-a': {}}}),
+                           ('cycle-x', {'cycle_id': 'cycle-x', 'created_at': '2026-10-03T15:00:00+00:00', 'instance_ids': ['elsewhere'], 'owner_positions': {'elsewhere': {}}})):
+            (logs / (name + '.json')).write_text(json.dumps(body), encoding='utf-8')
+        self.assertEqual([c['cycle_id'] for c in manager.cycle_history('paper')], ['cycle-1', 'cycle-2'])
+
+
 if __name__ == '__main__':
     unittest.main()
