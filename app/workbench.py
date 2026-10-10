@@ -93,6 +93,18 @@ def public(value, secret_fields=(), secret_values=()):
     return value
 
 
+def cycle_fills(cycle, orders):
+    """Journal rows for a recorded rebalance, matched by the client order ids it submitted.
+
+    The journal keys batches by account and execution day, not by decision id,
+    so the client order id is the only link that both stores keep.
+    """
+    ids = {str(o.get('client_order_id') or o.get('client_id') or '')
+           for o in (cycle.get('orders') or []) if isinstance(o, dict)}
+    ids.discard('')
+    return [o for o in orders if str(o.get('id')) in ids]
+
+
 class PortalService:
     def __init__(self, root, worker=run_worker):
         self.root = Path(root).resolve()
@@ -647,7 +659,7 @@ class PortalService:
                 try:
                     orders = self.orders(viewed)['items']
                     for cycle in report['cycles']:
-                        cycle['fills'] = [o for o in orders if o.get('cycle') == cycle['decision_id']]
+                        cycle['fills'] = cycle_fills(cycle, orders)
                 except (ValueError, OSError):
                     pass
                 report['broker_id'] = viewed

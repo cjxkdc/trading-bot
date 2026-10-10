@@ -1,7 +1,7 @@
 {
   "name": "trading-bot-portal",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.12.0-pre.1",
   "type": "module",
   "scripts": {
     "build": "vite build",

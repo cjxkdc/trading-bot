@@ -944,5 +944,15 @@ class InstanceAttributionTests(unittest.TestCase):
         self.assertEqual([c['cycle_id'] for c in manager.cycle_history('paper')], ['cycle-1', 'cycle-2'])
 
 
+class CycleFillTests(unittest.TestCase):
+    def test_rebalance_fills_match_by_client_order_id_not_by_decision_digest(self):
+        from app.workbench import cycle_fills
+        cycle = {'decision_id': 'abc', 'orders': [{'ticker': 'AAPL', 'side': 'BUY', 'quantity': '5', 'client_order_id': 'o-1'}, {'client_id': 'o-2'}, 'junk']}
+        orders = [{'id': 'o-1', 'cycle': 'acct:2026-10-01', 'filled_quantity': '5', 'average_price': '100'},
+                  {'id': 'o-2', 'cycle': 'acct:2026-10-01'}, {'id': 'o-9', 'cycle': 'abc'}]
+        self.assertEqual([o['id'] for o in cycle_fills(cycle, orders)], ['o-1', 'o-2'])
+        self.assertEqual(cycle_fills({'decision_id': 'abc'}, orders), [])
+
+
 if __name__ == '__main__':
     unittest.main()
