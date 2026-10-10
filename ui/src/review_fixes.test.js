@@ -4,6 +4,19 @@ import { budgetFraction, budgetPercent, instancePayload, withTimeDefaults } from
 import { resolveDestination, routeFromHash, routeHash } from './app/navigation.js';
 import { runtimeView } from './runtime.js';
 import { automationControls, automationOrderCheck } from './automation.js';
+import { backfillPercent, backfillSummary, defaultBackfillRange, durationLabel } from './backfill.js';
+
+test('backfill helpers describe the queue and its cost in plain words', () => {
+  assert.deepEqual(defaultBackfillRange(new Date(2026, 9, 11)), { start: '2025-10-01', end: '2026-10-11', cadence: 'monthly' });
+  assert.equal(durationLabel(45), '45 分钟');
+  assert.equal(durationLabel(150), '2 小时 30 分钟');
+  assert.equal(durationLabel(120), '2 小时');
+  const queue = { status: 'paused', start: '2026-01-01', end: '2026-04-01', cadence: 'monthly', total: 4, finished_count: 2, counts: { done: 1, failed: 1, pending: 2 } };
+  assert.equal(backfillSummary(queue), '2026-01-01 → 2026-04-01（每月）：已暂停，完成 1 个日期，失败 1。');
+  assert.equal(backfillPercent(queue), 50);
+  assert.equal(backfillSummary(null), null);
+  assert.equal(backfillPercent({ total: 0 }), 0);
+});
 
 test('instance budgets round-trip without binary float noise', () => {
   assert.equal(budgetPercent('0.07'), 7);

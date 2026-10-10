@@ -10,18 +10,20 @@ from app.diagnostics import failure_details
 
 
 def run_worker(root, action, snapshot=None, token=None, progress=None, *, source_id=None, broker_id=None,
-               expected_context=None, credentials=None, automation=None, instance=None, cycle_path=None):
+               expected_context=None, credentials=None, automation=None, instance=None, cycle_path=None, as_of=None):
     root = Path(root).resolve()
     if action.startswith('strategy-'):
         return run_strategy_worker(root, action, instance=instance, cycle_path=cycle_path, progress=progress)
     request = {'action': action, 'source_id': source_id, 'broker_id': broker_id,
                'expected_context': expected_context, 'snapshot_path': str(snapshot) if snapshot else None,
                'preview_token': token, 'credentials': credentials, 'automation': automation}
+    if as_of is not None:
+        request['as_of'] = str(as_of)
     try:
         python = root / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
         if action not in ACTIONS or not python.is_file() or not (root / 'app/portal_worker.py').is_file():
             raise ValueError('请保留完整项目及 Python 环境。')
-        streaming = action in {'refresh', 'data-status', 'prepare'}
+        streaming = action in {'refresh', 'data-status', 'prepare', 'backfill'}
         with external_dll_search():
             process = subprocess.Popen([str(python), '-u', '-m', 'app.portal_worker'], cwd=root,
                 env=external_environment(), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

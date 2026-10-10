@@ -5,6 +5,7 @@ import { percent, number } from '../format';
 import { scheduleSummary } from '../automation';
 import { researchSources, resolveResearchSource, reconcileResearchSelection, researchExperiments, researchResultSelection } from '../research_context';
 import { PerformanceChart } from '../components/PerformanceChart';
+import { BackfillCard } from '../components/BackfillCard';
 
 export function ResearchPage({ state, strategyType, busy, act, navigate }) {
   const [selection, setSelection] = useState(() => ({ strategyType, sourceId: '' }));
@@ -146,6 +147,8 @@ export function ResearchPage({ state, strategyType, busy, act, navigate }) {
         <details className="details"><summary>回放的假设</summary><p className="small muted">成交按快照当日的复权收盘价加滑点，整股，先卖后买，按配置的费用计费；两份快照之间按持仓的最新价估值。股票池只含每份快照当时存在的股票，财务字段取快照当日的值；不是逐日的无幸存者偏差回测，也没有读取券商报价。结果与运行时的实际成交会有差异。</p></details>
       </form>}
     </section>
+
+    <BackfillCard state={state} strategyType={strategyType} busy={busy} act={act}/>
 
     <div className="section-toolbar"><h2>此策略的实验记录</h2><Button disabled={busy || resultIds.length < 2} onClick={compare}>比较已选结果 ({resultIds.length})</Button></div>
     {loadError && <div className="alert error">{loadError}</div>}

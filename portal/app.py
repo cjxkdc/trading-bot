@@ -400,6 +400,19 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         value = await body(request)
         return await run_in_threadpool(service.replay_backtest, value)
 
+    @app.post('/api/backfill/plan')
+    async def backfill_plan(request: Request):
+        return await run_in_threadpool(service.backfill_plan, await body(request))
+
+    @app.post('/api/backfill')
+    async def backfill_start(request: Request):
+        return await run_in_threadpool(service.backfill_start, await body(request))
+
+    @app.post('/api/backfill/{command}')
+    async def backfill_control(command: str, request: Request):
+        await body(request)
+        return await run_in_threadpool(service.backfill_control, command)
+
     @app.get('/api/experiments/{ident}/code')
     def code(ident: str):
         folder = service._experiment(ident)

@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from backtests.experiments import (compare_results, import_result, read_json,
                                   validate_export, verified_record)
@@ -35,6 +36,7 @@ from app.strategy_files import StrategyFiles
 from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
 from app.logs import incident_id, log_exception
 from app.atomic import replace_file
+from app.backfill import Backfill, CADENCES, MAX_DATES, covered, estimate_requests, schedule_dates
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
@@ -143,6 +145,7 @@ class PortalService:
         self.monitor = Monitoring(self.root, self.registry)
         self.strategy_instances = StrategyInstances(self.root, self.registry, lock=self.lock, recover_pending=True)
         self.strategy_files = StrategyFiles(self.root, self.registry)
+        self.backfill = Backfill(self.root)
         self.scheduler_stop = threading.Event()
         self.scheduler_wake = threading.Event()
         self.scheduler_thread = None
@@ -808,6 +811,7 @@ class PortalService:
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
                 'monitoring': self.monitor.public(),
+                'backfill': self.backfill.public(),
                 'strategy_manager': self.strategy_instances.public(),
                 'managed_account': managed,
                 'data_requirements': requirements, 'broker': broker, 'brokers': brokers,
@@ -829,11 +833,13 @@ class PortalService:
             if failed or job['action'] in {'refresh','execute','reconcile','automation','strategy-cycle','strategy-reconcile','strategy-resolve','strategy-close-terminal','close-terminal'}:
                 self.monitor.emit('job:'+job['id'],job['message'],'error' if failed else 'info','logs',at=job['finished_at'])
 
-    def start(self, action, credentials=None):
+    def start(self, action, credentials=None, *, as_of=None):
         with self.lock:
             self.idle()
             if action not in WORKBENCH_ACTIONS:
                 raise PortalError('未知操作。')
+            if action == 'backfill' and not as_of:
+                raise PortalError('历史回填请在「回测 → 历史回填」中按日期区间启动。')
             if action == 'preflight':
                 from app.preflight import start_preflight
                 return start_preflight(self)
@@ -891,7 +897,7 @@ class PortalService:
                    'message': '正在处理…', 'events': [], 'cancel_available': False,
                    # Routine observations run without the user asking; the UI keeps
                    # editors and forms usable while they run.
-                   'background': action == 'observe'}
+                   'background': action == 'observe', **({'as_of': as_of} if action == 'backfill' else {})}
             self.active = job
             self.jobs.insert(0, job)
             self.jobs = self.jobs[:40]
@@ -901,13 +907,14 @@ class PortalService:
                 with self.lock:
                     job['message'] = self._public(str(message), secret_values)[:800]
                     job['events'] = (job['events'] + [{'at': now(), 'message': job['message']}])[-60:]
-                    job['cancel_available'] = action == 'refresh' and 'cancel' in source_spec['capabilities']
+                    job['cancel_available'] = action in {'refresh', 'backfill'} and 'cancel' in source_spec['capabilities']
                     self._save_job(job)
 
             def work():
                 try:
                     result = self.worker(self.root, action, snapshot_path, token, progress,
-                                         source_id=source, broker_id=broker_id, expected_context=context, credentials=credentials)
+                                         source_id=source, broker_id=broker_id, expected_context=context, credentials=credentials,
+                                         **({'as_of': as_of} if action == 'backfill' else {}))
                 except Exception as exc:
                     # Vendor exceptions can contain credentials. Never log their raw text.
                     result = dict(failure_details(exc, action, fallback='操作未取得有效结果，请检查本地配置；程序不会自动重试。'),
@@ -978,6 +985,9 @@ class PortalService:
             self.account = None  # Do not display pre-trade holdings as current.
         if action in {'reconcile', 'resolve-remainder', 'close-terminal', 'close-untransmitted'}:
             self.automation.reconciled(broker_id, result)
+        if action == 'backfill':
+            self.backfill.record(job.get('as_of'), safe_result, now())
+            self.scheduler_wake.set()
         self._save_job(job)
 
     def cancel_download(self):
@@ -1070,6 +1080,12 @@ class PortalService:
                         if not self.automation.corrupt:
                             self.automation.pause('自动服务遇到异常并已暂停，请查看运行记录。')
                 try:
+                    self.backfill_poll()
+                except Exception as exc:
+                    with self.lock:
+                        log_exception(log, 'backfill poll', exc, incident_id())
+                        self.backfill.pause('回填调度遇到异常并已暂停，请查看运行日志。', now())
+                try:
                     self.monitoring_poll()
                 except Exception:
                     self.monitor.error = '监控服务暂不可用，请检查运行日志。'
@@ -1153,6 +1169,118 @@ class PortalService:
             if account and account.get('status') == 'connected':
                 self.account = dict(account, checked_at=now())
                 self.broker_session.verify(self.broker_id, self.registry.connection_context(self.broker_id))
+
+    def _backfill_context(self, cfg):
+        """The source, strategy and data request a backfill belongs to; any change pauses it."""
+        return {'source': self.source, 'strategy_type': cfg['strategy']['type'],
+                'request_id': self.registry.data_requirements(cfg).fingerprint}
+
+    def backfill_plan(self, value):
+        """Dates a historical collection would cover, which ones already have a snapshot, and the request cost."""
+        if not isinstance(value, dict):
+            raise PortalError('回填参数无效。')
+        try:
+            start, end = date.fromisoformat(str(value.get('start'))), date.fromisoformat(str(value.get('end')))
+        except (TypeError, ValueError):
+            raise PortalError('请填写回填的开始和结束日期。') from None
+        cadence = value.get('cadence', 'monthly')
+        if start > end or cadence not in CADENCES:
+            raise PortalError('回填区间或周期无效。')
+        with self.lock:
+            cfg, _ = self.config()
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY), cfg['strategy']['type'])
+            allowed = self.state()['actions']['backfill']
+            blockers = [b for b in allowed['blockers'] if b['code'] != 'busy']  # planning is allowed while a job runs
+            if blockers:
+                raise PortalError(blockers[0]['message'])
+            today = datetime.now(ZoneInfo('America/New_York')).date()
+            dates = schedule_dates(start, end, cadence, today)
+            if not dates:
+                raise PortalError('所选区间内没有可回填的日期；日期必须早于今天。')
+            if len(dates) > MAX_DATES:
+                raise PortalError(f'一次最多回填 {MAX_DATES} 个日期，请缩小区间。')
+            context = self._backfill_context(cfg)
+            source, items = self.replay_series()
+            existing = [date.fromisoformat(item['date']) for item in items]
+            plan = []
+            for day in dates:
+                hit = covered(day, existing)
+                plan.append({'as_of': str(day), 'status': 'skipped' if hit else 'pending', 'job_id': None,
+                             'message': f'已有 {hit} 的快照，跳过。' if hit else ''})
+            pending = sum(item['status'] == 'pending' for item in plan)
+            requirements = self.registry.data_requirements(cfg)
+            bars = max(requirements.price_bars, requirements.volume_bars)
+            income = 'operating_income_ttm' in requirements.fields
+            details = max((item.get('details_checked') or 0 for item in items), default=0) or 120
+            adapter = self.registry.control('data', source, config=cfg)
+            profile = adapter.backfill_profile() if hasattr(adapter, 'backfill_profile') else {}
+            per_minute = profile.get('requests_per_minute') or 5
+            requests = estimate_requests(pending, history_bars=bars, details=details, income_required=income,
+                                         listing_pages=profile.get('listing_pages') or 6, cadence=cadence)
+            estimate = {'requests': requests, 'minutes': -(-requests // per_minute), 'requests_per_minute': per_minute,
+                        'details_per_date': details, 'history_bars': bars, 'income_required': income}
+            return dict(context, cadence=cadence, start=str(start), end=str(end), dates=plan,
+                        pending_count=pending, skipped_count=len(plan) - pending, estimate=estimate)
+
+    def backfill_start(self, value):
+        with self.lock:
+            if self.backfill.active:
+                raise PortalError('已有回填在进行；请先取消，或等待它完成。')
+            plan = self.backfill_plan(value)
+            if not plan['pending_count']:
+                raise PortalError('所选区间的日期都已有快照，无需回填。')
+            result = self.backfill.create(source=plan['source'], strategy_type=plan['strategy_type'],
+                                          request_id=plan['request_id'], cadence=plan['cadence'], start=plan['start'],
+                                          end=plan['end'], dates=plan['dates'], estimate=plan['estimate'], now=now())
+            self.scheduler_wake.set()
+            return dict(result, message=f"历史回填已排队：{plan['pending_count']} 个日期，预计 {plan['estimate']['requests']} 次请求。")
+
+    def backfill_control(self, command):
+        with self.lock:
+            queue = self.backfill
+            if not queue.data:
+                raise PortalError('没有回填任务。')
+            stamp = now()
+            if command == 'pause':
+                if queue.data['status'] != 'running':
+                    raise PortalError('回填不在运行中。')
+                queue.pause('已暂停；正在采集的日期完成后不再继续。', stamp)
+            elif command == 'resume':
+                if queue.data['status'] != 'paused':
+                    raise PortalError('回填不在暂停状态。')
+                queue.resume(stamp)
+                self.scheduler_wake.set()
+            elif command == 'cancel':
+                if not queue.active:
+                    raise PortalError('回填已经结束。')
+                queue.cancel(stamp)
+                if self.active and self.active.get('action') == 'backfill' and self.active.get('cancel_available'):
+                    self.cancel_download()
+            else:
+                raise PortalError('未知的回填操作。')
+            return dict(queue.public(), message=queue.data['message'])
+
+    def backfill_poll(self):
+        """Start the next queued date when the workbench is idle; never while another job runs."""
+        with self.lock:
+            queue = self.backfill
+            if self.closing or self.active or not queue.data or queue.data['status'] != 'running':
+                return
+            stamp = now()
+            item = queue.next_pending()
+            if item is None:
+                queue.finish(stamp)
+                return
+            try:
+                cfg, _ = self.config()
+                if self._backfill_context(cfg) != {k: queue.data[k] for k in ('source', 'strategy_type', 'request_id')}:
+                    queue.pause('数据源、策略或策略参数与回填开始时不同，回填已暂停；切回后可继续。', stamp)
+                    return
+                started = self.start('backfill', as_of=item['as_of'])
+            except PortalError as exc:
+                queue.pause(f'回填无法开始：{exc}', stamp)
+                return
+            queue.begin(item, started['job_id'], stamp)
 
     def _experiment(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'exp-[0-9a-f]{16}', ident):
@@ -1272,7 +1400,8 @@ class PortalService:
                 entry = found.get(day)
                 if entry is None or path.stat().st_mtime > entry['mtime']:
                     found[day] = {'date': day, 'path': path, 'mtime': path.stat().st_mtime,
-                                  'candidate_count': meta.get('candidate_count'), 'research_only': meta.get('research_only', False)}
+                                  'candidate_count': meta.get('candidate_count'), 'research_only': meta.get('research_only', False),
+                                  'details_checked': (meta.get('coverage') or {}).get('details_checked')}
         return source, [found[day] for day in sorted(found)]
 
     def replay_backtest(self, value):

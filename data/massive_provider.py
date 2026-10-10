@@ -1,12 +1,12 @@
 """One Massive provider. Universe and requested fields come from the strategy."""
-from datetime import date, datetime
+from datetime import date, datetime, time
 import json
 from math import isfinite
 from pathlib import Path
 
 from data.common import DataIssue, collection_lock, describe_issue, finite, utcnow, write_json
 from data.massive import TICKER, TICKERS, MassiveClient, MassiveError, settings
-from data.massive_technology import EXCHANGES, income_rows, latest_income, reference_history
+from data.massive_technology import EXCHANGES, NY, income_rows, latest_income, reference_history
 from data.massive_batch import grouped_rows, market_histories, split_events
 from framework.data_requirements import DataRequirements
 from framework.portfolio import EquitySnapshot, StockSnapshot
@@ -21,6 +21,12 @@ LIMITATIONS = [
     '价格仅拆股复权，不含股息复权；成交额按未复权收盘价乘成交量估计。',
     '没有券商实时买卖报价或已核对持仓，此研究文件不能直接下单。',
 ]
+BACKFILL_LIMITATION = ('历史回填：股票池与基础资料按供应商的时点参数查询，财报按申报日截止；市值等字段是否严格为该日时点取决于供应商，'
+                       '当日已退市的股票可能缺失，不能当作完整的时点数据。')
+BACKFILL_LIMITATION = ('历史回填：股票池与基础资料按供应商的时点参数查询，财报按申报日截止；市值等字段是否严格为该日时点取决于供应商，'
+                       '当日已退市的股票可能缺失，不能当作完整的时点数据。')
+BACKFILL_LIMITATION = ('历史回填：股票池与基础资料按供应商的时点参数查询，财报按申报日截止；市值等字段是否严格为该日时点取决于供应商，'
+                       '当日已退市的股票可能缺失，不能当作完整的时点数据。')
 
 
 def validate_request(request):
@@ -95,9 +101,11 @@ class MassiveData:
                     'history_bars': len(sessions), 'income_required': 'operating_income_ttm' in self.request.fields,
                     'execution_allowed': False, 'network_requests': api.requests}
 
-    def collect(self, out, *, price_bars=None, progress=None):
+    def collect(self, out, *, price_bars=None, progress=None, as_of=None):
         request = self.request
         validate_request(request)
+        if as_of is not None and (type(as_of) is not date or as_of >= utcnow().astimezone(NY).date()):
+            raise DataIssue('回填日期必须是早于今天的日期。')
         config, source = settings(self.config_dir), source_settings(self.source_config)
         with collection_lock(self.cache_dir):
             cancel = self.cache_dir / 'cancel.request'
@@ -106,17 +114,23 @@ class MassiveData:
             out = Path(out)
             out.mkdir(parents=True, exist_ok=False)
             started = utcnow()
+            # A historical anchor ends the reference sessions the day before as_of; cache freshness still follows the clock.
+            anchor = datetime.combine(as_of, time(12), tzinfo=NY) if as_of else started
+            prefix = f'回填 {as_of} · ' if as_of else ''
             def notify(message):
+                message = prefix + message
                 write_json(out/'progress.json', {'message': message, 'updated_at': utcnow().isoformat(),
                     'network_requests': api.requests, 'cache_hits': api.hits})
                 if progress: progress(message)
             try:
                 notify('按策略需求检查数据权限…')
                 api.read_cache = False
-                start, end, sessions = self.preflight(api, started)
+                start, end, sessions = self.preflight(api, anchor)
                 api.read_cache = True
-                universe = api.pages(TICKERS, {'market':'stocks', 'locale':'us', 'type':'CS', 'active':'true',
-                    'limit':1000, 'sort':'ticker', 'order':'asc'}, max_rows=source['max_reference_symbols'])['results']
+                listing = {'market':'stocks', 'locale':'us', 'type':'CS', 'active':'true', 'limit':1000, 'sort':'ticker', 'order':'asc'}
+                if as_of:
+                    listing['date'] = str(end)  # the vendor's point-in-time listing for the signal date
+                universe = api.pages(TICKERS, listing, max_rows=source['max_reference_symbols'])['results']
                 symbols, seen = [], set()
                 for row in universe:
                     symbol = row.get('ticker')
@@ -154,7 +168,8 @@ class MassiveData:
                     notify(f'候选资料 {index}/{len(ordered)} · {symbol} · 有效 {len(stocks)} · 缓存 {api.hits}')
                     details_checked += 1
                     try:
-                        saved = api.request(TICKERS+'/'+symbol, cache_seconds=source['metadata_cache_days']*86400)
+                        saved = (api.request(TICKERS+'/'+symbol, {'date': str(end)}, cache_seconds=90*86400) if as_of
+                                 else api.request(TICKERS+'/'+symbol, cache_seconds=source['metadata_cache_days']*86400))
                         detail = saved['data']['results']
                         if detail.get('ticker') != symbol: raise DataIssue('ticker_detail_identity_mismatch')
                         if (detail.get('type') != 'CS' or detail.get('locale') != 'us' or detail.get('market') != 'stocks'
@@ -220,11 +235,15 @@ class MassiveData:
                             'ranked_prefix_complete': prefix_complete, 'all_candidates_checked': details_checked == len(ordered)}
                 result = {'schema':SCHEMA,'provider':'massive','request':request.record(),'request_id':request.fingerprint,
                     'execution_allowed':False,'synthetic':False,'historical_point_in_time':False,'quotes':[],
+                    'as_of_requested':str(as_of) if as_of else None,
+                    'as_of_requested':str(as_of) if as_of else None,
+                    'as_of_requested':str(as_of) if as_of else None,
                     'reference_count':len(symbols),'candidate_count':len(ordered) if policy else candidates,
                     'collection_complete':not issues, 'coverage':coverage,
                     'stocks':stocks,'issues':issues,'excluded':excluded,'started_at':started.isoformat(),
                     'finished_at':utcnow().isoformat(),'price_as_of':str(end),'sessions':[str(d) for d in sessions],
-                    'limitations':LIMITATIONS + (['仅补齐策略所需排名前缀的基础资料，未下载全股票池资料。'] if policy else []),
+                    'limitations':LIMITATIONS + (['仅补齐策略所需排名前缀的基础资料，未下载全股票池资料。'] if policy else [])
+                                  + ([BACKFILL_LIMITATION] if as_of else []),
                     'source_configuration':source,'network_requests':api.requests,'cache_hits':api.hits}
                 content=json.dumps(result,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode()
                 if len(content)>32*1024*1024: raise DataIssue('完整快照超过 32 MB；未截断股票池。')

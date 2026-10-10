@@ -1,11 +1,12 @@
 """The same built-in operations are used by the service, workers and CLI."""
-ACTIONS = frozenset({'offline', 'status', 'observe', 'preview', 'prepare', 'execute', 'refresh', 'data-status', 'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder', 'close-terminal', 'close-untransmitted'})
+ACTIONS = frozenset({'offline', 'status', 'observe', 'preview', 'prepare', 'execute', 'refresh', 'data-status', 'configure-data', 'calendar', 'reconcile', 'recover', 'resolve-remainder', 'close-terminal', 'close-untransmitted', 'backfill'})
 # Composite service jobs are deliberately not valid worker commands.
 WORKBENCH_ACTIONS = ACTIONS | {'preflight'}
 BROKER_CHECKS = frozenset({'offline', 'status', 'observe', 'calendar', 'reconcile', 'resolve-remainder', 'close-terminal', 'close-untransmitted'})
 # Human-confirmed ledger closures; each needs a read-only broker session first.
 LEDGER_CLOSURES = frozenset({'resolve-remainder', 'close-terminal', 'close-untransmitted'})
-DATA_CAPABILITIES = {'configure-data': 'configure', 'data-status': 'inspect', 'refresh': 'collect', 'preview': 'preview'}
+DATA_CAPABILITIES = {'configure-data': 'configure', 'data-status': 'inspect', 'refresh': 'collect', 'preview': 'preview',
+                     'backfill': 'backfill'}
 
 
 def context_for(registry, action, broker_id, source_id):

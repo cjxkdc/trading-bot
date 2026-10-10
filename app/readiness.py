@@ -48,7 +48,7 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
                     block('incompatible', compatibility_issue, 'data')
                 if context_issue:
                     block('configuration', context_issue, 'data')
-            if action in {'refresh', 'data-status'} and source.get('configured') is False:
+            if action in {'refresh', 'data-status', 'backfill'} and source.get('configured') is False:
                 block('source_unconfigured', '请先配置当前数据源。', 'data')
         if action in {'prepare', 'execute'} and broker.get('execution_enabled', True) is not True:
             block('execution_permission', broker.get('execution_reason') or '此账户尚未获得执行权限。', 'broker')

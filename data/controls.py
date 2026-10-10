@@ -78,8 +78,10 @@ class CurrentResearchControl(SnapshotControl):
                   for key, value in self.profile.items() if key != 'type'}
         return getattr(importlib.import_module(module), name)(**params)
 
-    def collect(self, out, *, price_bars, progress):
-        return self.collector().collect(out, price_bars=price_bars, progress=progress)
+    def collect(self, out, *, price_bars, progress, as_of=None):
+        # Only collectors that accept a date are declared with the backfill capability.
+        return self.collector().collect(out, price_bars=price_bars, progress=progress,
+                                        **({'as_of': as_of} if as_of is not None else {}))
 
     def metadata(self, raw):
         if (not isinstance(raw, dict) or raw.get('schema') != self.entry['output_schema']
@@ -142,6 +144,54 @@ class MassiveControl(CurrentResearchControl):
     def inspect(self, *, price_bars, progress):
         progress('正在检查历史价格、股票信息和财报权限…')
         return self.collector().inspect(price_bars=price_bars)
+
+    def backfill_profile(self):
+        """Figures for estimating a historical collection; missing configuration keeps the defaults."""
+        from data.massive import settings
+        from data.massive_provider import source_settings
+        profile = {'requests_per_minute': 5, 'listing_pages': 6}
+        try:
+            profile['requests_per_minute'] = settings(project_path(self.root, self.profile['config_dir'])).requests_per_minute
+        except Exception:
+            pass
+        try:
+            symbols = source_settings(project_path(self.root, self.profile['source_config']))['max_reference_symbols']
+            profile['listing_pages'] = -(-symbols // 1000)
+        except Exception:
+            pass
+        return profile
+
+    def backfill_profile(self):
+        """Figures for estimating a historical collection; missing configuration keeps the defaults."""
+        from data.massive import settings
+        from data.massive_provider import source_settings
+        profile = {'requests_per_minute': 5, 'listing_pages': 6}
+        try:
+            profile['requests_per_minute'] = settings(project_path(self.root, self.profile['config_dir'])).requests_per_minute
+        except Exception:
+            pass
+        try:
+            symbols = source_settings(project_path(self.root, self.profile['source_config']))['max_reference_symbols']
+            profile['listing_pages'] = -(-symbols // 1000)
+        except Exception:
+            pass
+        return profile
+
+    def backfill_profile(self):
+        """Figures for estimating a historical collection; missing configuration keeps the defaults."""
+        from data.massive import settings
+        from data.massive_provider import source_settings
+        profile = {'requests_per_minute': 5, 'listing_pages': 6}
+        try:
+            profile['requests_per_minute'] = settings(project_path(self.root, self.profile['config_dir'])).requests_per_minute
+        except Exception:
+            pass
+        try:
+            symbols = source_settings(project_path(self.root, self.profile['source_config']))['max_reference_symbols']
+            profile['listing_pages'] = -(-symbols // 1000)
+        except Exception:
+            pass
+        return profile
 
     def cancel(self):
         path = project_path(self.root, self.profile['cache_dir'], under='runs') / 'cancel.request'

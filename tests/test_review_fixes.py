@@ -501,5 +501,247 @@ class PlanMigrationTests(unittest.TestCase):
         self.assertTrue(self.plan.data['enabled'])
 
 
+class BackfillCollectorTests(unittest.TestCase):
+    """A dated collection asks the vendor for the universe, details and bars as of that date."""
+    def setUp(self):
+        from datetime import date
+        from app.assembly import strategy_data_requirements
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.request = strategy_data_requirements({'type': 'mom8', 'lookback': 20, 'skip': 2, 'trend_window': 20})
+        self.as_of = date(2026, 9, 15)
+        days = [date(2026, 8, 1) + timedelta(days=i) for i in range(45)]
+        self.days = [d for d in days if d.weekday() < 5 and d < self.as_of][-21:]
+        self.symbols = ['S' + str(i).zfill(2) for i in range(12)]
+        self.queries = []
+
+    def detail(self, symbol):
+        index = int(symbol[1:]) if symbol.startswith('S') else 99
+        return {'ticker': symbol, 'type': 'CS', 'locale': 'us', 'market': 'stocks', 'active': True,
+                'primary_exchange': 'XNAS', 'currency_name': 'usd', 'list_date': '2000-01-01',
+                'share_class_figi': 'ID' + symbol, 'market_cap': 10e9, 'sic_code': str(4000 + index // 4), 'cik': '123'}
+
+    def close(self, symbol, index):
+        if symbol == 'SPY': return 100 + index / 2
+        if symbol == 'AAPL': return 1
+        rank = int(symbol[1:])
+        if index == len(self.days) - 3: return 200 - rank * 2
+        return 200 if index == len(self.days) - 1 else 100
+
+    def respond(self, req, timeout):
+        from datetime import date
+        from urllib.parse import parse_qs, urlsplit
+        from data.massive import TICKERS, SPLITS
+        from test_massive import Reply
+        part = urlsplit(req.full_url)
+        self.queries.append((part.path, parse_qs(part.query)))
+        if part.path == TICKERS:
+            raw = {'results': [self.detail(s) for s in self.symbols], 'status': 'OK'}
+        elif part.path.startswith(TICKERS + '/'):
+            raw = {'results': self.detail(part.path.rsplit('/', 1)[-1]), 'status': 'OK'}
+        elif part.path == SPLITS:
+            raw = {'results': [], 'status': 'OK'}
+        elif part.path.startswith('/v2/aggs/grouped/'):
+            day = date.fromisoformat(part.path.rsplit('/', 1)[-1]); index = self.days.index(day)
+            raw = grouped([bar(s, day, self.close(s, index)) for s in ('SPY', *self.symbols)])['data']
+        elif part.path.startswith('/v2/aggs/ticker/SPY/'):
+            raw = {'ticker': 'SPY', 'adjusted': True, 'results': [
+                {k: v for k, v in bar('SPY', d, self.close('SPY', i)).items() if k != 'T'} for i, d in enumerate(self.days)]}
+        else:
+            raise AssertionError('Unexpected endpoint: ' + part.path)
+        return Reply(raw, req.full_url)
+
+    def collect(self, as_of):
+        from data.massive import MassiveClient, Settings
+        from data.massive_provider import MassiveData
+        from test_massive import Clock, KEY
+        clock = Clock()
+        opener = Mock(); opener.open.side_effect = self.respond
+        def client(cfg, path, **kwargs):
+            return MassiveClient(cfg, path, opener=opener, clock=clock.now, monotonic=clock.monotonic, sleep=clock.sleep, **kwargs)
+        collector = MassiveData(self.root / 'secrets', Path(__file__).resolve().parents[1] / 'configs/massive.json',
+                                self.root / 'cache').for_request(self.request)
+        with patch('data.massive_provider.MassiveClient', side_effect=client), \
+             patch('data.massive_provider.settings', return_value=Settings(KEY, 5)), \
+             patch('data.massive_provider.utcnow', side_effect=clock.now):
+            path = collector.collect(self.root / ('out-' + str(as_of)), as_of=as_of)
+        return json.loads(path.read_text(encoding='utf-8'))
+
+    def test_dated_collection_uses_point_in_time_listing_and_details_and_is_labelled(self):
+        from data.massive import TICKERS
+        raw = self.collect(self.as_of)
+        end = str(self.days[-1])
+        self.assertEqual((raw['price_as_of'], raw['as_of_requested']), (end, '2026-09-15'))
+        self.assertFalse(raw['historical_point_in_time'])
+        self.assertFalse(raw['execution_allowed'])
+        self.assertTrue(any('历史回填' in text for text in raw['limitations']))
+        self.assertTrue(raw['stocks'])
+        self.assertTrue({s['ticker'] for s in raw['stocks']} <= set(self.symbols))
+        self.assertTrue(all(day < '2026-09-15' for day in raw['sessions']))
+        listing = [query for path, query in self.queries if path == TICKERS]
+        self.assertEqual(listing[0]['date'], [end])
+        details = [query for path, query in self.queries if path.startswith(TICKERS + '/') and not path.endswith('/AAPL')]
+        self.assertTrue(details)
+        self.assertTrue(all(query.get('date') == [end] for query in details))
+
+    def test_backfill_date_must_be_in_the_past(self):
+        from datetime import date
+        with self.assertRaisesRegex(DataIssue, '早于今天'):
+            self.collect(date(2026, 10, 2))
+        self.assertEqual(self.queries, [])
+
+
+class BackfillQueueTests(unittest.TestCase):
+    def test_anchor_dates_coverage_and_estimate(self):
+        from datetime import date
+        from app.backfill import covered, estimate_requests, schedule_dates
+        today = date(2026, 4, 1)
+        self.assertEqual(schedule_dates(date(2026, 1, 15), date(2026, 4, 10), 'monthly', today), [date(2026, 2, 1), date(2026, 3, 1)])
+        self.assertEqual(schedule_dates(date(2026, 3, 1), date(2026, 3, 1), 'monthly', today), [date(2026, 3, 1)])
+        self.assertEqual(schedule_dates(date(2026, 3, 3), date(2026, 3, 20), 'weekly', date(2026, 3, 18)), [date(2026, 3, 9), date(2026, 3, 16)])
+        self.assertEqual(covered(date(2026, 2, 1), [date(2026, 1, 10), date(2026, 1, 30)]), date(2026, 1, 30))
+        self.assertIsNone(covered(date(2026, 3, 1), [date(2026, 1, 30), date(2026, 3, 1)]))
+        one = estimate_requests(1, history_bars=253, details=100, income_required=True, listing_pages=6, cadence='monthly')
+        two = estimate_requests(2, history_bars=253, details=100, income_required=True, listing_pages=6, cadence='monthly')
+        self.assertEqual(one, 5 + 6 + 253 + 200)
+        self.assertEqual(two - one, 5 + 6 + 23 + 200)
+
+    def test_queue_persists_and_a_restart_pauses_an_unfinished_run(self):
+        from app.backfill import Backfill
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        queue = Backfill(temp.name)
+        self.assertIsNone(queue.public())
+        dates = [{'as_of': '2026-02-01', 'status': 'pending', 'job_id': None, 'message': ''},
+                 {'as_of': '2026-03-01', 'status': 'skipped', 'job_id': None, 'message': '已有快照'}]
+        queue.create(source='massive', strategy_type='mom8', request_id='fp', cadence='monthly', start='2026-01-15',
+                     end='2026-03-10', dates=dates, estimate={'requests': 10}, now='t0')
+        queue.begin(queue.next_pending(), 'job-1', 't1')
+        self.assertEqual(queue.public()['current'], '2026-02-01')
+        again = Backfill(temp.name)
+        self.assertEqual((again.data['status'], again.data['dates'][0]['status']), ('paused', 'pending'))
+        again.resume('t2')
+        again.begin(again.next_pending(), 'job-2', 't3')
+        again.record('2026-02-01', {'status': 'complete', 'message': 'ok', 'details': {'price_as_of': '2026-01-30', 'usable_count': 9}}, 't4')
+        self.assertEqual((again.data['status'], again.data['dates'][0]['price_as_of']), ('finished', '2026-01-30'))
+        self.assertFalse(again.active)
+        self.assertEqual(Backfill(temp.name).public()['counts'], {'done': 1, 'skipped': 1})
+
+
+class BackfillWorkbenchTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        from copy import deepcopy
+        from app.workbench import PortalService
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        source_root = Path(__file__).resolve().parents[1]
+        for folder in ('configs', 'strategies', 'framework'):
+            shutil.copytree(source_root / folder, self.root / folder, ignore=shutil.ignore_patterns('__pycache__'))
+        for folder in ('data', 'brokers'):
+            shutil.copytree(source_root / folder / 'plugins', self.root / folder / 'plugins')
+        for target in ('app.assembly.ROOT',):
+            patcher = patch(target, self.root); patcher.start(); self.addCleanup(patcher.stop)
+        configured = patch('data.massive.configuration_status',
+                           return_value={'configured': True, 'message': '', 'network_requested': True})
+        configured.start(); self.addCleanup(configured.stop)
+        self.calls, self.hold = [], None
+        self.response = {'status': 'complete', 'message': '已回填', 'details': {'price_as_of': '2026-01-30', 'usable_count': 9, 'network_requests': 40}}
+        def worker(root, action, *args, **kwargs):
+            self.calls.append((action, kwargs))
+            if self.hold:
+                self.hold.wait(3)
+            return deepcopy(self.response)
+        self.service = PortalService(self.root, worker=worker)
+        self.service.source = 'massive'
+        self.broker = self.service.registry.default('broker')
+        self.addCleanup(lambda: self.service.thread and self.service.thread.join(4))
+
+    def finish(self):
+        self.service.thread.join(4)
+        self.assertIsNone(self.service.active)
+
+    def test_queue_runs_one_date_per_idle_poll_pauses_on_failure_and_resumes(self):
+        from app.workbench import PortalError
+        value = {'start': '2026-01-15', 'end': '2026-04-10', 'cadence': 'monthly'}
+        plan = self.service.backfill_plan(value)
+        self.assertEqual([item['as_of'] for item in plan['dates']], ['2026-02-01', '2026-03-01', '2026-04-01'])
+        self.assertEqual((plan['pending_count'], plan['skipped_count']), (3, 0))
+        self.assertGreater(plan['estimate']['requests'], 0)
+        self.assertTrue(plan['estimate']['income_required'])
+        self.assertTrue(self.service.state()['actions']['backfill']['enabled'])
+        queue = self.service.backfill_start(value)
+        self.assertEqual(queue['status'], 'running')
+        with self.assertRaises(PortalError):
+            self.service.start('backfill')  # the queue supplies the date; the generic job route cannot
+        import threading
+        self.hold = threading.Event()
+        self.service.backfill_poll()
+        self.assertEqual(self.service.active['action'], 'backfill')
+        self.assertEqual(self.calls[-1][1]['as_of'], '2026-02-01')
+        self.service.backfill_poll()  # busy: nothing else starts
+        self.assertEqual(len(self.calls), 1)
+        self.hold.set()
+        self.finish()
+        self.hold = None
+        public = self.service.backfill.public()
+        self.assertEqual((public['status'], public['dates'][0]['status'], public['dates'][0]['price_as_of']),
+                         ('running', 'done', '2026-01-30'))
+        self.response = {'status': 'blocked', 'message': '数据权限不足'}
+        self.service.backfill_poll(); self.finish()
+        public = self.service.backfill.public()
+        self.assertEqual((public['status'], public['dates'][1]['status']), ('paused', 'failed'))
+        self.assertIn('数据权限不足', public['message'])
+        self.service.backfill_poll()
+        self.assertIsNone(self.service.active)
+        self.response = {'status': 'complete', 'message': '已回填', 'details': {'price_as_of': '2026-02-27', 'usable_count': 9}}
+        self.service.backfill_control('resume')
+        self.service.backfill_poll(); self.finish()
+        self.assertEqual(self.service.backfill.public()['dates'][1]['status'], 'done')
+        self.assertEqual(self.service.state()['backfill']['counts'], {'done': 2, 'pending': 1})
+        self.service.backfill_control('cancel')
+        public = self.service.backfill.public()
+        self.assertEqual((public['status'], public['dates'][2]['status']), ('cancelled', 'cancelled'))
+        with self.assertRaises(PortalError):
+            self.service.backfill_control('resume')
+        self.assertTrue((self.root / 'runs/portal/backfill.json').is_file())
+        jobs = [job for job in self.service.jobs if job['action'] == 'backfill']
+        self.assertEqual([job['as_of'] for job in jobs], ['2026-03-01', '2026-03-01', '2026-02-01'])
+        self.assertIsNone(self.service.snapshot())  # backfilled data never becomes the current snapshot
+
+    def test_a_changed_strategy_pauses_the_queue_instead_of_collecting_the_wrong_request(self):
+        self.service.backfill_start({'start': '2026-01-15', 'end': '2026-02-10', 'cadence': 'monthly'})
+        self.service.backfill.data['request_id'] = 'another-request'
+        self.service.backfill.persist()
+        self.service.backfill_poll()
+        self.assertIsNone(self.service.active)
+        self.assertEqual(self.service.backfill.public()['status'], 'paused')
+        self.assertEqual(self.calls, [])
+
+    def test_worker_backfill_writes_a_dated_snapshot_under_the_request_directory(self):
+        from datetime import date
+        from app.control_contracts import ControlError
+        from app.portal_worker import perform
+        from data.massive_provider import MassiveData
+        seen = {}
+        def fake_collect(collector, out, *, price_bars=None, progress=None, as_of=None):
+            seen.update(as_of=as_of, price_bars=price_bars, out=Path(out))
+            Path(out).mkdir(parents=True)
+            path = Path(out) / 'preview-data.json'
+            path.write_text(json.dumps({'price_as_of': str(as_of - timedelta(days=1)), 'stocks': [{}, {}, {}], 'candidate_count': 5,
+                                        'collection_complete': True, 'network_requests': 40, 'cache_hits': 2}), encoding='utf-8')
+            return path
+        with patch.object(MassiveData, 'collect', fake_collect):
+            result = perform('backfill', root=self.root, broker_id=self.broker, source_id='massive', as_of='2026-03-01')
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['details'], {'as_of': '2026-03-01', 'price_as_of': '2026-02-28', 'usable_count': 3, 'candidate_count': 5,
+                                             'collection_complete': True, 'network_requests': 40, 'cache_hits': 2})
+        self.assertEqual(seen['as_of'], date(2026, 3, 1))
+        self.assertGreaterEqual(seen['price_bars'], 21)
+        self.assertTrue(seen['out'].name.startswith('backfill-2026-03-01-'))
+        self.assertTrue(seen['out'].is_relative_to(self.root / 'runs/data/massive/requests'))
+        with self.assertRaisesRegex(ControlError, '回填日期'):
+            perform('backfill', root=self.root, broker_id=self.broker, source_id='massive', as_of='not-a-date')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,5 @@
 """One operation against selected modules. Capabilities and bound environment determine execution."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 from math import isfinite
 from pathlib import Path
@@ -123,7 +123,7 @@ def require_snapshot_context(loaded, broker, control=None):
 
 
 def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, snapshot_path=None,
-            preview_token=None, credentials=None, progress=None, clock=None, automation=None):
+            preview_token=None, credentials=None, progress=None, clock=None, automation=None, as_of=None):
     if action not in ACTIONS:
         raise ControlError('未知工作台操作。')
     root = Path(root).resolve()
@@ -218,6 +218,24 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
             raise ControlError('此数据模块未提供在线权限检查。')
         result = source.inspect(price_bars=bars, progress=progress)
         return {'status': 'connected', 'message': '数据接口检查通过。', 'details': result}
+    if action == 'backfill':
+        # One dated snapshot for the series; it is never selected as the current data or previewed.
+        if 'backfill' not in capabilities:
+            raise ControlError('此数据模块不支持历史回填。')
+        try:
+            day = date.fromisoformat(str(as_of))
+        except (TypeError, ValueError):
+            raise ControlError('回填日期无效。') from None
+        path = source.collect(source.directory / f'backfill-{day}-{uuid4().hex[:8]}',
+                              price_bars=bars, progress=progress, as_of=day)
+        raw = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+        stocks = raw.get('stocks') if isinstance(raw.get('stocks'), list) else []
+        return {'status': 'complete',
+                'message': f"已回填 {day} 的快照：价格日期 {raw.get('price_as_of')}，可用 {len(stocks)} 只。",
+                'snapshot_path': str(project_path(root, path, under='runs')),
+                'details': {'as_of': str(day), 'price_as_of': raw.get('price_as_of'), 'usable_count': len(stocks),
+                            'candidate_count': raw.get('candidate_count'), 'collection_complete': raw.get('collection_complete'),
+                            'network_requests': raw.get('network_requests'), 'cache_hits': raw.get('cache_hits')}}
     if action == 'refresh':
         if 'collect' not in capabilities:
             raise ControlError('此模块使用文件输入，不支持在线采集。')
@@ -330,7 +348,7 @@ def main():
     try:
         request = json.loads(sys.stdin.read(16385))
         if not isinstance(request, dict) or set(request) - {'action', 'broker_id', 'source_id', 'expected_context',
-                                                          'snapshot_path', 'preview_token', 'credentials', 'automation'}:
+                                                          'snapshot_path', 'preview_token', 'credentials', 'automation', 'as_of'}:
             raise ValueError('request')
         action = request.pop('action')
         def progress(message):

@@ -188,6 +188,11 @@
 .experiment .card-heading p { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .backtest-result { margin-top: 17px; padding-top: 17px; border-top: 1px solid var(--border); }
 .result-select { font-size: 12px; }
+.backfill-plan { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
+.backfill-plan p { margin: 0 0 8px; }
+.backfill-plan .button-row { margin-top: 10px; }
+.backfill-progress { display: grid; gap: 10px; }
+.backfill-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 .review-check { margin: 22px 0 16px; align-items: flex-start; }
 .review-check input { margin-top: 3px; }
 .rebalance-review { padding: 18px 0; border-bottom: 1px solid var(--border); }
