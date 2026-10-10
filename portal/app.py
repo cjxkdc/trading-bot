@@ -259,6 +259,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
             raise PortalError('自动运行只能使用当前选定并已核验的模块。')
         return await run_in_threadpool(service.automation_enable)
 
+    @app.post('/api/automation/migrate')
+    async def automation_migrate(request: Request):
+        return await run_in_threadpool(service.automation_migrate, await body(request))
+
     @app.post('/api/automation/disable')
     async def automation_disable(request: Request):
         if await body(request):

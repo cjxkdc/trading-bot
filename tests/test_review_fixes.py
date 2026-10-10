@@ -451,5 +451,55 @@ class ReplayWorkbenchTests(unittest.TestCase):
         self.assertIn('slippage_bps', report['comparison_differences'])
 
 
+class PlanMigrationTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        from app.workbench import PortalService
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        source_root = Path(__file__).resolve().parents[1]
+        for folder in ('configs', 'strategies', 'framework'):
+            shutil.copytree(source_root / folder, self.root / folder, ignore=shutil.ignore_patterns('__pycache__'))
+        for folder in ('data', 'brokers'):
+            shutil.copytree(source_root / folder / 'plugins', self.root / folder / 'plugins')
+        patcher = patch('app.assembly.ROOT', self.root); patcher.start(); self.addCleanup(patcher.stop)
+        self.service = PortalService(self.root, worker=lambda *a, **kw: self.fail('migration must not call a worker'))
+        self.broker = self.service.registry.default('broker')
+        self.plan = self.service.automation
+        self.plan.data.update(enabled=True, status='waiting', binding={
+            'broker_id': self.broker, 'source_id': 'massive', 'broker_name': 'Fixture broker', 'source_name': 'Massive',
+            'strategy_name': '科技股盈利动量', 'context': self.service.registry.context(self.broker, 'massive'),
+            'code_revision': code_revision(self.root)})
+        self.plan.persist()
+
+    def test_plan_becomes_a_stopped_instance_with_full_budget_and_the_plan_closes(self):
+        from app.workbench import PortalError
+        with self.assertRaises(PortalError):
+            self.service.automation_migrate({'budget': '0.5'})
+        result = self.service.automation_migrate({})
+        item = self.service.strategy_instances.get(result['id'])
+        self.assertEqual((item['broker_id'], item['source_id'], item['budget'], item['enabled'], item['status']),
+                         (self.broker, 'massive', '1', False, 'stopped'))
+        self.assertEqual(item['strategy']['type'], 'tech_profit_momentum')
+        self.assertEqual(item['schedule']['cadence'], self.plan.data['config']['cadence'])
+        self.assertIn('迁移自单策略计划', item['name'])
+        self.assertFalse(self.plan.data['enabled'])
+        self.assertEqual(self.plan.data['status'], 'disabled')
+        self.assertEqual(self.plan.data['migrated_to'], result['id'])
+        self.assertTrue(any('已迁移' in event['message'] for event in self.plan.data['events']))
+
+    def test_migration_refuses_unfinished_batches_and_changed_bindings(self):
+        from app.workbench import PortalError
+        self.plan.data['cycles']['x'] = {'status': 'pending', 'broker_id': self.broker, 'day': '2026-10-01', 'context': 'c'}
+        with self.assertRaisesRegex(PortalError, '未核对'):
+            self.service.automation_migrate({})
+        self.plan.data['cycles'].clear()
+        self.plan.data['binding']['context'] = 'something-else'
+        with self.assertRaisesRegex(PortalError, '绑定时不同'):
+            self.service.automation_migrate({})
+        self.assertEqual(self.service.strategy_instances.data['instances'], [])
+        self.assertTrue(self.plan.data['enabled'])
+
+
 if __name__ == '__main__':
     unittest.main()

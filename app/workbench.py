@@ -1014,6 +1014,47 @@ class PortalService:
         with self.lock:
             return self.automation.disable()
 
+    def automation_migrate(self, value=None):
+        """Turn the single-strategy plan into a stopped run instance, then close the plan.
+
+        The instance gets the plan's account, data source, schedule and the
+        current manual strategy parameters with a 100% budget, so its sizing
+        matches what the plan did. It is created stopped: starting is a
+        separate, confirmed step. The plan's history stays readable.
+        """
+        with self.lock:
+            self.idle()
+            if value:
+                raise PortalError('迁移不接受额外参数。')
+            plan = self.automation
+            if plan.corrupt:
+                raise PortalError('自动计划状态文件损坏，无法迁移；请先检查文件。')
+            binding = plan.data.get('binding') or {}
+            if not binding.get('broker_id') or not binding.get('source_id'):
+                raise PortalError('没有绑定账户的单策略计划可迁移；直接用「新建运行」即可。')
+            if any(c['status'] in {'pending', 'blocked', 'preparing'} for c in plan.data['cycles'].values()):
+                raise PortalError('单策略计划仍有未核对的批次；先核对订单或结束余单，再迁移。')
+            try:
+                unchanged = self.registry.context(binding['broker_id'], binding['source_id']) == binding.get('context')
+            except (ControlError, ValueError, OSError, KeyError, TypeError):
+                unchanged = False
+            if not unchanged:
+                raise PortalError('模块、策略参数或代码与计划绑定时不同；请先核对「参数」页的配置，或直接用「新建运行」。')
+            cfg, _ = self.config()
+            name = f"{binding.get('strategy_name') or cfg['strategy']['type']} · 迁移自单策略计划"[:80]
+            payload = {'name': name, 'strategy': deepcopy(cfg['strategy']), 'broker_id': binding['broker_id'],
+                       'source_id': binding['source_id'], 'budget': '1', 'schedule': deepcopy(plan.data['config'])}
+            created = self.strategy_instances.create(payload)
+            if plan.data['enabled'] or plan.data['status'] != 'disabled':
+                plan.disable()
+            plan.data['migrated_to'] = created['id']
+            plan.event(f'已迁移为运行实例「{name}」；计划已关闭，历史记录保留。')
+            plan.persist()
+            self.clear_preview()
+            self.scheduler_wake.set()
+            return {'id': created['id'], 'name': name,
+                    'message': '已创建运行实例（资金比例 100%，处于停止状态）；旧计划已关闭，历史保留。请在运行详情里确认启动。'}
+
     def start_scheduler(self):
         if self.scheduler_thread and self.scheduler_thread.is_alive():
             return

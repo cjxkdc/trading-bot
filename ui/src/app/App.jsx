@@ -115,7 +115,7 @@ export function App({ access, onLogout }) {
     if (route.page === 'backtests') return <BacktestsPage {...common} route={route} navigate={navigate}/>;
     if (route.page === 'runs') {
       if (route.view === 'manual') return <><ContextSelection state={state} busy={busy} chooseBroker={chooseBroker} navigate={navigate}/><ManualRun {...common} navigate={navigate} chooseSource={chooseSource} submit={requestSubmission}/></>;
-      if (route.view === 'plan') return <><ContextSelection state={state} busy={busy} chooseBroker={chooseBroker} navigate={navigate}/><AutomationCard {...common} online={online} runtimeRunning={runtime?.status === 'running'} pending={pending} chooseBroker={chooseBroker}/></>;
+      if (route.view === 'plan') return <><ContextSelection state={state} busy={busy} chooseBroker={chooseBroker} navigate={navigate}/><AutomationCard {...common} online={online} runtimeRunning={runtime?.status === 'running'} pending={pending} chooseBroker={chooseBroker} navigate={navigate}/></>;
       return <StrategyRuns {...common} pending={pending} route={route} onNavigate={navigate}/>;
     }
     if (route.page === 'account') {
