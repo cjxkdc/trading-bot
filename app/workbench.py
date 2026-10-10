@@ -1172,14 +1172,20 @@ class PortalService:
                 for result in sorted(path.glob('result-*')):
                     try:
                         record = verified_record(result)
-                        if parse_any(read_json(result / 'raw-result.json')) != record['result']:
+                        evidence = read_json(result / 'raw-result.json')
+                        if parse_any(evidence) != record['result']:
                             raise ValueError('Changed summary')
-                        entry['results'].append({'id': path.name + '/' + result.name,
-                                                 'provider': record['result'].get('provider', 'quantconnect'),
-                                                 'metrics': record['result']['metrics'],
-                                                 'completion': record['result']['completion'],
-                                                 'code_evidence': record['code_evidence'],
-                                                 'warnings': record['warnings']})
+                        item = {'id': path.name + '/' + result.name,
+                                'provider': record['result'].get('provider', 'quantconnect'),
+                                'metrics': record['result']['metrics'],
+                                'completion': record['result']['completion'],
+                                'code_evidence': record['code_evidence'],
+                                'warnings': record['warnings']}
+                        if item['provider'] == 'local_replay':
+                            # The curve and the rebalance log are part of the verified evidence file.
+                            item.update(nav=evidence.get('nav', []), rebalances=evidence.get('rebalances', []),
+                                        replay_warnings=evidence.get('warnings', []), snapshot_count=evidence.get('snapshot_count'))
+                        entry['results'].append(item)
                     except (ValueError, OSError, KeyError):
                         entry['results'].append({'id': path.name + '/' + result.name, 'invalid': True})
                 items.append(entry)

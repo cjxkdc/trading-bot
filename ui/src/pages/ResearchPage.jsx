@@ -4,6 +4,7 @@ import { Button, Empty, Tag } from '../ui';
 import { percent, number } from '../format';
 import { scheduleSummary } from '../automation';
 import { researchSources, resolveResearchSource, reconcileResearchSelection, researchExperiments, researchResultSelection } from '../research_context';
+import { PerformanceChart } from '../components/PerformanceChart';
 
 export function ResearchPage({ state, strategyType, busy, act, navigate }) {
   const [selection, setSelection] = useState(() => ({ strategyType, sourceId: '' }));
@@ -83,6 +84,18 @@ export function ResearchPage({ state, strategyType, busy, act, navigate }) {
   }
 
   const completions = { reported_complete: '报告显示完成', unverified: '完成状态未核验', incomplete: '未完成', failed: '运行失败' };
+  // A replay's NAV is valued at each saved snapshot; the chart reuses the account curve.
+  function ReplayCurve({ result }) {
+    const points = result.nav.map(([day, value]) => ({ as_of: `${day}T00:00:00Z`, equity: value }));
+    return <details className="details replay-curve" open>
+      <summary>净值曲线 · {result.snapshot_count || result.nav.length} 份快照</summary>
+      <PerformanceChart points={points} mode="equity" timezone="UTC" currency="" daily/>
+      {result.rebalances?.length > 0 && <div className="table-wrap"><table><thead><tr><th>调仓日</th><th className="right">目标标的</th><th className="right">委托数</th><th className="right">调仓前净值</th><th className="right">调仓后现金</th></tr></thead><tbody>
+        {result.rebalances.map(row => <tr key={row.date}><td>{row.date}</td><td className="right">{row.targets}</td><td className="right">{row.orders}</td><td className="right">{number(row.nav_before)}</td><td className="right">{number(row.cash_after)}</td></tr>)}
+      </tbody></table></div>}
+      {result.replay_warnings?.length > 0 && <ul className="small muted">{result.replay_warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+    </details>;
+  }
   return <>
     <section className="card">
       <div className="card-heading"><div><h2>创建回测实验</h2><p>按此策略的参数与计划导出代码，在 QuantConnect 运行回测。</p></div><Tag>QuantConnect</Tag></div>
@@ -155,6 +168,7 @@ export function ResearchPage({ state, strategyType, busy, act, navigate }) {
           <div><span>Sharpe</span><strong>{number(result.metrics.sharpe)}</strong></div>
           <div><span>订单数</span><strong>{number(result.metrics.total_orders)}</strong></div>
         </div>
+        {result.provider === 'local_replay' && result.nav?.length > 1 && <ReplayCurve result={result}/>}
       </div>)}
     </section>)}
     {!!unassigned.length && <details className="details"><summary>无法归属的记录 ({unassigned.length})</summary><p className="small muted">工作台中这些记录校验失败或缺少策略标识，未计入此策略的实验，也不能参与比较。</p><ul>{unassigned.map((item, index) => <li key={item?.id || index}>{item?.id || '未知记录'}</li>)}</ul></details>}
