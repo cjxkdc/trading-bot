@@ -1,4 +1,4 @@
-"""Read-only observations for a paper order preview; no order session or ledger."""
+"""Read-only OpenD account observations; environment is verified by the registered connector."""
 from datetime import date, datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 import time as monotonic_time
@@ -15,8 +15,14 @@ class ObservationBlocked(OpenDError, ControlError):
     """Safe observation errors survive gateway teardown without becoming login errors."""
 
 
+def _validate_environment(connector):
+    expected = {'broker_paper': 'SIMULATE', 'live': 'REAL'}.get(connector.mode)
+    if expected is None or connector.environment != expected:
+        raise ControlError('账户环境与券商模块登记不一致。')
+
+
 def trading_sessions(connector, start, end):
-    """Official US calendar only; live market status remains required before orders.
+    """US equity adapter calendar; live market status remains required before orders.
 
     OpenD excludes holidays/weekends but does not guarantee unscheduled closures.
     https://openapi.moomoo.com/moomoo-api-doc/en/quote/request-trading-days.html
@@ -24,8 +30,7 @@ def trading_sessions(connector, start, end):
     if (type(start) is not date or type(end) is not date or start > end
             or (end-start).days > 366):
         raise ControlError('交易日历日期范围无效，单次最多查询一年。')
-    if connector.mode != 'broker_paper' or connector.environment != 'SIMULATE':
-        raise ControlError('自动调度仅允许绑定的模拟账户。')
+    _validate_environment(connector)
     with connection(connector._settings()) as (sdk, client, _):
         rows = call(client, 'request_trading_days', market=sdk.TradeDateMarket.US,
                     start=start.isoformat(), end=end.isoformat())
@@ -35,29 +40,37 @@ def trading_sessions(connector, start, end):
         days = [date.fromisoformat(row['time']) for row in rows]
         if len(set(days)) != len(days) or any(not start <= day <= end for day in days):
             raise ValueError('invalid calendar')
-        return sorted(days)
+        sessions = []
+        for row, day in sorted(zip(rows, days), key=lambda item: item[1]):
+            # SDK day types are module-specific. Do not teach the generic scheduler
+            # exchange hours or guess unknown/afternoon-only calendar records.
+            closing = {'WHOLE': time(16), 'MORNING': time(13)}.get(row.get('trade_date_type'))
+            if closing is None:
+                raise ValueError('Unsupported exchange day type')
+            sessions.append({'date': day.isoformat(), 'intervals': [{
+                'open': datetime.combine(day, time(9,30), NY).isoformat(),
+                'close': datetime.combine(day, closing, NY).isoformat()}]})
+        return sessions
     except (ValueError, TypeError, KeyError):
         raise ObservationBlocked('券商返回的交易日历无效；未使用工作日推测交易日。') from None
 
 
 def account_observation(connector):
-    if connector.mode != 'broker_paper' or connector.environment != 'SIMULATE':
-        raise ControlError('准备交易仅允许绑定的模拟账户。')
+    _validate_environment(connector)
     with connector._session() as (sdk, client, profile, validate):
         account, _ = _account(sdk, client, profile, lambda: datetime.now(timezone.utc), validate)
         if any(STATUSES.get(r.get('order_status')) not in TERMINAL for r in _orders(sdk, client, profile)):
-            raise ObservationBlocked('模拟账户存在未完成委托，请先核对订单。')
+            raise ObservationBlocked('账户存在未完成委托，请先核对订单。')
         return account
 
 
 def financial_observation(connector):
     """Broker NAV, not execution buying power. No unlock, order writes or ledger reset."""
     from brokers.opend_broker import _scope, _identity, _cash_balance, _number
-    if connector.mode != 'broker_paper' or connector.environment != 'SIMULATE':
-        raise ControlError('账户表现目前仅支持明确绑定的模拟账户。')
+    _validate_environment(connector)
     with connector._session() as (sdk, client, profile, validate):
-        if profile.get('environment') != 'SIMULATE':
-            raise ObservationBlocked('账户环境与模拟模块不一致。')
+        if profile.get('environment') != connector.environment:
+            raise ObservationBlocked('账户环境与模块登记不一致。')
         scope = _scope(sdk, profile)
         funds = records(call(client, 'accinfo_query', **scope, currency=sdk.Currency.USD, refresh_cache=True))
         rows = records(call(client, 'position_list_query', **scope, refresh_cache=True,
@@ -106,22 +119,22 @@ def financial_observation(connector):
             available = float(_cash_balance(fund, profile))
         except OpenDError:
             available = None
-        return dict(environment='SIMULATE', account_ref=_identity(profile), currency='USD',
+        return dict(environment=connector.environment, account_ref=_identity(profile), currency='USD',
+                    market='US', timezone=NY.key, asset_class='equity',
                     as_of=datetime.now(timezone.utc).isoformat(), equity=float(_number(fund.get('total_assets'), True)),
                     cash_total=optional(fund.get('us_cash')), cash_available=available,
                     market_value=optional(fund.get('market_val')), positions=positions, fees=None,
                     open_order_count=sum(STATUSES.get(r.get('order_status')) not in TERMINAL for r in orders),
                     valuation_source='broker', cash_flow_coverage='manual_review_required',
                     limitations=['手续费与出入金未由此接口核实；未知值不按零处理。',
-                                 '持仓盈亏采用券商持仓口径；模拟证券账户不提供完整已实现／未实现盈亏拆分。',
+                                 '持仓盈亏采用券商持仓口径；此接入未汇总完整已实现／未实现盈亏拆分。',
                                  '账户估值为券商查询时的估值，休市时可能沿用最近行情。'])
 
 
 def quote_observation(connector, instruments, max_age, *, now=None):
     supplied_clock = now
     now = now or datetime.now(timezone.utc)
-    if connector.mode != 'broker_paper' or connector.environment != 'SIMULATE':
-        raise ControlError('准备交易仅允许模拟账户。')
+    _validate_environment(connector)
     if not instruments or len(instruments) > 200 or len(set(instruments.values())) != len(instruments):
         raise ControlError('证券映射为空、重复或超出本轮上限。')
     with connection(connector._settings()) as (sdk, client, profile):

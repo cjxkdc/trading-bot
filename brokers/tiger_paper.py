@@ -1,7 +1,7 @@
 """Tiger-hosted paper trading: USD stocks, whole shares, DAY limit orders only."""
 from contextlib import closing
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from hashlib import sha256
@@ -10,19 +10,29 @@ import logging
 from pathlib import Path
 import re
 import sqlite3
+from zoneinfo import ZoneInfo
 
-from framework.contracts import OrderState
+from framework.contracts import OrderState, SubmissionNotAttempted, SubmissionRejected
 from framework.journal import packed, unpack_order, unpack_state
 from framework.trading import Account, Fees, amount
 from platforms.tiger import CONFIG_FILE, GATEWAYS, configuration_check, _masked
 
 ROOT = Path(__file__).resolve().parents[1]
+NY = ZoneInfo('America/New_York')
 METHODS = frozenset({'accounts', 'prime_assets', 'positions', 'orders', 'place_order', 'cancel_order'})
 TERMINAL = {'filled', 'cancelled', 'rejected'}
 
 
 class TigerPaperError(RuntimeError):
     """Only fixed, sanitized messages may cross the adapter boundary."""
+
+
+class TigerSubmissionRejected(SubmissionRejected, TigerPaperError):
+    """Static order validation failed before any ledger row or network call."""
+
+
+class TigerSubmissionNotAttempted(SubmissionNotAttempted, TigerPaperError):
+    """Account/open-order checks failed or disagreed; nothing recorded or sent."""
 
 
 def _value(value):
@@ -96,11 +106,20 @@ def _connect_paper(config_dir):
     return client, account
 
 
-def _orders(client, account):
-    """Paginate all states; absence from a truncated page never proves no open order."""
+def _orders(client, account, *, day=None):
+    """Paginate all states; absence from a truncated page never proves no open order.
+
+    With ``day`` the broker's list is limited to that New York trading day; the
+    default is whatever window the broker returns for the account.
+    """
+    window = {}
+    if day is not None:
+        start = datetime.combine(day, time.min, NY)
+        window = {'start_time': int(start.timestamp() * 1000),
+                  'end_time': int((start + timedelta(days=1)).timestamp() * 1000)}
     token, seen_tokens, rows, ids = '', set(), [], set()
     for _ in range(20):
-        response = _api(client, 'get_orders', account=account, sec_type=None, limit=300, page_token=token)
+        response = _api(client, 'get_orders', account=account, sec_type=None, limit=300, page_token=token, **window)
         if response is None or not isinstance(getattr(response, 'result', None), list):
             raise TigerPaperError('Incomplete Tiger paper order list')
         for row in response.result:
@@ -203,22 +222,22 @@ class TigerPaperConnector:
             db.executescript('''
                 CREATE TABLE binding (account_hash TEXT PRIMARY KEY);
                 CREATE TABLE orders (client_id TEXT PRIMARY KEY, body TEXT NOT NULL,
-                    broker_id TEXT UNIQUE, state TEXT);
+                    broker_id TEXT UNIQUE, state TEXT, created_at TEXT);
             ''')
             db.execute('INSERT INTO binding VALUES (?)', (sha256(account.encode()).hexdigest(),))
             db.commit()
 
-    def connect(self, state_dir, snapshot, fees):
+    def connect(self, state_dir, snapshot, fees, read_only=False):
         path = self._path(state_dir)
         client, account = _connect_paper(self.config_dir)
         symbols = None if snapshot is None else {s.asset_id: s.ticker for s in snapshot.stocks}
-        return TigerPaperBroker(client, account, path, fees, symbol_map=symbols)
+        return TigerPaperBroker(client, account, path, fees, symbol_map=symbols, read_only=read_only)
 
 
 class TigerPaperBroker:
     mode = 'broker_paper'
 
-    def __init__(self, client, account, path, fees=None, clock=None, symbol_map=None):
+    def __init__(self, client, account, path, fees=None, clock=None, symbol_map=None, read_only=False):
         if (not _paper_format(account) or not getattr(client, '_paper_verified', False)
                 or getattr(client, '_paper_account', None) != account):
             raise TigerPaperError('Verified Tiger PAPER account required')
@@ -226,6 +245,8 @@ class TigerPaperBroker:
         self.fees = fees or Fees()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.symbol_map = None if symbol_map is None else dict(symbol_map)
+        # A read-only session queries and proves; it never places or cancels an order.
+        self.read_only = bool(read_only)
         if self.symbol_map is not None and len(set(self.symbol_map.values())) != len(self.symbol_map):
             raise TigerPaperError('Ambiguous asset ID to Tiger ticker mapping')
         path = Path(path).resolve()
@@ -239,6 +260,10 @@ class TigerPaperBroker:
             self.db.execute('SELECT client_id,body,broker_id,state FROM orders LIMIT 0')
             if self.db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise TigerPaperError('Tiger paper ledger integrity check failed')
+            if 'created_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(orders)')}:
+                # Ledgers written before transmission evidence existed gain the column; old rows stay NULL.
+                with self.db:
+                    self.db.execute('ALTER TABLE orders ADD COLUMN created_at TEXT')
         except Exception:
             self.db.close()
             raise TigerPaperError('Invalid Tiger paper ledger; never recreate lost order state') from None
@@ -334,6 +359,8 @@ class TigerPaperBroker:
         return self._save(intent, ticker, remote)
 
     def submit(self, intent):
+        if self.read_only:
+            raise TigerPaperError('Read-only Tiger session cannot submit orders')
         ticker = self._ticker(intent.symbol)
         body = packed(dict(asdict(intent), broker_symbol=ticker))
         prior = self.db.execute('SELECT body FROM orders WHERE client_id=?', (intent.client_id,)).fetchone()
@@ -345,15 +372,22 @@ class TigerPaperBroker:
                 or ticker.startswith('DEMO') or intent.side not in {'BUY', 'SELL'}
                 or amount(intent.quantity, True) != intent.quantity.to_integral_value()
                 or amount(intent.limit_price, True) * intent.quantity > 100000):
-            raise TigerPaperError('Only USD stock whole-share limit orders up to USD 100000 are supported')
-        if self.open_orders():
-            raise TigerPaperError('Tiger paper account has unresolved orders')
-        value = self.account()
+            raise TigerSubmissionRejected('Only USD stock whole-share limit orders up to USD 100000 are supported')
+        # State-dependent checks: a failure is "not attempted", so the executor
+        # keeps the intent planned instead of recording a permanent rejection.
+        try:
+            if self.open_orders():
+                raise TigerSubmissionNotAttempted('Tiger paper account has unresolved orders')
+            value = self.account()
+        except SubmissionNotAttempted:
+            raise
+        except TigerPaperError as exc:
+            raise TigerSubmissionNotAttempted('Pre-submission account query failed') from exc
         if intent.side == 'BUY' and intent.quantity * intent.limit_price + self.fees.estimate(
                 intent.quantity, intent.limit_price) > value.cash:
-            raise TigerPaperError('Insufficient USD paper cash including estimated fees')
+            raise TigerSubmissionNotAttempted('Insufficient USD paper cash including estimated fees')
         if intent.side == 'SELL' and intent.quantity > dict(value.positions).get(intent.symbol, Decimal(0)):
-            raise TigerPaperError('Cannot sell unowned paper shares')
+            raise TigerSubmissionNotAttempted('Cannot sell unowned paper shares')
         from tigeropen.common.util.contract_utils import stock_contract
         from tigeropen.common.util.order_utils import limit_order
         order = limit_order(self.account_id, stock_contract(ticker, 'USD'), intent.side,
@@ -361,7 +395,8 @@ class TigerPaperBroker:
         order.outside_rth, order.user_mark = False, self._tag(intent.client_id)
         # Claim is committed before network I/O. A timeout never permits resubmission.
         with self.db:
-            self.db.execute('INSERT INTO orders VALUES (?,?,NULL,NULL)', (intent.client_id, body))
+            self.db.execute('INSERT INTO orders(client_id,body,created_at) VALUES (?,?,?)',
+                            (intent.client_id, body, self.clock().isoformat()))
         broker_id = _api(self.client, 'place_order', order=order)
         if broker_id is not None:
             if not str(broker_id).isdigit() or int(broker_id) <= 0:
@@ -370,7 +405,47 @@ class TigerPaperBroker:
                 self.db.execute('UPDATE orders SET broker_id=? WHERE client_id=?', (str(broker_id), intent.client_id))
         return self.query(intent.client_id)
 
+    def transmission_evidence(self, client_id):
+        """Read-only proof that an unknown intent never reached Tiger.
+
+        Transmission is proven by a broker order id in this ledger or by an order
+        carrying the intent's user_mark tag in the broker's lists for the intent's
+        creation day, the following day (queued DAY orders) and today. The check
+        is only meaningful on a later trading day.
+        """
+        record = self.db.execute('SELECT created_at,broker_id,state FROM orders WHERE client_id=?', (client_id,)).fetchone()
+        if record is None:
+            return {'transmitted': False, 'ledger_row': False, 'checked_days': []}
+        created, broker_id, state = record
+        if broker_id or (state and unpack_state(state).broker_id):
+            return {'transmitted': True, 'ledger_row': True, 'checked_days': []}
+        if not created:
+            raise TigerPaperError('Untransmitted proof requires the intent creation time; this ledger row predates it')
+        tag = self._tag(client_id)
+        start = datetime.fromisoformat(created).astimezone(NY).date()
+        today = self.clock().astimezone(NY).date()
+        if today <= start:
+            raise TigerPaperError('Untransmitted proof requires a later trading day')
+        days = sorted({start, start + timedelta(days=1), today})
+        for day in days:
+            if any(getattr(r, 'user_mark', None) == tag for r in _orders(self.client, self.account_id, day=day)):
+                return {'transmitted': True, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+        if any(getattr(r, 'user_mark', None) == tag for r in _orders(self.client, self.account_id)):
+            return {'transmitted': True, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+        return {'transmitted': False, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+
+    def retire_untransmitted(self, client_id):
+        """Mark a proven-untransmitted ledger row terminal so it stops blocking new orders."""
+        if self.transmission_evidence(client_id).get('transmitted') is not False:
+            raise TigerPaperError('Only a proven-untransmitted intent can be retired')
+        state = OrderState(client_id, None, 'rejected', Decimal(0))
+        with self.db:
+            self.db.execute('UPDATE orders SET state=? WHERE client_id=? AND broker_id IS NULL',
+                            (packed(asdict(state)), client_id))
+
     def cancel(self, broker_id):
+        if self.read_only:
+            raise TigerPaperError('Read-only Tiger session cannot cancel orders')
         record = self.db.execute('SELECT client_id FROM orders WHERE broker_id=?', (str(broker_id),)).fetchone()
         if record is None:
             raise TigerPaperError('Cancellation is limited to orders owned by this paper ledger')

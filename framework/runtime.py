@@ -7,6 +7,7 @@ from framework.decisions import decide
 from framework.execution import Executor
 from framework.portfolio import PortfolioContext, StockSnapshot
 from framework.trading import Quote
+from framework.market import ExecutionContext, execution_context
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,11 @@ class MarketSnapshot:
     current_information: bool = False
     instruments: Mapping[str, str] | None = None
     clock_offset_seconds: float = 0.
+    execution_context: ExecutionContext | Mapping | None = None
+
+    @property
+    def market(self):
+        return execution_context(self.execution_context)
 
 
 class SnapshotProvider(Protocol):
@@ -44,13 +50,17 @@ class PortfolioRunner:
             raise ValueError("Strategy and data input schemas do not match")
         if snapshot.execution_time.tzinfo is None:
             raise ValueError("Execution timestamp must include timezone")
-        execution_day = snapshot.execution_time.astimezone(ZoneInfo("America/New_York")).date()
+        context = execution_context(snapshot.execution_context)
+        execution_day = snapshot.execution_time.astimezone(ZoneInfo(context.timezone)).date()
         return decide(self.engine, snapshot.stocks, execution_day, self.strategy_spec,
                       input_schema=self.input_schema, context=snapshot.portfolio_context,
-                      current_information=snapshot.current_information)
+                      current_information=snapshot.current_information,
+                      execution_context=context.record() if snapshot.execution_context is not None else None)
 
     def execute(self, decision, snapshot, broker, journal, *, approved_orders=None, expected_account=None,
-                recover=False, before_submit=None):
+                recover=False, before_submit=None, enable_live=False):
+        if broker.mode == "live" and (enable_live is not True or getattr(broker, "live_enabled", False) is not True):
+            raise ValueError("Live execution requires explicit activation for this session")
         # Recompute before execution so a preview cannot be paired with other data.
         if decision != self.plan(snapshot):
             raise ValueError("Preview does not match the supplied market snapshot")

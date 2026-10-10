@@ -118,7 +118,7 @@ class CompositionTests(unittest.TestCase):
         cfg, runner, snapshot, _ = prepare_portfolio(ROOT / "configs/portfolio_config.json", self.snapshot)
         connector = Mock(mode="live")
         with patch.object(assembly, "_build_platform", return_value=connector):
-            with self.assertRaisesRegex(ValueError, "paper connections only"):
+            with self.assertRaisesRegex(ValueError, "local replay account"):
                 with open_paper_session(cfg, snapshot, self.root / "state", runner.fees):
                     self.fail("opened a live session")
         connector.initialize.assert_not_called()

@@ -1,12 +1,12 @@
-"""Provider-neutral paper reconciliation and exact frozen-batch continuation."""
+"""Provider-neutral reconciliation and exact frozen-batch continuation."""
 from app.control_contracts import ControlError
 from framework.execution import Executor
 
 
 def reconcile_orders(*, control, policy, fees):
     """Read broker status after a restart or the close; never submit/cancel/reprice."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         return {'status': 'complete', 'recovery_state': 'complete',
                 'message': '尚未创建执行账本，没有本程序的订单需要核对。',
@@ -22,8 +22,19 @@ def reconcile_orders(*, control, policy, fees):
     }
     statuses = {item['status'] for item in report['orders']}
     if state == 'blocked' and not statuses - {'planned', 'cancelled', 'rejected'}:
-        messages['blocked'] = (f"有 {report['terminal']} 笔委托已被券商撤销或拒绝，自动执行已暂停。"
+        local = sum(item.get('transmission_started') is False for item in report['orders'] if item['status'] == 'rejected')
+        remote = report['terminal'] - local
+        parts = []
+        if remote:
+            parts.append(f'有 {remote} 笔委托已被券商撤销或拒绝')
+        if local:
+            parts.append(f'有 {local} 笔委托在发送前被本地检查拒绝（券商未收到）')
+        messages['blocked'] = ('；'.join(parts) + '，自动执行已暂停。'
                                '在券商端核对后，可用「关闭已撤单/拒单」结束本批次；不会补单或撤单。')
+    if state == 'blocked' and report.get('untransmitted'):
+        messages['blocked'] = (f"有 {report['untransmitted']} 笔委托状态不明且没有券商回执（可能从未送达）。"
+                               '请先在券商端确认当日及之后的订单里没有这些委托；确认后可用「确认未发送并关闭」结束它们，'
+                               '否则账户会一直无法执行新委托。')
     if state == 'complete' and report.get('abandoned'):
         messages['complete'] = f"账本已核对，无待处理委托；历史上有 {report['abandoned']} 笔未提交计划已明确放弃，不代表组合达到目标仓位。"
     return {'status': 'paused' if state in {'waiting', 'blocked'} else state,
@@ -32,8 +43,8 @@ def reconcile_orders(*, control, policy, fees):
 
 def close_unsubmitted(*, control, policy, fees):
     """Explicit user-confirmed closure; authorization is enforced by the Portal caller."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         raise ControlError('没有执行账本，无法关闭未提交的订单计划。')
     with control.reconciliation_session(fees) as (broker, journal):
@@ -45,8 +56,8 @@ def close_unsubmitted(*, control, policy, fees):
 
 def close_terminal(*, control, policy, fees):
     """Explicit user-confirmed closure of broker-confirmed cancelled/rejected orders."""
-    if control.mode != 'broker_paper' or not callable(getattr(control, 'reconciliation_session', None)):
-        raise ControlError('当前券商没有声明模拟订单核对能力。')
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
     if not control.state_dir.exists():
         raise ControlError('没有执行账本，无需关闭委托。')
     with control.reconciliation_session(fees) as (broker, journal):
@@ -56,6 +67,19 @@ def close_terminal(*, control, policy, fees):
     return {'status': 'complete', 'recovery_state': report['recovery_state'], 'details': report,
             'message': f'已关闭 {closed} 笔券商确认撤销或拒绝的委托{tail}，审计记录已保存；'
                        '已成交部分按实际持仓保留，未补单、未撤单，不代表达到目标仓位。'}
+
+
+def close_untransmitted(*, control, policy, fees):
+    """Explicit user-confirmed closure of unknown intents the broker provably never received."""
+    if control.mode not in {'broker_paper','live'} or not callable(getattr(control, 'reconciliation_session', None)):
+        raise ControlError('当前券商没有声明订单核对能力。')
+    if not control.state_dir.exists():
+        raise ControlError('没有执行账本，无需关闭委托。')
+    with control.reconciliation_session(fees) as (broker, journal):
+        report = Executor(broker, journal, policy, fees).close_untransmitted()
+    return {'status': 'complete', 'recovery_state': report['recovery_state'], 'details': report,
+            'message': f"已关闭 {report['newly_closed']} 笔从未送达券商的委托，审计记录（含券商查询结果）已保存；"
+                       '未补单、未撤单，不代表达到目标仓位。'}
 
 
 def recover_prepared(*, root, raw, context, token, source, runner, control, cfg, clock,

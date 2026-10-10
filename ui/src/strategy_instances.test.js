@@ -45,3 +45,17 @@ test('a draft chooses registered modules without assuming a vendor', () => {
   const value = instanceDraft(state);
   assert.equal(value.broker_id, 'new_broker'); assert.equal(value.source_id, 'new_data');
 });
+
+test('creating from a strategy workspace does not silently use another strategy', () => {
+  const state = { strategy_name: 'Global', strategy: { type: 'global', lookback: 20 },
+    strategies: [{ type: 'chosen', name: 'Chosen', enabled: true, defaults: { lookback: 40 } }],
+    broker: { id: 'local', mode: 'paper' }, brokers: [], source: 'data', sources: [] };
+  const draft = instanceDraft(state, null, 'chosen');
+  assert.deepEqual(draft.strategy, { type: 'chosen', lookback: 40 });
+  assert.match(draft.name, /Chosen/);
+  assert.equal(draft.broker_id, '');
+  assert.deepEqual(state.strategy, { type: 'global', lookback: 20 });
+  assert.throws(() => instanceDraft(state, null, 'deleted'), /不可用/);
+  const existing = { name: 'Existing', strategy: { type: 'global', lookback: 7 }, budget: .2, schedule: {} };
+  assert.deepEqual(instanceDraft(state, existing, 'chosen').strategy, existing.strategy);
+});

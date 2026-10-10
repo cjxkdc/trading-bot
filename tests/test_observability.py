@@ -243,9 +243,10 @@ class MonitoringServiceTests(unittest.TestCase):
     def test_monitor_still_runs_while_automation_is_off_and_does_not_enable_it(self):
         service=self.service
         self.assertFalse(service.automation.data['enabled'])
-        with patch.object(service.registry,'descriptor',return_value={'capabilities':['observe']}), patch.object(service,'start') as start, patch.object(service.monitor,'pump'):
+        with patch.object(service.registry,'descriptor',return_value={'capabilities':['observe']}), patch.object(service,'start') as start, patch.object(service.monitor,'pump'), patch.object(service.monitor,'scope',return_value='bound-account'):
             service.monitoring_poll()
             start.assert_called_once_with('observe')
+            self.assertIsNone(service.monitor.unconfigured)
             self.assertFalse(service.automation.data['enabled'])
             service.active={'action':'execute'};service.monitor.next_observation=0
             service.monitoring_poll();start.assert_called_once()

@@ -45,7 +45,7 @@ def run_live(snapshot_path, config_path, state_dir=None, *, enable_live=False, u
                 broker.unlock(password)
             finally:
                 del password
-        return dict(runner.execute(decision, snapshot, broker, journal), mode='live')
+        return dict(runner.execute(decision, snapshot, broker, journal, enable_live=True), mode='live')
 
 
 def export_backtest(config_path, out, *, start=None, end=None, slippage_bps=None, note="", schedule=None):

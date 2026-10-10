@@ -12,9 +12,11 @@ from app.control_contracts import ControlError, project_path
 from framework.configuration import load_config, normalize_config
 from framework.decisions import digest
 from app.strategy_documentation import strategy_documentation
+from app.execution_policy import ACCOUNT_ENVIRONMENTS, CURRENT_EXECUTION_POLICY, load_execution_policy
 
-ALLOWED_MODES = {'paper', 'broker_paper'}
-MODE_LABELS = {'paper': '本地回放', 'broker_paper': '模拟账户', 'live': '实盘'}
+# Compatibility names for callers; policy and environment definitions have one owner.
+ALLOWED_MODES = CURRENT_EXECUTION_POLICY.allowed_environments
+MODE_LABELS = ACCOUNT_ENVIRONMENTS
 
 
 def load_class(entrypoint, namespace):
@@ -87,12 +89,13 @@ class ModuleRegistry:
         profile, entry = self.resolve(kind, ident)
         control = entry['control']
         mode = control.get('mode')
-        enabled = kind != 'broker' or mode in ALLOWED_MODES
+        enabled = kind != 'broker' or CURRENT_EXECUTION_POLICY.allows(mode)
         if enabled:
             cls = load_class(control['entrypoint'], {'data': 'data', 'broker': 'brokers'}[kind])
             methods = ({'collect': ('collect',), 'inspect': ('inspect',), 'configure': ('configure',),
-                        'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',)}
+                        'cancel': ('cancel',), 'preview': ('load',), 'upload': ('load',), 'paper_signal': ('paper_signal',), 'execution_signal': ('execution_signal',)}
                        if kind == 'data' else {'inspect': ('inspect',), 'execute': ('session',),
+                                             'configure': ('configure', 'public_settings'),
                                              'prepare': ('observe_account', 'observe_quotes'),
                                              'calendar': ('trading_sessions',), 'reconcile': ('reconciliation_session',),
                                              'observe': ('financial_observation', 'financial_account_reference')})
@@ -103,10 +106,39 @@ class ModuleRegistry:
                 'description': entry.get('description', ''), 'version': entry['version'],
                 'capabilities': control.get('capabilities', []),
                 'fields': control.get('settings_fields', []), 'mode': mode,
+                'configuration_family': control.get('configuration_family', entry['type']),
                 'mode_label': MODE_LABELS.get(mode, ''), 'enabled': enabled,
                 'authentication': control.get('authentication', {'mode': 'local' if mode == 'paper' else 'external',
                     'title': '本地回放' if mode == 'paper' else '券商客户端或 API 配置'}),
-                'reason': None if enabled else '当前工作台仅启用模拟与本地回放。'}
+                'reason': None if enabled else CURRENT_EXECUTION_POLICY.rejection_reason(mode),
+                **(self.execution_descriptor(ident, profile, entry) if kind == 'broker' and enabled else {})}
+
+    def execution_descriptor(self, ident, profile, entry):
+        mode = entry['control'].get('mode')
+        cls = load_class(entry['control']['entrypoint'], 'brokers')
+        adapter = cls(self.root, profile, entry)
+        adapter.instance_id = ident
+        try:
+            reference_method = getattr(adapter, 'execution_account_reference', None)
+            if mode == 'live' and not callable(reference_method):
+                raise ControlError('实盘模块必须提供独立验证的账户身份。')
+            account_ref = reference_method() if mode == 'live' else None
+            reason = load_execution_policy(self.root).execution_rejection(mode, ident, account_ref)
+        except (ControlError, ValueError, RuntimeError):
+            reason = '账户绑定或服务器执行授权尚未完成；账户检查仍可使用。'
+        if 'execute' not in entry['control'].get('capabilities', []):
+            reason = '此账户模块只提供读取能力，未声明订单执行。'
+        context = adapter.execution_context() if callable(getattr(adapter, 'execution_context', None)) else None
+        return {'execution_enabled': reason is None, 'execution_reason': reason,
+                'execution_context': context,
+                'order_capabilities': deepcopy(entry['control'].get('order_capabilities', {})),
+                **({'settings': adapter.public_settings(), 'settings_revision': adapter.config_revision()}
+                   if 'configure' in entry['control'].get('capabilities', []) else {})}
+
+    def require_execution(self, broker_id):
+        control = self.control('broker', broker_id)
+        control.require_execution()
+        return control
 
     def descriptors(self, kind):
         result = []
@@ -115,8 +147,23 @@ class ModuleRegistry:
                 result.append(self.descriptor(kind, ident))
             except ControlError as exc:
                 result.append(self.unavailable(ident, str(exc)))
+            except Exception:
+                # One malformed profile (a missing field, an adapter import error)
+                # must not take the whole workbench state down with a 422.
+                result.append(self.unavailable(ident, '该模块实例的配置或代码无法加载，请检查登记文件。'))
         result.extend(dict(i) for i in self.catalog(kind).issues)
         return result
+
+    def secret_fields(self):
+        """Names of module settings declared secret, taken from the manifests alone.
+
+        Redaction runs on every progress message. Reading the two catalogs is
+        cheap; building full descriptors (which instantiates adapters) is not,
+        and a manifest declares the same fields for every instance of a module.
+        """
+        return {field['name'] for kind in ('data', 'broker') for entry in self.catalog(kind).values()
+                for field in entry.get('control', {}).get('settings_fields', [])
+                if isinstance(field, dict) and field.get('secret')}
 
     @staticmethod
     def unavailable(ident, reason):
@@ -126,8 +173,8 @@ class ModuleRegistry:
 
     def control(self, kind, ident, *, config=None, bind_request=True):
         profile, entry = self.resolve(kind, ident)
-        if kind == 'broker' and entry['control'].get('mode') not in ALLOWED_MODES:
-            raise ControlError('当前执行权限不允许使用此账户环境。')
+        if kind == 'broker':
+            CURRENT_EXECUTION_POLICY.require(entry['control'].get('mode'))
         cls = load_class(entry['control']['entrypoint'], {'data': 'data', 'broker': 'brokers'}[kind])
         adapter = cls(self.root, profile, entry)
         adapter.instance_id = ident
@@ -159,8 +206,7 @@ class ModuleRegistry:
         profile, entry = self.resolve('broker', broker_id)
         cfg['broker'] = deepcopy(profile)
         # Connection construction and canonical ledger ownership belong to the adapter.
-        if entry['control'].get('mode') not in ALLOWED_MODES:
-            raise ControlError('当前执行权限不允许实盘。')
+        CURRENT_EXECUTION_POLICY.require(entry['control'].get('mode'))
         return cfg
 
     def version(self):

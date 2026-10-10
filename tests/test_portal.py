@@ -113,10 +113,13 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/jobs', json={'action': 'configure-data'}).status_code, 409)
         self.assertEqual(self.calls, [])
 
-    def test_simulation_config_guard_runs_before_any_worker(self):
+    def test_repointing_profile_to_live_cannot_gain_execution_permission(self):
         atomic_json(self.root / 'configs/futu_paper_config.json', {'extends': 'portfolio_config.json',
                     'broker': {'type': 'futu_live', 'config_dir': 'secrets/futu', 'state_dir': 'runs/futu-paper'}})
-        response = self.client.post('/api/jobs', json={'action': 'status'})
+        state = self.client.get('/api/state').json()
+        self.assertEqual(state['broker']['mode'], 'live')
+        self.assertFalse(state['broker']['execution_enabled'])
+        response = self.client.post('/api/jobs', json={'action': 'execute', 'confirmation': 'futu_paper'})
         self.assertEqual(response.status_code, 409)
         self.assertFalse(self.calls)
 
@@ -354,15 +357,18 @@ class PortalTests(unittest.TestCase):
         self.assertEqual(inspected['status'], 'connected')
         self.assertFalse(inspected['details']['network_requested'])
 
-    def test_live_modules_remain_listed_but_cannot_be_selected(self):
+    def test_live_modules_can_be_selected_but_selection_does_not_authorize_execution(self):
         state = self.client.get('/api/state').json()
         live = [p for p in state['brokers'] if p.get('mode') == 'live']
         self.assertTrue(live)
         for item in live:
-            self.assertFalse(item['enabled'])
-            self.assertEqual(self.client.post('/api/broker', json={'broker': item['id']}).status_code, 409)
+            self.assertTrue(item['enabled'])
+            self.assertFalse(item['execution_enabled'])
+            self.assertEqual(self.client.post('/api/broker', json={'broker': item['id']}).status_code, 200)
+            selected = self.client.get('/api/state').json()
+            self.assertFalse(selected['actions']['execute']['enabled'])
         self.assertFalse(self.calls)
-        self.assertEqual(self.service.broker_id, 'futu_paper')
+        self.assertEqual(self.service.broker_id, live[-1]['id'])
 
     def test_actual_connector_mode_cannot_be_relabelled_by_manifest(self):
         self.register_alternatives()

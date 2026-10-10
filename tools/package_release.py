@@ -40,10 +40,12 @@ def public_files(root, variant):
             for name in sorted(names):
                 path = current / name
                 relative = path.relative_to(root)
+                if relative.parts[:3] == ('tests', 'fixtures', 'strategy_samples'):
+                    continue  # Test-only plugins never belong to an installed strategy library.
                 if path.is_symlink() or not path.resolve().is_relative_to(root):
                     continue
                 if (path.suffix not in SUFFIXES or name == 'connection.json' or name.startswith('.')
-                        or relative.as_posix() == 'configs/portal/cloud.json'):
+                        or relative.as_posix() in {'configs/portal/cloud.json', 'configs/execution_policy.json'}):
                     continue
                 files.append(path)
     return sorted(set(files))
@@ -85,7 +87,7 @@ def package(root, output, variant, *, launcher=None):
         bundle.writestr('Trading-bot/release-manifest.json', json.dumps({
             'format_version': 2, 'variant': variant, 'created_at': datetime.now(timezone.utc).isoformat(),
             'credentials_included': False, 'runtime_state_included': False,
-            'execution_policy': 'simulation_only', 'sha256': records}, indent=2))
+            'execution_policy': 'account_scoped', 'sha256': records}, indent=2))
     os.replace(temporary, archive)
     archive.with_suffix('.zip.sha256').write_text(sha256(archive.read_bytes()).hexdigest() + '  ' + archive.name + '\n', encoding='ascii')
     return archive

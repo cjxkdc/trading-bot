@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import math
 from zoneinfo import ZoneInfo
 
-NY = ZoneInfo('America/New_York')
+LEGACY_TIMEZONE = 'America/New_York'
 PERIODS = ('1W', '1M', '3M', 'YTD', 'ALL')
 
 
@@ -12,8 +12,8 @@ def at(value):
     return datetime.fromisoformat(value)
 
 
-def cutoff(latest, period):
-    local = at(latest).astimezone(NY)
+def cutoff(latest, period, market_timezone=LEGACY_TIMEZONE):
+    local = at(latest).astimezone(ZoneInfo(market_timezone))
     if period == 'ALL':
         return None
     if period == '1W':
@@ -76,10 +76,10 @@ def analyze_window(items, flows, reviewed_through):
                 verified=verified, observations=len(items))
 
 
-def period_reports(items, flows, reviewed_through):
+def period_reports(items, flows, reviewed_through, market_timezone=LEGACY_TIMEZONE):
     result = {}
     for period in PERIODS:
-        lower = cutoff(items[-1]['as_of'], period) if items else None
+        lower = cutoff(items[-1]['as_of'], period, market_timezone) if items else None
         # Never invent a boundary price or borrow an observation outside the range.
         window = [item for item in items if lower is None or at(item['as_of']) >= lower]
         result[period] = analyze_window(window, flows, reviewed_through)
@@ -88,7 +88,7 @@ def period_reports(items, flows, reviewed_through):
 
 
 def position_summary(positions):
-    held = [p for p in positions if p['quantity'] > 0]
+    held = [p for p in positions if p['quantity'] != 0]
     values = [p.get('position_pnl') for p in held]
     covered = sum(value is not None for value in values)
     return dict(position_count=len(held), pnl_covered_count=covered,

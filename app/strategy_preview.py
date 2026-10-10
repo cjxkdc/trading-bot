@@ -44,7 +44,7 @@ def preview(root, item, progress, *, clock=None):
     positions = quantities(held_positions)
     held = tuple(s.asset_id for s in loaded.stocks if s.ticker in positions)
     progress('使用已有数据计算选股，不连接券商…')
-    targets = selection(root, item, loaded.stocks, clock.astimezone(ZoneInfo('America/New_York')).date(),
+    targets = selection(root, item, loaded.stocks, clock.astimezone(ZoneInfo(registry.descriptor('broker', item['broker_id'])['execution_context']['timezone'])).date(),
                         held, policy_from_config(cfg), item['_selection_timeout_seconds'])
     budget = amount(item['budget'], True)
     if budget > 1:

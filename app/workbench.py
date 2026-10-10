@@ -1,24 +1,30 @@
 """Portal state and jobs. No trading logic or vendor SDK lives in the UI layer."""
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
+import logging
+import os
 from pathlib import Path
 import re
 import threading
 import time
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from backtests.experiments import (compare_results, import_result, read_json,
                                   validate_export, verified_record)
-from backtests.quantconnect.results import parse_result
+from backtests.replay import parse_any, replay
 from bot import export_backtest
+from app.assembly import build_portfolio_strategy
+from data.snapshot import load_snapshot
 from framework.configuration import load_config, normalize_config
 from app.control_contracts import ControlError
 from app.diagnostics import failure_details
 from app.operations import WORKBENCH_ACTIONS, BROKER_CHECKS, DATA_CAPABILITIES, context_for
 from app.readiness import operation_states
 from app.module_registry import ModuleRegistry
+from app.market_status import selected_market_session
 from app.task_client import run_worker
 from app.broker_session import BrokerSession
 from app.broker_authorization import BrokerAuthorization
@@ -27,9 +33,30 @@ from app.automation import Automation
 from app.monitoring import Monitoring
 from app.strategy_instances import StrategyInstances
 from app.strategy_files import StrategyFiles
+from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
+from app.logs import incident_id, log_exception
+from app.atomic import replace_file
+from app.backfill import Backfill, CADENCES, MAX_DATES, covered, estimate_requests, schedule_dates
+from app.instance_attribution import attribute
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
+_UNSPECIFIED_STRATEGY = object()
+log = logging.getLogger('trading_bot.workbench')
+
+
+def check_expected_strategy(expected, actual):
+    """Bind new workspace exports to the strategy the user is viewing.
+
+    Omission keeps older clients compatible; explicit null or other malformed
+    values are rejected. Call under the service lock, before writing files.
+    """
+    if expected is _UNSPECIFIED_STRATEGY:
+        return
+    if not isinstance(expected, str) or not expected.strip():
+        raise PortalError('预期策略编号必须为非空文本。')
+    if expected != actual:
+        raise PortalError('配置的策略已变化，请刷新策略工作区后重新导出。')
 
 
 def now():
@@ -41,8 +68,11 @@ def atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name('.' + uuid4().hex + '.tmp')
     try:
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
-        temporary.replace(path)
+        with temporary.open('w', encoding='utf-8') as handle:
+            handle.write(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -61,6 +91,18 @@ def public(value, secret_fields=(), secret_values=()):
             if secret:
                 value = value.replace(secret, '[redacted]')
     return value
+
+
+def cycle_fills(cycle, orders):
+    """Journal rows for a recorded rebalance, matched by the client order ids it submitted.
+
+    The journal keys batches by account and execution day, not by decision id,
+    so the client order id is the only link that both stores keep.
+    """
+    ids = {str(o.get('client_order_id') or o.get('client_id') or '')
+           for o in (cycle.get('orders') or []) if isinstance(o, dict)}
+    ids.discard('')
+    return [o for o in orders if str(o.get('id')) in ids]
 
 
 class PortalService:
@@ -116,6 +158,7 @@ class PortalService:
         self.monitor = Monitoring(self.root, self.registry)
         self.strategy_instances = StrategyInstances(self.root, self.registry, lock=self.lock, recover_pending=True)
         self.strategy_files = StrategyFiles(self.root, self.registry)
+        self.backfill = Backfill(self.root)
         self.scheduler_stop = threading.Event()
         self.scheduler_wake = threading.Event()
         self.scheduler_thread = None
@@ -134,9 +177,8 @@ class PortalService:
         return normalize_config(load_config(self.root / 'configs/portfolio_config.json')), self.registry.version()
 
     def _public(self, value, secret_values=()):
-        fields = {f['name'] for kind in ('data', 'broker') for entry in self.registry.descriptors(kind)
-                  for f in entry.get('fields', []) if f.get('secret')}
-        return public(value, fields, secret_values)
+        # Runs on every progress message: read the manifests, do not build descriptors.
+        return public(value, self.registry.secret_fields(), secret_values)
 
     def strategies(self):
         return self.registry.strategies()
@@ -162,7 +204,7 @@ class PortalService:
             if action in {'start', 'once'}:
                 item = manager.get(ident)
                 if value != {'confirmation': ident}:
-                    raise PortalError('请确认所选策略实例和模拟账户。')
+                    raise PortalError('请确认所选策略实例和账户。')
                 if self.automation.data['enabled'] and self.same_account_profile(self.automation.data['binding']['broker_id'], item['broker_id']):
                     raise PortalError('此账户的旧自动计划仍在运行，请先关闭，再启动策略实例。')
                 result = manager.start(ident) if action == 'start' else manager.run_once(ident)
@@ -213,9 +255,12 @@ class PortalService:
     def export_instance(self, ident, value):
         with self.lock:
             self.idle()
-            if not isinstance(value, dict) or set(value) != {'start', 'end', 'slippage_bps'}:
+            if (not isinstance(value, dict) or not {'start', 'end', 'slippage_bps'} <= set(value)
+                    or set(value) - {'start', 'end', 'slippage_bps', 'expected_strategy_type'}):
                 raise PortalError('请填写回测区间和滑点。')
             item = self.strategy_instances.get(ident)
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY),
+                                    item['strategy']['type'])
             cfg = load_config(self.root / 'configs/portfolio_config.json')
             cfg['strategy'] = deepcopy(item['strategy'])
             instance_file = self.folder / 'instance-configs' / (uuid4().hex + '.json')
@@ -229,6 +274,23 @@ class PortalService:
             finally:
                 instance_file.unlink(missing_ok=True)
             return {'id': experiment, 'message': '已按此实例参数和计划导出 QuantConnect 回测代码。'}
+
+    def instance_attribution(self, ident):
+        """Valuation and P&L of one instance from its share of the broker's book."""
+        with self.lock:
+            item = self.strategy_instances.get(ident)
+            broker_id = item['broker_id']
+            cycles = self.strategy_instances.cycle_history(broker_id)
+            observations = []
+            try:
+                observations = self.monitor.performance.positions_history(self.monitor.scope(broker_id))
+            except (ControlError, ValueError, OSError):
+                pass  # no observation capability or history: value stays unknown, not zero
+            try:
+                fills = self.orders(broker_id).get('items', [])
+            except (ControlError, ValueError, OSError):
+                fills = []
+        return self._public(attribute(ident, cycles, observations, fills))
 
     def strategy_instance_job(self, ident, action):
         with self.lock:
@@ -292,17 +354,41 @@ class PortalService:
                         for broker_id in affected:
                             self.strategy_instances.pause_account(broker_id, result['message'])
             with self.lock:
-                safe = self._public(result)
-                job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())
-                self.jobs = [job, *self.jobs][:40]
-                self._save_job(job)
-                self.clear_preview()
-                self.account = None
-                self.broker_session.clear()
-                self.active = None
+                try:
+                    safe = self._public(result)
+                    if action == 'strategy-cycle' and safe.get('idle') is True:
+                        # Nothing was due: no job record, no event, and the manual
+                        # account verification stays intact. Polls happen every 30 s.
+                        return
+                    job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())
+                    self.jobs = [job, *self.jobs][:40]
+                    self._save_job(job)
+                    self.clear_preview()
+                    self.account = None
+                    self.broker_session.clear()
+                except Exception as exc:
+                    self._finalization_failed(job, exc)
+                finally:
+                    # Whatever happens while recording the result, the single-flight
+                    # slot is released; a stuck 'active' would freeze every poll.
+                    if self.active is job:
+                        self.active = None
         self.thread = threading.Thread(target=work, name='managed-strategy-worker', daemon=False)
         self.thread.start()
         return {'job_id': job['id']}
+
+    def _finalization_failed(self, job, exc):
+        """Record (never raise) a failure while finishing a job; the caller releases the slot."""
+        ident = incident_id()
+        log_exception(log, f"job finalization {job.get('action')}", exc, ident)
+        job.update(status='interrupted', finished_at=now(),
+                   message=f'任务已结束，但记录结果时出现异常，请核对运行记录。（诊断编号 {ident}）')
+        try:
+            if job not in self.jobs:
+                self.jobs = [job, *self.jobs][:40]
+            self._save_job(job)
+        except Exception:
+            pass
 
     def strategy_instances_poll(self):
         with self.lock:
@@ -410,6 +496,11 @@ class PortalService:
             self._save_preferences()
             return {'message': '券商模块已切换，请重新检查账户与预览。'}
 
+    def configure_broker(self, value):
+        from app.broker_settings import configure_broker
+        with self.lock:
+            return configure_broker(self, value)
+
     def switch_issues(self):
         details = (self.account or {}).get('details', {})
         if details.get('open_order_count', 0):
@@ -449,7 +540,7 @@ class PortalService:
                 raise PortalError('授权请求已失效，请从当前券商模块重新开始。')
             try:
                 self.authorization.finish(state, code)
-                self.authorization_notice = '网页授权完成，请选择美股模拟账户并检查连接。'
+                self.authorization_notice = '网页授权完成，请选择返回的账户并检查连接。'
             except ControlError:
                 self.authorization_notice = '网页授权未完成，请重新开始并仅授权账户读取。'
                 raise
@@ -479,11 +570,23 @@ class PortalService:
         with self.lock:
             self.idle()
             self.switch_issues()
+            if any(item['enabled'] and item['broker_id'] == self.broker_id
+                   for item in self.strategy_instances.data.get('instances', [])):
+                raise PortalError('此账户仍有已开启的策略实例，请先停止实例再断开账户。')
+            notes = []
             if self.automation.data['enabled']:
                 self.automation.disable()
+                notes.append('单策略计划已关闭')
             self.disconnect_authorization()
-            self.monitor.configure({'enabled':False})
-            return {'message': '当前账户在本程序中已停用；官方客户端登录和券商端授权需分别退出或撤销。'}
+            if self.monitor.settings.config['enabled']:
+                # Pause observation of this account without discarding queued
+                # notifications (other accounts' alerts stay in the outbox).
+                self.monitor.settings.save({'enabled': False})
+                self.monitor.next_observation = 0
+                notes.append('账户定时监控已关闭')
+            self.monitor.error = self.monitor.unconfigured = None
+            tail = ('；' + '，'.join(notes)) if notes else ''
+            return {'message': f'当前账户在本程序中已停用{tail}；官方客户端登录和券商端授权需分别退出或撤销。'}
 
     def snapshot(self, sources=None):
         if self.selected_snapshot:
@@ -518,9 +621,23 @@ class PortalService:
             self.clear_preview()
             return meta
 
-    def orders(self):
+    def view_broker(self, broker_id=None):
+        """Resolve the account a read-only view refers to.
+
+        The account page may look at any registered account's ledger and
+        performance history without changing the operating account (which owns
+        previews, authorization and the single-strategy plan binding).
+        """
+        if broker_id in (None, '', self.broker_id):
+            return self.broker_id
+        if not isinstance(broker_id, str) or not any(item['id'] == broker_id for item in self.registry.descriptors('broker')):
+            raise PortalError('要查看的账户不存在。')
+        return broker_id
+
+    def orders(self, broker_id=None):
         with self.lock:
-            control = self.registry.control('broker', self.broker_id)
+            broker_id = self.broker_id if broker_id in (None, '') else self.view_broker(broker_id)
+            control = self.registry.control('broker', broker_id)
             path = control.journal_path
             # Connector construction supplies the canonical filename only; no
             # settings, account binding, broker inspection or session is opened.
@@ -532,74 +649,79 @@ class PortalService:
         except JournalReadError as exc:
             return {'items': [], 'message': str(exc)}
 
-    def performance(self):
+    def performance(self, broker_id=None):
         with self.lock:
+            viewed = broker_id if isinstance(broker_id, str) and broker_id else self.broker_id
             try:
-                scope = self.monitor.scope(self.broker_id)
+                viewed = self.view_broker(broker_id)
+                scope = self.monitor.scope(viewed)
                 report = self.monitor.performance.report(scope)
                 try:
-                    orders = self.orders()['items']
+                    orders = self.orders(viewed)['items']
                     for cycle in report['cycles']:
-                        cycle['fills'] = [o for o in orders if o.get('cycle') == cycle['decision_id']]
+                        cycle['fills'] = cycle_fills(cycle, orders)
                 except (ValueError, OSError):
                     pass
-                report['broker_id'] = self.broker_id
+                report['broker_id'] = viewed
                 report['account_key'] = sha256(scope.encode()).hexdigest()
-                report['view_token'] = self._performance_token(scope,report.get('latest'))
+                report['view_token'] = self._performance_token(scope, report.get('latest'), viewed)
                 return self._public(report)
             except ControlError as exc:
                 return dict(latest=None,curve=[],cycles=[],positions=[],cash_events=[],metrics={},
-                            message=str(exc), broker_id=self.broker_id)
+                            message=str(exc), broker_id=viewed)
 
-    def performance_candles(self, interval='1h', limit=96, account_key=None):
+    def performance_candles(self, interval='1h', limit=96, account_key=None, broker_id=None):
         from framework.account_candles import validate_period
         try:
             validate_period(interval, limit)
         except ValueError:
             raise PortalError('K 线周期或数量无效。') from None
         with self.lock:
+            viewed = self.view_broker(broker_id)
             try:
-                scope = self.monitor.scope(self.broker_id)
+                scope = self.monitor.scope(viewed)
             except ControlError as exc:
-                return dict(bars=[], interval=interval, broker_id=self.broker_id, message=str(exc))
+                return dict(bars=[], interval=interval, broker_id=viewed, message=str(exc))
             current_key = sha256(scope.encode()).hexdigest()
             if account_key is not None and account_key != current_key:
                 raise PortalError('账户绑定已变化，请刷新账户表现。')
             report = self.monitor.performance.candles(scope, interval, limit)
-            report.update(broker_id=self.broker_id, account_key=current_key,
+            report.update(broker_id=viewed, account_key=current_key,
                           interval_seconds=self.monitor.settings.config['interval_seconds'])
             return self._public(report)
 
     def performance_cash_event(self, value):
         with self.lock:
             value = dict(value)
-            scope = self._check_performance_token(value.pop('view_token',None))
+            viewed = value.pop('broker', None)
+            scope = self._check_performance_token(value.pop('view_token',None), viewed)
             self.monitor.performance.cash_event(scope,value)
             return {'message':'资金事件已记录，请重新核对统计区间。'}
 
     def performance_review(self, value):
-        if set(value) != {'through','view_token'}:
+        if not {'through','view_token'} <= set(value) or set(value) - {'through','view_token','broker'}:
             raise PortalError('请核对最新账户记录。')
         with self.lock:
-            scope = self._check_performance_token(value['view_token'])
+            scope = self._check_performance_token(value['view_token'], value.get('broker'))
             self.monitor.performance.review_cash(scope,value['through'])
             return {'message':'已记录本次资金流水核对。'}
 
-    def _performance_token(self, scope, latest):
-        return sha256((scope+self.broker_id+str((latest or {}).get('as_of'))).encode()).hexdigest()
+    def _performance_token(self, scope, latest, broker_id=None):
+        return sha256((scope+(broker_id or self.broker_id)+str((latest or {}).get('as_of'))).encode()).hexdigest()
 
-    def _check_performance_token(self, token):
-        scope = self.monitor.scope(self.broker_id)
+    def _check_performance_token(self, token, broker_id=None):
+        viewed = self.view_broker(broker_id)
+        scope = self.monitor.scope(viewed)
         latest = self.monitor.performance.report(scope).get('latest')
-        if not latest or token != self._performance_token(scope,latest):
+        if not latest or token != self._performance_token(scope, latest, viewed):
             raise PortalError('账户或观测记录已变化，请刷新后重新核对。')
         return scope
 
     def performance_remove_event(self,value):
-        if set(value) != {'id','view_token'}:
+        if not {'id','view_token'} <= set(value) or set(value) - {'id','view_token','broker'}:
             raise PortalError('资金记录参数无效。')
         with self.lock:
-            scope = self._check_performance_token(value['view_token'])
+            scope = self._check_performance_token(value['view_token'], value.get('broker'))
             self.monitor.performance.remove_cash_event(scope,value['id'])
             return {'message':'错误记录已移除，请重新核对统计区间。'}
 
@@ -609,6 +731,7 @@ class PortalService:
 
     def _record_observation(self, action, broker, result, scope=None):
         # Reporting failure must not change an already confirmed execution result.
+        notify = self.monitor.settings.config['channel'] != 'none'
         try:
             if action == 'observe':
                 self.monitor.observed(broker,result,scope)
@@ -617,9 +740,12 @@ class PortalService:
                 self.monitor.cycle(broker,result,self.config()[0]['strategy'])
             if action in {'execute','recover','reconcile'}:
                 self.monitor.next_observation = 0
+            self.monitor.events.transition('reporting:'+broker, True, '账户表现记录已恢复。', 'positions', notify=notify)
         except Exception:
             self.monitor.error = '账户表现记录未通过校验，已有交易结果与历史记录已保留。'
-            self.monitor.emit('reporting:'+broker+now(),self.monitor.error,'error','positions')
+            # One durable health flag per account: a persistent validation failure
+            # produces one event (and one notification), not one per observation.
+            self.monitor.events.transition('reporting:'+broker, False, self.monitor.error, 'positions', notify=notify)
 
     def monitoring_poll(self):
         with self.lock:
@@ -627,12 +753,24 @@ class PortalService:
                 return
             self.monitor.automation_events(list(self.automation.data['events']))
             self.monitor.pump()
-            if self.active or not self.monitor.settings.config['enabled'] or time.time() < self.monitor.next_observation:
+            if not self.monitor.settings.config['enabled']:
+                self.monitor.error = None
+                return
+            if self.active or time.time() < self.monitor.next_observation:
                 return
             self.monitor.next_observation = time.time()+self.monitor.settings.config['interval_seconds']
             try:
                 if 'observe' not in self.registry.descriptor('broker',self.broker_id)['capabilities']:
+                    self.monitor.unconfigured = '当前账户模块没有提供账户表现接口，定时监控不覆盖它。'
                     return
+                try:
+                    self.monitor.scope(self.broker_id)
+                except ControlError as exc:
+                    # Not bound yet is a setup step, not a monitoring failure: no
+                    # error, no health transition, no notification.
+                    self.monitor.unconfigured = f'账户尚未完成绑定，监控暂未开始：{exc}'
+                    return
+                self.monitor.unconfigured = None
                 self.start('observe')
             except Exception:
                 self.monitor.error = '尚未取得账户监控数据，请检查所选券商配置。'
@@ -686,16 +824,24 @@ class PortalService:
                 context_issue=context_issue, strategy_issue=strategy_issue, authorization=authorization)
             if self.automation.data['enabled']:
                 actions['execute'] = {'enabled': False, 'blockers': [], 'message': '自动运行已开启；手动下单前请先关闭自动运行。', 'next_action': None}
-                for action in ('resolve-remainder', 'close-terminal'):
+                for action in ('resolve-remainder', 'close-terminal', 'close-untransmitted'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '请先关闭自动运行，再处理未提交余单。', 'next_action': None}
             managed = self.managed_account(self.broker_id)
             if managed:
-                for action in ('execute', 'resolve-remainder', 'close-terminal'):
+                for action in ('execute', 'resolve-remainder', 'close-terminal', 'close-untransmitted'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
+                'execution_scope': load_execution_policy(self.root).public(),
+                'execution_context': broker.get('execution_context'),
+                'market_session': selected_market_session(broker, at=datetime.fromisoformat(now()),
+                    current_context=context,
+                    automation=self.automation.data if not self.automation.corrupt else None,
+                    instances=self.strategy_instances.data if not self.strategy_instances.corrupt else None,
+                    connection_context=lambda: self.registry.connection_context(self.broker_id)),
                 'schedule': 'automatic' if self.automation.data['enabled'] else 'manual',
                 'automation': self.automation.public(self.broker_id, self.source),
                 'monitoring': self.monitor.public(),
+                'backfill': self.backfill.public(),
                 'strategy_manager': self.strategy_instances.public(),
                 'managed_account': managed,
                 'data_requirements': requirements, 'broker': broker, 'brokers': brokers,
@@ -717,11 +863,13 @@ class PortalService:
             if failed or job['action'] in {'refresh','execute','reconcile','automation','strategy-cycle','strategy-reconcile','strategy-resolve','strategy-close-terminal','close-terminal'}:
                 self.monitor.emit('job:'+job['id'],job['message'],'error' if failed else 'info','logs',at=job['finished_at'])
 
-    def start(self, action, credentials=None):
+    def start(self, action, credentials=None, *, as_of=None):
         with self.lock:
             self.idle()
             if action not in WORKBENCH_ACTIONS:
                 raise PortalError('未知操作。')
+            if action == 'backfill' and not as_of:
+                raise PortalError('历史回填请在「回测 → 历史回填」中按日期区间启动。')
             if action == 'preflight':
                 from app.preflight import start_preflight
                 return start_preflight(self)
@@ -747,7 +895,7 @@ class PortalService:
             if action == 'execute' and 'execute' not in broker_spec['capabilities']:
                 raise PortalError('此账户模块未声明执行能力。')
             if action == 'prepare' and 'prepare' not in broker_spec['capabilities']:
-                raise PortalError('当前账户模块没有模拟订单准备能力。')
+                raise PortalError('当前账户模块没有订单准备能力。')
             context = context_for(self.registry, action, broker_id, source)
             financial_scope = self.monitor.scope(broker_id) if action == 'observe' else None
             operation_cap = DATA_CAPABILITIES
@@ -776,7 +924,10 @@ class PortalService:
             job = {'id': datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-') + uuid4().hex[:8],
                    'action': action, 'source': source, 'source_name': source_spec['name'],
                    'broker': broker_id, 'broker_name': broker_spec['name'], 'status': 'running', 'started_at': now(),
-                   'message': '正在处理…', 'events': [], 'cancel_available': False}
+                   'message': '正在处理…', 'events': [], 'cancel_available': False,
+                   # Routine observations run without the user asking; the UI keeps
+                   # editors and forms usable while they run.
+                   'background': action == 'observe', **({'as_of': as_of} if action == 'backfill' else {})}
             self.active = job
             self.jobs.insert(0, job)
             self.jobs = self.jobs[:40]
@@ -786,13 +937,14 @@ class PortalService:
                 with self.lock:
                     job['message'] = self._public(str(message), secret_values)[:800]
                     job['events'] = (job['events'] + [{'at': now(), 'message': job['message']}])[-60:]
-                    job['cancel_available'] = action == 'refresh' and 'cancel' in source_spec['capabilities']
+                    job['cancel_available'] = action in {'refresh', 'backfill'} and 'cancel' in source_spec['capabilities']
                     self._save_job(job)
 
             def work():
                 try:
                     result = self.worker(self.root, action, snapshot_path, token, progress,
-                                         source_id=source, broker_id=broker_id, expected_context=context, credentials=credentials)
+                                         source_id=source, broker_id=broker_id, expected_context=context, credentials=credentials,
+                                         **({'as_of': as_of} if action == 'backfill' else {}))
                 except Exception as exc:
                     # Vendor exceptions can contain credentials. Never log their raw text.
                     result = dict(failure_details(exc, action, fallback='操作未取得有效结果，请检查本地配置；程序不会自动重试。'),
@@ -801,47 +953,72 @@ class PortalService:
                     if credentials is not None:
                         credentials.clear()
                 with self.lock:
-                    self._record_observation(action,broker_id,result,financial_scope)
-                    safe_result = self._public(result, secret_values)
-                    job.update(status=safe_result['status'], message=safe_result['message'], finished_at=now(),
-                               result=safe_result, cancel_available=False)
-                    if action == 'status':
-                        self.account = dict(safe_result, checked_at=now())
-                        self.broker_session.clear()
-                        try:
-                            unchanged = self.registry.connection_context(broker_id) == binding
-                        except (ValueError, OSError, KeyError, TypeError):
-                            unchanged = False
-                        if safe_result['status'] == 'connected' and unchanged:
-                            self.broker_session.verify(broker_id, binding)
-                        elif not unchanged:
-                            self.account = None
-                            job.update(status='blocked', message='检查期间账户配置改变，请重新检查连接。')
-                    if action in {'preview', 'prepare', 'refresh'} and result.get('status') == 'previewed':
-                        try:
-                            still_current = context_for(self.registry, action, broker_id, source) == context
-                        except (ValueError, OSError, KeyError):
-                            still_current = False
-                        if still_current:
-                            self.preview = dict(safe_result, created_at=now(), source=source, broker=broker_id)
-                            self.preview_context = context
-                            execution_path = result.get('snapshot_path') or snapshot_path
-                            if result.get('execution_ready') and result.get('preview_token') and execution_path:
-                                self.preview_private = (Path(execution_path), result['preview_token'])
-                                if action == 'prepare' and safe_result.get('account_details'):
-                                    self.account = {'status':'connected','message':'准备时已核对绑定的模拟账户。',
-                                                    'details':safe_result['account_details'],
-                                                    'checked_at':now()}
-                    if action == 'execute':
-                        self.account = None  # Do not display pre-trade holdings as current.
-                    if action in {'reconcile', 'resolve-remainder', 'close-terminal'}:
-                        self.automation.reconciled(broker_id, result)
-                    self.active = None
-                    self._save_job(job)
+                    try:
+                        self._finish_job(job, action, result, broker_id, source, context, binding,
+                                         snapshot_path, financial_scope, secret_values)
+                    except Exception as exc:
+                        self._finalization_failed(job, exc)
+                    finally:
+                        if self.active is job:
+                            self.active = None
 
             self.thread = threading.Thread(target=work, name='portal-worker', daemon=False)
             self.thread.start()
             return {'job_id': job['id']}
+
+    def _finish_job(self, job, action, result, broker_id, source, context, binding, snapshot_path,
+                    financial_scope, secret_values):
+        """Record a worker result under the service lock (called once per job)."""
+        self._record_observation(action, broker_id, result, financial_scope)
+        safe_result = self._public(result, secret_values)
+        job.update(status=safe_result['status'], message=safe_result['message'], finished_at=now(),
+                   result=safe_result, cancel_available=False)
+        if action == 'status':
+            self.account = dict(safe_result, checked_at=now())
+            self.broker_session.clear()
+            try:
+                unchanged = self.registry.connection_context(broker_id) == binding
+            except (ValueError, OSError, KeyError, TypeError):
+                unchanged = False
+            if safe_result['status'] == 'connected' and unchanged:
+                self.broker_session.verify(broker_id, binding)
+            elif not unchanged:
+                self.account = None
+                job.update(status='blocked', message='检查期间账户配置改变，请重新检查连接。')
+        if action in {'preview', 'prepare', 'refresh'} and result.get('status') == 'previewed':
+            try:
+                still_current = context_for(self.registry, action, broker_id, source) == context
+            except (ValueError, OSError, KeyError):
+                still_current = False
+            if still_current:
+                self.preview = dict(safe_result, created_at=now(), source=source, broker=broker_id)
+                self.preview_context = context
+                execution_path = result.get('snapshot_path') or snapshot_path
+                if result.get('execution_ready') and result.get('preview_token') and execution_path:
+                    self.preview_private = (Path(execution_path), result['preview_token'])
+                    if action == 'prepare' and safe_result.get('account_details'):
+                        self.account = {'status': 'connected', 'message': '准备时已核对绑定的账户。',
+                                        'details': safe_result['account_details'],
+                                        'checked_at': now()}
+        if action == 'prepare' and result.get('status') == 'complete' and result.get('no_orders') is True:
+            # "Nothing to trade" is a result worth keeping on screen, exactly
+            # as the one-click check publishes it; it can never be submitted.
+            try:
+                still_current = context_for(self.registry, action, broker_id, source) == context
+            except (ValueError, OSError, KeyError):
+                still_current = False
+            if still_current:
+                self.preview = dict(safe_result, execution_ready=False, created_at=now(), source=source, broker=broker_id)
+                self.preview_context = context
+                self.preview_private = None
+        if action == 'execute':
+            self.account = None  # Do not display pre-trade holdings as current.
+        if action in {'reconcile', 'resolve-remainder', 'close-terminal', 'close-untransmitted'}:
+            self.automation.reconciled(broker_id, result)
+        if action == 'backfill':
+            self.backfill.record(job.get('as_of'), safe_result, now())
+            self.scheduler_wake.set()
+        self._save_job(job)
 
     def cancel_download(self):
         with self.lock:
@@ -877,6 +1054,47 @@ class PortalService:
         with self.lock:
             return self.automation.disable()
 
+    def automation_migrate(self, value=None):
+        """Turn the single-strategy plan into a stopped run instance, then close the plan.
+
+        The instance gets the plan's account, data source, schedule and the
+        current manual strategy parameters with a 100% budget, so its sizing
+        matches what the plan did. It is created stopped: starting is a
+        separate, confirmed step. The plan's history stays readable.
+        """
+        with self.lock:
+            self.idle()
+            if value:
+                raise PortalError('迁移不接受额外参数。')
+            plan = self.automation
+            if plan.corrupt:
+                raise PortalError('自动计划状态文件损坏，无法迁移；请先检查文件。')
+            binding = plan.data.get('binding') or {}
+            if not binding.get('broker_id') or not binding.get('source_id'):
+                raise PortalError('没有绑定账户的单策略计划可迁移；直接用「新建运行」即可。')
+            if any(c['status'] in {'pending', 'blocked', 'preparing'} for c in plan.data['cycles'].values()):
+                raise PortalError('单策略计划仍有未核对的批次；先核对订单或结束余单，再迁移。')
+            try:
+                unchanged = self.registry.context(binding['broker_id'], binding['source_id']) == binding.get('context')
+            except (ControlError, ValueError, OSError, KeyError, TypeError):
+                unchanged = False
+            if not unchanged:
+                raise PortalError('模块、策略参数或代码与计划绑定时不同；请先核对「参数」页的配置，或直接用「新建运行」。')
+            cfg, _ = self.config()
+            name = f"{binding.get('strategy_name') or cfg['strategy']['type']} · 迁移自单策略计划"[:80]
+            payload = {'name': name, 'strategy': deepcopy(cfg['strategy']), 'broker_id': binding['broker_id'],
+                       'source_id': binding['source_id'], 'budget': '1', 'schedule': deepcopy(plan.data['config'])}
+            created = self.strategy_instances.create(payload)
+            if plan.data['enabled'] or plan.data['status'] != 'disabled':
+                plan.disable()
+            plan.data['migrated_to'] = created['id']
+            plan.event(f'已迁移为运行实例「{name}」；计划已关闭，历史记录保留。')
+            plan.persist()
+            self.clear_preview()
+            self.scheduler_wake.set()
+            return {'id': created['id'], 'name': name,
+                    'message': '已创建运行实例（资金比例 100%，处于停止状态）；旧计划已关闭，历史保留。请在运行详情里确认启动。'}
+
     def start_scheduler(self):
         if self.scheduler_thread and self.scheduler_thread.is_alive():
             return
@@ -891,6 +1109,12 @@ class PortalService:
                     with self.lock:
                         if not self.automation.corrupt:
                             self.automation.pause('自动服务遇到异常并已暂停，请查看运行记录。')
+                try:
+                    self.backfill_poll()
+                except Exception as exc:
+                    with self.lock:
+                        log_exception(log, 'backfill poll', exc, incident_id())
+                        self.backfill.pause('回填调度遇到异常并已暂停，请查看运行日志。', now())
                 try:
                     self.monitoring_poll()
                 except Exception:
@@ -936,32 +1160,157 @@ class PortalService:
                     result = self.automation.tick(observed_worker, progress)
                 except Exception as exc:
                     result = dict(failure_details(exc, 'automation', fallback='自动任务未完成，已停止新委托；请先核对订单。'), status='paused')
-                    if not self.automation.corrupt:
-                        self.automation.pause(result['message'])
+                    try:
+                        if not self.automation.corrupt:
+                            self.automation.pause(result['message'])
+                    except Exception as failure:
+                        log_exception(log, 'automation pause after failure', failure, incident_id())
                 finally:
                     with self.lock:
-                        if result is not None:
-                            safe_result = self._public(result)
-                            job.update(status=safe_result['status'], message=safe_result['message'],
-                                       result=safe_result, finished_at=now())
-                            self.jobs = [job, *self.jobs][:40]
-                            self._save_job(job)
-                            self.clear_preview()
-                            self.account = None
-                            self.broker_session.clear()
-                            if safe_result.get('startup_check') and self.registry.context(self.broker_id, self.source) == binding['context']:
-                                selection = safe_result.get('selection')
-                                if selection:
-                                    self.preview = dict(selection, execution_ready=False, created_at=now(),
-                                                        source=self.source, broker=self.broker_id)
-                                    self.preview_context = binding['context']
-                                account = safe_result.get('account_check')
-                                if account and account.get('status') == 'connected':
-                                    self.account = dict(account, checked_at=now())
-                                    self.broker_session.verify(self.broker_id, self.registry.connection_context(self.broker_id))
-                        self.active = None
+                        try:
+                            self._finish_automation(job, result, binding)
+                        except Exception as exc:
+                            self._finalization_failed(job, exc)
+                        finally:
+                            if self.active is job:
+                                self.active = None
             self.thread = threading.Thread(target=work, name='automatic-paper-worker', daemon=False)
             self.thread.start()
+
+    def _finish_automation(self, job, result, binding):
+        """Record one automation tick under the service lock."""
+        if result is None:
+            return
+        safe_result = self._public(result)
+        job.update(status=safe_result['status'], message=safe_result['message'],
+                   result=safe_result, finished_at=now())
+        self.jobs = [job, *self.jobs][:40]
+        self._save_job(job)
+        self.clear_preview()
+        self.account = None
+        self.broker_session.clear()
+        if safe_result.get('startup_check') and self.registry.context(self.broker_id, self.source) == binding['context']:
+            selection = safe_result.get('selection')
+            if selection:
+                self.preview = dict(selection, execution_ready=False, created_at=now(),
+                                    source=self.source, broker=self.broker_id)
+                self.preview_context = binding['context']
+            account = safe_result.get('account_check')
+            if account and account.get('status') == 'connected':
+                self.account = dict(account, checked_at=now())
+                self.broker_session.verify(self.broker_id, self.registry.connection_context(self.broker_id))
+
+    def _backfill_context(self, cfg):
+        """The source, strategy and data request a backfill belongs to; any change pauses it."""
+        return {'source': self.source, 'strategy_type': cfg['strategy']['type'],
+                'request_id': self.registry.data_requirements(cfg).fingerprint}
+
+    def backfill_plan(self, value):
+        """Dates a historical collection would cover, which ones already have a snapshot, and the request cost."""
+        if not isinstance(value, dict):
+            raise PortalError('回填参数无效。')
+        try:
+            start, end = date.fromisoformat(str(value.get('start'))), date.fromisoformat(str(value.get('end')))
+        except (TypeError, ValueError):
+            raise PortalError('请填写回填的开始和结束日期。') from None
+        cadence = value.get('cadence', 'monthly')
+        if start > end or cadence not in CADENCES:
+            raise PortalError('回填区间或周期无效。')
+        with self.lock:
+            cfg, _ = self.config()
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY), cfg['strategy']['type'])
+            allowed = self.state()['actions']['backfill']
+            blockers = [b for b in allowed['blockers'] if b['code'] != 'busy']  # planning is allowed while a job runs
+            if blockers:
+                raise PortalError(blockers[0]['message'])
+            today = datetime.now(ZoneInfo('America/New_York')).date()
+            dates = schedule_dates(start, end, cadence, today)
+            if not dates:
+                raise PortalError('所选区间内没有可回填的日期；日期必须早于今天。')
+            if len(dates) > MAX_DATES:
+                raise PortalError(f'一次最多回填 {MAX_DATES} 个日期，请缩小区间。')
+            context = self._backfill_context(cfg)
+            source, items = self.replay_series()
+            existing = [date.fromisoformat(item['date']) for item in items]
+            plan = []
+            for day in dates:
+                hit = covered(day, existing)
+                plan.append({'as_of': str(day), 'status': 'skipped' if hit else 'pending', 'job_id': None,
+                             'message': f'已有 {hit} 的快照，跳过。' if hit else ''})
+            pending = sum(item['status'] == 'pending' for item in plan)
+            requirements = self.registry.data_requirements(cfg)
+            bars = max(requirements.price_bars, requirements.volume_bars)
+            income = 'operating_income_ttm' in requirements.fields
+            details = max((item.get('details_checked') or 0 for item in items), default=0) or 120
+            adapter = self.registry.control('data', source, config=cfg)
+            profile = adapter.backfill_profile() if hasattr(adapter, 'backfill_profile') else {}
+            per_minute = profile.get('requests_per_minute') or 5
+            requests = estimate_requests(pending, history_bars=bars, details=details, income_required=income,
+                                         listing_pages=profile.get('listing_pages') or 6, cadence=cadence)
+            estimate = {'requests': requests, 'minutes': -(-requests // per_minute), 'requests_per_minute': per_minute,
+                        'details_per_date': details, 'history_bars': bars, 'income_required': income}
+            return dict(context, cadence=cadence, start=str(start), end=str(end), dates=plan,
+                        pending_count=pending, skipped_count=len(plan) - pending, estimate=estimate)
+
+    def backfill_start(self, value):
+        with self.lock:
+            if self.backfill.active:
+                raise PortalError('已有回填在进行；请先取消，或等待它完成。')
+            plan = self.backfill_plan(value)
+            if not plan['pending_count']:
+                raise PortalError('所选区间的日期都已有快照，无需回填。')
+            result = self.backfill.create(source=plan['source'], strategy_type=plan['strategy_type'],
+                                          request_id=plan['request_id'], cadence=plan['cadence'], start=plan['start'],
+                                          end=plan['end'], dates=plan['dates'], estimate=plan['estimate'], now=now())
+            self.scheduler_wake.set()
+            return dict(result, message=f"历史回填已排队：{plan['pending_count']} 个日期，预计 {plan['estimate']['requests']} 次请求。")
+
+    def backfill_control(self, command):
+        with self.lock:
+            queue = self.backfill
+            if not queue.data:
+                raise PortalError('没有回填任务。')
+            stamp = now()
+            if command == 'pause':
+                if queue.data['status'] != 'running':
+                    raise PortalError('回填不在运行中。')
+                queue.pause('已暂停；正在采集的日期完成后不再继续。', stamp)
+            elif command == 'resume':
+                if queue.data['status'] != 'paused':
+                    raise PortalError('回填不在暂停状态。')
+                queue.resume(stamp)
+                self.scheduler_wake.set()
+            elif command == 'cancel':
+                if not queue.active:
+                    raise PortalError('回填已经结束。')
+                queue.cancel(stamp)
+                if self.active and self.active.get('action') == 'backfill' and self.active.get('cancel_available'):
+                    self.cancel_download()
+            else:
+                raise PortalError('未知的回填操作。')
+            return dict(queue.public(), message=queue.data['message'])
+
+    def backfill_poll(self):
+        """Start the next queued date when the workbench is idle; never while another job runs."""
+        with self.lock:
+            queue = self.backfill
+            if self.closing or self.active or not queue.data or queue.data['status'] != 'running':
+                return
+            stamp = now()
+            item = queue.next_pending()
+            if item is None:
+                queue.finish(stamp)
+                return
+            try:
+                cfg, _ = self.config()
+                if self._backfill_context(cfg) != {k: queue.data[k] for k in ('source', 'strategy_type', 'request_id')}:
+                    queue.pause('数据源、策略或策略参数与回填开始时不同，回填已暂停；切回后可继续。', stamp)
+                    return
+                started = self.start('backfill', as_of=item['as_of'])
+            except PortalError as exc:
+                queue.pause(f'回填无法开始：{exc}', stamp)
+                return
+            queue.begin(item, started['job_id'], stamp)
 
     def _experiment(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'exp-[0-9a-f]{16}', ident):
@@ -981,13 +1330,20 @@ class PortalService:
                 for result in sorted(path.glob('result-*')):
                     try:
                         record = verified_record(result)
-                        if parse_result(read_json(result / 'raw-result.json')) != record['result']:
+                        evidence = read_json(result / 'raw-result.json')
+                        if parse_any(evidence) != record['result']:
                             raise ValueError('Changed summary')
-                        entry['results'].append({'id': path.name + '/' + result.name,
-                                                 'metrics': record['result']['metrics'],
-                                                 'completion': record['result']['completion'],
-                                                 'code_evidence': record['code_evidence'],
-                                                 'warnings': record['warnings']})
+                        item = {'id': path.name + '/' + result.name,
+                                'provider': record['result'].get('provider', 'quantconnect'),
+                                'metrics': record['result']['metrics'],
+                                'completion': record['result']['completion'],
+                                'code_evidence': record['code_evidence'],
+                                'warnings': record['warnings']}
+                        if item['provider'] == 'local_replay':
+                            # The curve and the rebalance log are part of the verified evidence file.
+                            item.update(nav=evidence.get('nav', []), rebalances=evidence.get('rebalances', []),
+                                        replay_warnings=evidence.get('warnings', []), snapshot_count=evidence.get('snapshot_count'))
+                        entry['results'].append(item)
                     except (ValueError, OSError, KeyError):
                         entry['results'].append({'id': path.name + '/' + result.name, 'invalid': True})
                 items.append(entry)
@@ -995,14 +1351,22 @@ class PortalService:
                 items.append({'id': path.name, 'invalid': True, 'results': []})
         return items
 
-    def export(self, start, end, slippage_bps, note=''):
+    def export(self, start, end, slippage_bps, note='', *, expected_strategy_type=_UNSPECIFIED_STRATEGY):
         with self.lock:
             self.idle()
-            self.config()
+            cfg, _ = self.config()
+            check_expected_strategy(expected_strategy_type, cfg['strategy']['type'])
             ident = 'exp-' + uuid4().hex[:16]
             out = self.folder / 'experiments' / ident
-            export_backtest(self.root / 'configs/portfolio_config.json', out, start=start, end=end,
-                            slippage_bps=slippage_bps, note=note, schedule=self.automation.data['config'])
+            # Export exactly the configuration checked under this lock. A local
+            # file edit after the check must not change the exported strategy.
+            config_file = self.folder / ('export-config-' + uuid4().hex + '.json')
+            atomic_json(config_file, cfg)
+            try:
+                export_backtest(config_file, out, start=start, end=end,
+                                slippage_bps=slippage_bps, note=note, schedule=self.automation.data['config'])
+            finally:
+                config_file.unlink(missing_ok=True)
             return {'id': ident, 'message': '代码已导出；请在 QuantConnect 中运行。'}
 
     def import_backtest(self, ident, content):
@@ -1014,7 +1378,7 @@ class PortalService:
             path = self.folder / ('upload-' + uuid4().hex + '.json')
             path.write_bytes(content)
             try:
-                out = import_result(experiment, path, parse_result)
+                out = import_result(experiment, path, parse_any)
             except FileExistsError:
                 raise PortalError('该结果已经导入。') from None
             finally:
@@ -1031,4 +1395,94 @@ class PortalService:
                 if not isinstance(ident, str) or not re.fullmatch(r'exp-[0-9a-f]{16}/result-[0-9a-f]{16}', ident):
                     raise PortalError('回测结果编号无效。')
                 folders.append(self._experiment(ident.split('/')[0]) / ident.split('/')[1])
-            return compare_results(folders, parse_result, self.folder / 'comparisons' / uuid4().hex)
+            return compare_results(folders, parse_any, self.folder / 'comparisons' / uuid4().hex)
+
+    def replay_series(self):
+        """Dated snapshots saved for the manual data source, oldest first.
+
+        Every collection and upload leaves a file; one file per price date is
+        kept (the newest). Replays run on this series only: it is the data the
+        workbench actually had, not a reconstructed history.
+        """
+        with self.lock:
+            cfg, _ = self.config()
+            source = self.source
+            adapter = self.registry.control('data', source, config=cfg)
+            folders = [Path(adapter.directory), self.folder / 'snapshots']
+        found = {}
+        for folder in folders:
+            if not folder.is_dir():
+                continue
+            for path in [*sorted(folder.glob('*/*.json')), *sorted(folder.glob('*.json'))]:
+                if path.name in {'progress.json', 'failure.json', 'latest.json'} or path.stat().st_size > MAX_FILE:
+                    continue
+                try:
+                    raw = read_json(path)
+                    meta = adapter.metadata(raw)
+                    day = meta.get('price_as_of')
+                    if not day and isinstance(raw.get('stocks'), list):
+                        # Uploaded files may carry the date per stock only.
+                        days = [s.get('price_as_of') for s in raw['stocks'] if isinstance(s, dict) and s.get('price_as_of')]
+                        day = max(days) if days else None
+                    day = date.fromisoformat(str(day)).isoformat()
+                except (ControlError, ValueError, TypeError, OSError, KeyError):
+                    continue
+                entry = found.get(day)
+                if entry is None or path.stat().st_mtime > entry['mtime']:
+                    found[day] = {'date': day, 'path': path, 'mtime': path.stat().st_mtime,
+                                  'candidate_count': meta.get('candidate_count'), 'research_only': meta.get('research_only', False),
+                                  'details_checked': (meta.get('coverage') or {}).get('details_checked')}
+        return source, [found[day] for day in sorted(found)]
+
+    def replay_backtest(self, value):
+        """Replay the manual configuration over the saved snapshot series and archive the result."""
+        if not isinstance(value, dict):
+            raise PortalError('回放参数无效。')
+        start, end, slip = value.get('start'), value.get('end'), value.get('slippage_bps', 10)
+        cadence = value.get('cadence', 'monthly')
+        try:
+            start, end = date.fromisoformat(str(start)).isoformat(), date.fromisoformat(str(end)).isoformat()
+        except (TypeError, ValueError):
+            raise PortalError('请填写回放的开始和结束日期。') from None
+        if start > end or cadence not in {'daily', 'weekly', 'monthly'}:
+            raise PortalError('回放区间或调仓周期无效。')
+        if isinstance(slip, bool) or not isinstance(slip, (int, float)) or not 0 <= slip <= 9999:
+            raise PortalError('滑点应为 0–9999 bps。')
+        with self.lock:
+            self.idle()
+            cfg, _ = self.config()
+            check_expected_strategy(value.get('expected_strategy_type', _UNSPECIFIED_STRATEGY), cfg['strategy']['type'])
+        source, items = self.replay_series()
+        chosen = [item for item in items if start <= item['date'] <= end]
+        if len(chosen) < 2:
+            raise PortalError(f'所选区间内只有 {len(chosen)} 份已保存的快照；本地回放至少需要 2 份不同日期的快照。')
+        strategy = build_portfolio_strategy(cfg['strategy'])
+        series = []
+        for item in chosen:
+            try:
+                stocks = load_snapshot(item['path'])[0]
+            except (ValueError, KeyError, TypeError):
+                adapter = self.registry.control('data', source, config=cfg)
+                stocks = tuple(adapter.load(read_json(item['path'])).stocks)
+            series.append((date.fromisoformat(item['date']), stocks))
+        try:
+            result = replay(series, strategy, max_gross=cfg['limits']['max_gross'], max_weight=cfg['limits']['max_weight'],
+                            initial_cash=cfg['initial_cash'], fee_per_order=cfg['fees']['per_order'],
+                            fee_bps=cfg['fees']['bps'], slippage_bps=slip, cadence=cadence)
+        except ValueError as exc:
+            raise PortalError(f'本地回放未能完成：{exc}') from None
+        result.update(source=source, strategy=cfg['strategy'],
+                      snapshots=[{'date': item['date'], 'file': str(item['path'].relative_to(self.root)),
+                                  'candidate_count': item['candidate_count']} for item in chosen])
+        exported = self.export(result['period']['start'], result['period']['end'], slip,
+                               note=f'本地回放 · {len(chosen)} 份快照 · {cadence}', expected_strategy_type=cfg['strategy']['type'])
+        experiment = self._experiment(exported['id'])
+        path = self.folder / ('replay-' + uuid4().hex + '.json')
+        atomic_json(path, result)
+        try:
+            out = import_result(experiment, path, parse_any)
+        finally:
+            path.unlink(missing_ok=True)
+        return {'id': exported['id'] + '/' + out.name, 'experiment': exported['id'], 'metrics': result['metrics'],
+                'snapshot_count': len(chosen), 'rebalance_count': result['rebalance_count'], 'warnings': result['warnings'],
+                'message': f'本地回放完成：{len(chosen)} 份快照，{result["rebalance_count"]} 次调仓。'}

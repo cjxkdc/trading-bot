@@ -8,8 +8,14 @@ from data.massive_technology import NY, aligned_prices
 from framework.collection import PriceHistory
 
 
-def grouped_rows(saved, day, wanted):
-    """Validate date/count/uniqueness before using the whole-market response."""
+def grouped_rows(saved, day, wanted, invalid=None):
+    """Validate the whole-market response; record bad per-stock rows instead of failing the day.
+
+    Response-level problems (shape, missing SPY reference) still raise. A single
+    stock whose bar is inconsistent or duplicated is written to ``invalid`` (symbol
+    -> reason) and left out, so one bad low-liquidity ticker cannot abort a
+    253-day collection.
+    """
     raw = saved['data']
     rows = raw.get('results')
     if (raw.get('adjusted') is not False or not isinstance(rows, list)
@@ -17,24 +23,43 @@ def grouped_rows(saved, day, wanted):
             or raw['resultsCount'] != len(rows)):
         raise DataIssue('invalid_grouped_response')
     found, seen = {}, set()
+    invalid = {} if invalid is None else invalid
+
+    def reject(symbol, reason):
+        if symbol == 'SPY':
+            raise DataIssue('grouped_reference_missing')
+        found.pop(symbol, None)
+        invalid.setdefault(symbol, reason)
+
     for row in rows:
         if not isinstance(row, dict):
             raise DataIssue('invalid_grouped_row')
         symbol = row.get('T')
         # Other security types include vendor tickers with lowercase suffixes.
-        if not isinstance(symbol, str) or not symbol or len(symbol) > 40 or symbol in seen:
-            raise DataIssue('duplicate_or_invalid_grouped_ticker')
+        if not isinstance(symbol, str) or not symbol or len(symbol) > 40:
+            raise DataIssue('invalid_grouped_row')
+        if symbol in seen:
+            if symbol in wanted or symbol == 'SPY':
+                reject(symbol, 'duplicate_or_invalid_grouped_ticker')
+            continue
         seen.add(symbol)
         if symbol not in wanted and symbol != 'SPY':
             continue
-        stamp = finite(row['t'])
-        observed_day = datetime.fromtimestamp(stamp / 1000, timezone.utc).astimezone(NY).date()
-        prices = [finite(row[k]) for k in ('o', 'h', 'l', 'c')]
-        volume = finite(row['v'])
+        try:
+            stamp = finite(row['t'])
+            observed_day = datetime.fromtimestamp(stamp / 1000, timezone.utc).astimezone(NY).date()
+            prices = [finite(row[k]) for k in ('o', 'h', 'l', 'c')]
+            volume = finite(row['v'])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            reject(symbol, 'invalid_grouped_date_price_or_volume')
+            continue
         if (observed_day != day or row.get('otc', False) is not False or volume < 0
                 or any(v <= 0 for v in prices) or prices[1] < max(prices[0], prices[3])
                 or prices[2] > min(prices[0], prices[3]) or prices[2] > prices[1]):
-            raise DataIssue('invalid_grouped_date_price_or_volume')
+            reject(symbol, 'invalid_grouped_date_price_or_volume')
+            continue
+        if symbol in invalid:
+            continue
         found[symbol] = (prices[3], volume)
     if 'SPY' not in found:
         raise DataIssue('grouped_reference_missing')
@@ -77,20 +102,35 @@ def market_histories(api, sessions, symbols, request, now, notify):
     observations = [split_observed]
     wanted = set(symbols)
     today = now.astimezone(NY).date()
+    bad_bars = {}
     for index, day in enumerate(sessions, 1):
         api.checkpoint()
         # Recent bars may be revised. Older raw bars survive a rolling window
         # and future splits, but are revalidated after 90 days rather than forever.
         ttl = 86400 if (today - day).days <= 7 else 90 * 86400
         saved = api.grouped_daily(str(day), cache_seconds=ttl)
-        rows = grouped_rows(saved, day, wanted)
+        invalid = {}
+        try:
+            rows = grouped_rows(saved, day, wanted, invalid)
+        except DataIssue:
+            # A malformed day must not be served from cache on the next attempt.
+            api.invalidate_grouped(str(day))
+            notify(f'批量日线 {day} 响应无效，已清除该日缓存；请重新下载。')
+            raise
+        for symbol, reason in invalid.items():
+            bad_bars.setdefault(symbol, (str(day), reason))
         observations.append(saved['observed_at'])
         for symbol in wanted.intersection(rows):
             histories[symbol][day] = rows[symbol]
-        notify(f'批量日线 {index}/{len(sessions)} · {day} · 请求 {api.requests} · 缓存 {api.hits}')
+        notify(f'批量日线 {index}/{len(sessions)} · {day} · 请求 {api.requests} · 缓存 {api.hits}'
+               + (f' · 异常记录 {len(bad_bars)} 只' if bad_bars else ''))
     usable, excluded, issues = {}, [], []
     for symbol, rows in histories.items():
         api.checkpoint()
+        if symbol in bad_bars:
+            day, reason = bad_bars[symbol]
+            issues.append({'ticker': symbol, 'reason': 'invalid_daily_bar', 'day': day, 'detail': reason})
+            continue
         if len(rows) != len(sessions):
             # Insufficient history is not filled or used. A gap inside a listed
             # series is flagged separately from a series that starts later.

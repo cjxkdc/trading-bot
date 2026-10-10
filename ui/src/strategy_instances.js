@@ -1,17 +1,45 @@
 import { automationSchedule } from './automation.js';
 
 export function runnableBroker(item) {
-  return item.enabled && item.mode === 'broker_paper' &&
+  return item?.enabled === true &&
     ['prepare', 'execute', 'reconcile', 'calendar'].every(capability => item.capabilities?.includes(capability));
 }
 
-export function instanceDraft(state, item) {
+export function instanceDraft(state, item, strategyType) {
+  const selected = strategyType ? state.strategies?.find(x => x.type === strategyType && x.enabled) : null;
+  if (!item && strategyType && !selected) throw new Error('所选策略已不可用，请返回策略工作区重新选择。');
+  const strategy = selected && selected.type !== state.strategy.type ? { ...selected.defaults, type: selected.type } : state.strategy;
+  const name = selected?.name || state.strategy_name;
+  const broker = runnableBroker(state.broker) ? state.broker : state.brokers.find(runnableBroker);
+  const context = broker?.execution_context || {};
+  const schedule = { ...(broker?.id === state.broker?.id ? state.automation?.config : {}), ...context.schedule_defaults, timezone: context.timezone || '' };
   return item ? { name: item.name, strategy: { ...item.strategy }, broker_id: item.broker_id,
-    source_id: item.source_id, budget: Number(item.budget) * 100, schedule: automationSchedule(item.schedule) } :
-    { name: `${state.strategy_name} · 新实例`, strategy: { ...state.strategy },
-      broker_id: runnableBroker(state.broker) ? state.broker.id : state.brokers.find(runnableBroker)?.id || '',
+    source_id: item.source_id, budget: budgetPercent(item.budget), schedule: automationSchedule(item.schedule) } :
+    { name: `${name} · 新实例`, strategy: { ...strategy },
+      broker_id: broker?.id || '',
       source_id: state.sources.find(x => x.id === state.source && x.capabilities.includes('collect'))?.id || state.sources.find(x => x.enabled && x.capabilities.includes('collect'))?.id || '',
-      budget: 50, schedule: automationSchedule(state.automation?.config) };
+      budget: 50, schedule: automationSchedule(schedule) };
+}
+
+// Modules may leave the daily times out of their schedule defaults; a form must
+// not open with empty required fields. Data refresh before the open, execution
+// shortly after it, in the account's own timezone; a saved value always wins.
+export function withTimeDefaults(schedule, broker) {
+  const defaults = broker?.execution_context?.schedule_defaults || {};
+  return { ...schedule,
+    timezone: schedule.timezone || broker?.execution_context?.timezone || '',
+    prepare_time: schedule.prepare_time || defaults.prepare_time || '08:00',
+    trade_time: schedule.trade_time || defaults.trade_time || '09:35' };
+}
+
+// Budgets are stored as decimal strings ("0.07"). Binary floats turn 0.07 * 100
+// into 7.000000000000001, which the form's step validation then rejects.
+export function budgetPercent(fraction) {
+  return Number((Number(fraction) * 100).toFixed(4));
+}
+
+export function budgetFraction(percent) {
+  return (Number(percent) / 100).toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 export function instancePayload(draft, fields = []) {
@@ -19,7 +47,7 @@ export function instancePayload(draft, fields = []) {
   if (!Number.isFinite(budget) || budget <= 0 || budget > 100) throw new Error('资金比例应大于 0 且不超过 100%。');
   const strategy = { ...draft.strategy };
   for (const field of fields) if (field.type === 'json' && typeof strategy[field.name] === 'string') strategy[field.name] = JSON.parse(strategy[field.name]);
-  return { ...draft, strategy, budget: String(budget / 100), schedule: automationSchedule(draft.schedule) };
+  return { ...draft, strategy, budget: budgetFraction(budget), schedule: automationSchedule(draft.schedule) };
 }
 
 export function instanceStatus(item) {

@@ -29,8 +29,8 @@
 .range-caption { margin: 9px 0 22px; font-size: 11px; color: var(--secondary); }
 .chart-mode-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
 .line-tabs { display: flex; gap: 24px; }
-.line-tabs button, .workspace-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 10px 0; background: transparent; color: var(--secondary); font-size: 13px; }
-.line-tabs button[aria-pressed='true'], .workspace-tabs button[aria-selected='true'] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.line-tabs button, .workspace-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 10px 0; background: transparent; color: var(--secondary); font-size: 14px; font-weight: 500; }
+.line-tabs button[aria-pressed='true'], .workspace-tabs button[aria-selected='true'] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
 .performance-chart { padding-top: 18px; min-width: 0; }
 .performance-chart svg { display: block; width: 100%; touch-action: pan-y; }
 .performance-line { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
@@ -67,7 +67,7 @@
 
 /* Strategy library and inline working area. Code remains a part of the page. */
 .strategy-workspace { display: grid; grid-template-columns: 215px minmax(0, 1fr); gap: 30px; min-height: 620px; }
-.strategy-library { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); align-self: start; }
+.strategy-library { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--shadow-card); align-self: start; }
 .library-heading { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0 16px; }
 .library-heading h2 { margin: 0; font-size: 15px; }
 .library-heading small { margin-left: 4px; font-size: 12px; color: var(--secondary); font-weight: 400; }

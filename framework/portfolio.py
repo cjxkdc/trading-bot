@@ -30,7 +30,7 @@ class StockSnapshot:
 
 @dataclass(frozen=True)
 class EquitySnapshot(StockSnapshot):
-    """Listed US common-stock input, with explicit capitalization and share volume.
+    """Listed equity input, with explicit capitalization and share volume.
 
     Kept separate from the original technology contract: turnover in dollars is
     not share volume, and a missing market cap must never become a zero.

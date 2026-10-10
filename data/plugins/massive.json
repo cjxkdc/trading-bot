@@ -17,6 +17,7 @@
       "inspect",
       "configure",
       "cancel",
+      "backfill",
       "upload",
       "preview",
       "paper_signal"

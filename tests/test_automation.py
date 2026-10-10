@@ -69,7 +69,7 @@ class ScheduleTests(unittest.TestCase):
     def test_missing_calendar_never_falls_back_to_weekdays(self):
         with self.assertRaises(ValueError): month_window(date(2026,1,1),[],DEFAULT_SCHEDULE)
     def test_invalid_or_injected_schedule_rejected(self):
-        for bad in ({'day':True},{'day':31},{'trade_time':'16:00'},{'timezone':'UTC'},
+        for bad in ({'day':True},{'day':31},{'trade_time':'25:00'},{'timezone':'invalid/timezone'},
                     {'prepare_time':'12:00'},{'enabled':True},{'poll_seconds':0}):
             with self.subTest(bad=bad),self.assertRaises(ValueError): schedule_config(bad)
 

@@ -10,18 +10,20 @@ from app.diagnostics import failure_details
 
 
 def run_worker(root, action, snapshot=None, token=None, progress=None, *, source_id=None, broker_id=None,
-               expected_context=None, credentials=None, automation=None, instance=None, cycle_path=None):
+               expected_context=None, credentials=None, automation=None, instance=None, cycle_path=None, as_of=None):
     root = Path(root).resolve()
     if action.startswith('strategy-'):
         return run_strategy_worker(root, action, instance=instance, cycle_path=cycle_path, progress=progress)
     request = {'action': action, 'source_id': source_id, 'broker_id': broker_id,
                'expected_context': expected_context, 'snapshot_path': str(snapshot) if snapshot else None,
                'preview_token': token, 'credentials': credentials, 'automation': automation}
+    if as_of is not None:
+        request['as_of'] = str(as_of)
     try:
         python = root / ('.venv/Scripts/python.exe' if os.name == 'nt' else '.venv/bin/python')
         if action not in ACTIONS or not python.is_file() or not (root / 'app/portal_worker.py').is_file():
             raise ValueError('请保留完整项目及 Python 环境。')
-        streaming = action in {'refresh', 'data-status', 'prepare'}
+        streaming = action in {'refresh', 'data-status', 'prepare', 'backfill'}
         with external_dll_search():
             process = subprocess.Popen([str(python), '-u', '-m', 'app.portal_worker'], cwd=root,
                 env=external_environment(), shell=False, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -33,18 +35,23 @@ def run_worker(root, action, snapshot=None, token=None, progress=None, *, source
                 process.stdin.write(payload)
                 process.stdin.close()
                 output = ''
-                for line in process.stdout:
-                    try:
-                        event = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(event, dict):
-                        continue
-                    if event.get('portal_progress') == 1 and progress:
-                        progress(event.get('message', ''))
-                    elif event.get('portal_protocol') == 1:
-                        output = line
-                process.wait()
+                try:
+                    for line in process.stdout:
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        if event.get('portal_progress') == 1 and progress:
+                            try:
+                                progress(event.get('message', ''))
+                            except Exception:
+                                pass  # A failed progress write must not stop reading the pipe.
+                        elif event.get('portal_protocol') == 1:
+                            output = line
+                finally:
+                    process.wait()  # The single-flight slot is released only after the child exits.
             else:
                 output, _ = process.communicate(payload, timeout=None if action in {'execute', 'recover'} else 60)
         except subprocess.TimeoutExpired:
@@ -82,16 +89,23 @@ def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progres
         result = None
         # Do not kill a process that may have submitted orders. Selection processes
         # inside it have their own wall-time and server memory/CPU limits.
-        for line in process.stdout:
-            try:
-                value = json.loads(line)
-            except ValueError:
-                continue
-            if value.get('portal_progress') == 1 and progress:
-                progress(value.get('message', ''))
-            if value.get('portal_protocol') == 1:
-                result = value
-        process.wait()
+        try:
+            for line in process.stdout:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(value, dict):
+                    continue  # A stray numeric/array line from a library print is not a protocol message.
+                if value.get('portal_progress') == 1 and progress:
+                    try:
+                        progress(value.get('message', ''))
+                    except Exception:
+                        pass
+                if value.get('portal_protocol') == 1:
+                    result = value
+        finally:
+            process.wait()  # Never report "paused" while the strategy process is still running.
         if process.returncode or not isinstance(result, dict) or result.get('action') != action or result.get('status') not in {'complete', 'paused', 'blocked', 'ready'}:
             raise ValueError()
         return result

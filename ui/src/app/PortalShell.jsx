@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { navigation, sections } from './navigation';
-import { attentionItems, visiblePlan } from './overview';
-import { automationView } from '../automation';
+import { navigation, intros, visibleTabs } from './navigation';
+import { attentionItems } from './overview';
 import { isServerDeployment } from '../server';
-import { marketSession, newYorkClock } from '../market';
+import { marketSession, marketClock } from '../market';
+import { executionContext, validTimezone } from '../execution_context';
 import { applyPreferences, readPreference, savePreference } from '../preferences';
 import { Button, Icon } from '../ui';
 import { cls, time } from '../format';
@@ -26,48 +26,66 @@ function PreferenceToggle({ name, label, options }) {
   </span>;
 }
 
-export function PortalShell({ route, navigate, access, onLogout, session, runtimeStatus, toggleRuntime, children }) {
+// Every page starts the same way: what this place is for, and its one main action.
+export function PageHeader({ title, intro, action, back, onBack }) {
+  return <div className="page-header-block">
+    {back && <button type="button" className="page-back" onClick={onBack}><Icon name="back" size={14}/>{back}</button>}
+    <div className="page-header"><div><h1>{title}</h1>{intro && <p>{intro}</p>}</div>{action && <div className="page-actions">{action}</div>}</div>
+  </div>;
+}
+
+export function PortalShell({ route, navigate, access, onLogout, session, runtimeStatus, toggleRuntime, header, children }) {
   const { state, runtime, online, stopped } = session;
+  const server = isServerDeployment(access);
   const current = navigation.find(item => item.id === route.page);
-  const plan = automationView(state?.automation, { online, runtimeRunning: runtime?.status === 'running' });
-  const tabs = (sections[route.page] || []).filter(([id]) => isServerDeployment(access) || id !== 'server');
-  const now = useNow(), market = marketSession(now);
+  const tabs = visibleTabs(route.page, server);
+  const quiet = route.page === 'runs' && ['manual', 'plan'].includes(route.view);
+  const now = useNow();
+  const instance = route.page === 'runs' ? state?.strategy_manager?.instances?.find(item => item.id === route.instance) : null;
+  const scopedBroker = instance ? state?.brokers?.find(item => item.id === instance.broker_id) : state?.broker;
+  const context = executionContext(scopedBroker, instance?.execution_context);
+  const market = marketSession(scopedBroker?.id === state?.broker?.id ? state?.market_session : null, now);
+  const timezone = validTimezone(context.timezone) ? context.timezone : null;
   const attention = state ? attentionItems(state).length : 0;
+  const title = header?.title || current?.label || '工作台';
   useEffect(() => {
-    document.title = `${attention ? `(${attention}) ` : ''}${current?.label || '工作台'} · Trading Bot`;
-  }, [attention, current?.label]);
+    document.title = `${attention ? `(${attention}) ` : ''}${title} · Trading Bot`;
+  }, [attention, title]);
+  let lastGroup = null;
   return <div className="app-shell">
     <button className="skip-link" onClick={() => document.getElementById('main-content')?.focus()}>跳至内容</button>
     <aside className="sidebar">
-      <div className="brand"><Icon name="chart" size={18}/><strong>Trading Bot</strong><small>PAPER</small></div>
+      <div className="brand"><span className="brand-mark" aria-hidden="true"><Icon name="chart" size={16}/></span><span>Trading Bot</span></div>
       <nav aria-label="主导航">
-        {navigation.map(item => <button key={item.id} className={cls('nav-item', route.page === item.id && 'active', item.id === 'research' && 'nav-secondary-start')}
-          aria-current={route.page === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
-          <Icon name={item.icon}/><span>{item.label}</span>
-          {item.id === 'overview' && attention > 0 && <span className="nav-badge" aria-label={`${attention} 项需要处理`}>{attention}</span>}
-        </button>)}
+        {navigation.map(item => {
+          const group = item.group !== lastGroup ? <span className="nav-group" key={`group-${item.group}`}>{item.group}</span> : null;
+          lastGroup = item.group;
+          return <React.Fragment key={item.id}>{group}
+            <button className={cls('nav-item', route.page === item.id && 'active')}
+              aria-current={route.page === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
+              <Icon name={item.icon}/><span>{item.label}</span>
+              {item.id === 'overview' && attention > 0 && <span className="nav-badge" aria-label={`${attention} 项需要处理`}>{attention}</span>}
+            </button>
+          </React.Fragment>;
+        })}
       </nav>
       <div className="sidebar-foot">
         <span className="connection-state"><i className={online && !stopped ? 'on' : ''}/>{stopped ? '工作台已退出' : online ? '面板已连接' : '等待连接'}</span>
-        <small>{runtime?.checked_at ? `确认于 ${time(runtime.checked_at)}` : '正在检查后台'}</small>
+        <small>{server ? '云端工作台' : '本地工作台'}{runtime?.checked_at ? ` · 确认于 ${time(runtime.checked_at)}` : ''}</small>
         <small>关闭网页后，已开启的后台继续运行。</small>
       </div>
     </aside>
     <div className="workspace">
       <header className="topbar">
         <div className="status-strip">
-          <span className="clock" title="纽约当地时间">{newYorkClock(now)}<small>ET</small></span>
-          <span className={cls('session', market.tone)} title="按美股常规时段推算，未计入交易所假日；以券商交易日历为准。">{market.label}</span>
-          <span className="divider" aria-hidden="true"/>
-          <span className="deployment-label">{isServerDeployment(access) ? '云端工作台' : '本地工作台'} · <b>仅模拟账户</b></span>
+          <span className="clock" title={timezone || '当前设备本地时间'}>{marketClock(now, timezone)}<small>{timezone || '本地'}</small></span>
+          <span className={cls('session', market.tone)} title="当前账户的市场与交易日历；缺少最新日历结果时不推测开盘状态。">{context.market || '市场未提供'} · {market.label}</span>
         </div>
         <div className="topbar-controls">
-          {state?.strategy_manager?.running_count > 0 && <button className="text-link run-indicator" onClick={() => navigate('instances')}>{state.strategy_manager.running_count} 份实例已开启</button>}
-          {visiblePlan(state?.automation) && <button className={cls('text-link run-indicator', plan.status === 'paused' && 'warning')} onClick={() => navigate('automation')}>单策略计划 · {plan.label}</button>}
           <PreferenceToggle name="updown" label="涨跌颜色" options={[['us', '绿涨', 'gain-us'], ['cn', '红涨', 'gain-cn']]}/>
-          <PreferenceToggle name="theme" label="界面主题" options={[['dark', '深色'], ['light', '浅色']]}/>
+          <PreferenceToggle name="theme" label="界面主题" options={[['light', '浅色'], ['dark', '深色']]}/>
           {!(route.page === 'system' && route.view === 'server') && <div className="runtime-control">
-            <span className={runtimeStatus.tone} title={runtimeStatus.hint}>{runtimeStatus.label}</span>
+            <span className={runtimeStatus.tone} title={runtimeStatus.hint}>交易后台 · {runtimeStatus.label}</span>
             <button type="button" role="switch" aria-label="交易后台开关" aria-checked={runtimeStatus.checked}
               disabled={runtimeStatus.disabled} title={runtimeStatus.hint}
               className={cls('runtime-switch', runtimeStatus.checked && 'checked')} onClick={toggleRuntime}><span/></button>
@@ -76,10 +94,10 @@ export function PortalShell({ route, navigate, access, onLogout, session, runtim
         </div>
       </header>
       <main id="main-content" tabIndex="-1">
-        <div className="page-heading"><h1>{current?.label}</h1>{current?.caption && <span>{current.caption}</span>}</div>
-        {tabs.length > 0 && <nav className="section-tabs" aria-label={`${current?.label}分类`}>
+        <PageHeader title={title} intro={header?.intro ?? intros[route.page]} action={header?.action} back={header?.back} onBack={header?.onBack}/>
+        {tabs.length > 1 && !quiet && !header?.hideTabs && <nav className="section-tabs" aria-label={`${current?.label}分类`}>
           {tabs.map(([view, text]) => <button key={view} aria-current={route.view === view ? 'page' : undefined}
-            className={route.view === view ? 'active' : ''} onClick={() => navigate({ page: route.page, view })}>{text}</button>)}
+            className={route.view === view ? 'active' : ''} onClick={() => navigate({ page: route.page, view, broker: route.broker })}>{text}</button>)}
         </nav>}
         {children}
       </main>

@@ -441,13 +441,16 @@ class CalendarTests(unittest.TestCase):
                 {'time':'2026-11-27','trade_date_type':'MORNING'}]
         with patch('brokers.opend_observation.call',return_value=rows) as call:
             days = trading_sessions(self.connector,date(2026,11,25),date(2026,11,27))
-        self.assertEqual(days,[date(2026,11,25),date(2026,11,27)])
+        self.assertEqual([item['date'] for item in days], ['2026-11-25','2026-11-27'])
+        self.assertEqual(days[0]['intervals'], [{'open':'2026-11-25T09:30:00-05:00', 'close':'2026-11-25T16:00:00-05:00'}])
+        self.assertEqual(days[1]['intervals'], [{'open':'2026-11-27T09:30:00-05:00', 'close':'2026-11-27T13:00:00-05:00'}])
         self.assertEqual(call.call_args.kwargs['market'],'US-OFFICIAL')
 
     def test_empty_calendar_is_not_guessed_and_invalid_dates_rejected(self):
         with patch('brokers.opend_observation.call',return_value=[]):
             self.assertEqual(trading_sessions(self.connector,date(2026,11,26),date(2026,11,26)),[])
-        for rows in ([{'time':'2026-11-24'}],[{'time':'2026-11-25'},{'time':'2026-11-25'}],None):
+        for rows in ([{'time':'2026-11-24'}],[{'time':'2026-11-25'},{'time':'2026-11-25'}],
+                     [{'time':'2026-11-25','trade_date_type':'UNKNOWN'}],None):
             with patch('brokers.opend_observation.call',return_value=rows), self.assertRaises(ControlError):
                 trading_sessions(self.connector,date(2026,11,25),date(2026,11,27))
 

@@ -3,6 +3,6 @@
   "kind": "single",
   "version": "1.0",
   "entrypoint": "strategies.momentum:Momentum",
-  "description": "单标的动量研究",
+  "description": "指定区间价格收益为正时持有，否则空仓。",
   "display_name": "单标的动量"
 }

@@ -5,8 +5,8 @@
   "entrypoint": "strategies.mom8:MOM8",
   "readme": "MOM8.md",
   "input_schema": "us_equity_momentum_daily_v1",
-  "display_name": "MOM8 · 框架适配版",
-  "description": "朋友的全美股动量策略：12–1 动量、200 日均线、8 只持股、前 12 名缓冲。适配为最多 95% 仓位、按框架设定周期配平、空缺留现金；不使用 BIL。",
+  "display_name": "MOM8 动量轮动",
+  "description": "中期动量与均线过滤，结合行业分散和持仓排名缓冲构建等权组合。",
   "backtest": {
     "quantconnect": {
       "universe": "us_common_stock",

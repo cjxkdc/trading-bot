@@ -46,6 +46,18 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual((backup / 'source/app/main.py').read_bytes(), b'old')
         self.assertEqual((backup / 'release-defaults/configs/account.json').read_bytes(), b'defaults')
 
+    def test_server_execution_grants_are_not_overwritten_or_distributed(self):
+        path = self.installed / 'configs/execution_policy.json'
+        original = b'{"version":1,"live_accounts":{"account":{"account_ref":"private"}}}'
+        path.write_bytes(original)
+        result = updater.upgrade(self.installed, self.archive, self.digest(), apply=True, stopped_check=lambda: None)
+        self.assertEqual(path.read_bytes(), original)
+        updater.rollback(self.installed, result['backup'], apply=True, stopped_check=lambda: None)
+        self.assertEqual(path.read_bytes(), original)
+        for name in ('configs/execution_policy.json', 'configs/portal/cloud.json'):
+            with self.assertRaisesRegex(ValueError, 'Private deployment'):
+                updater.validate_name(name)
+
     def test_wrong_archive_checksum_and_active_service_fail_without_changes(self):
         with self.assertRaises(ValueError):
             updater.upgrade(self.installed, self.archive, '0' * 64, apply=True)

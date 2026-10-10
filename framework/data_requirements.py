@@ -13,7 +13,7 @@ class DataRequirements:
     fields: tuple[str, ...]
     price_bars: int
     volume_bars: int
-    market: str = 'us'
+    market: str = 'us'  # Legacy manifest compatibility; new modules declare their own market.
     security_type: str = 'common_stock'
     frequency: str = 'daily'
     collection_policy: RankedCollectionPolicy | None = field(default=None, repr=False)
@@ -48,7 +48,8 @@ class DataRequirements:
                  'dollar_volumes': '成交额', 'operating_income_ttm': 'TTM 营业利润',
                  'market_cap': '市值', 'raw_close': '未复权股价', 'share_volumes': '成交股数'}
         return dict(self.record(), fingerprint=self.fingerprint,
-                    universe_label={'technology': '美国科技股', 'all': '美国普通股（全行业）'}.get(self.universe, self.universe),
+                    universe_label=({'technology': '美国科技股', 'all': '美国普通股（全行业）'}.get(self.universe, self.universe)
+                                    if self.market == 'us' else f'{self.market.upper()} · {self.universe}'),
                     field_labels=[names.get(name, name) for name in self.fields])
 
 

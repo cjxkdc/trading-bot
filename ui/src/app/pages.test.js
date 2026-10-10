@@ -38,15 +38,15 @@ test('all retained feature pages render an unconfigured module set without an ac
   for (const name of ['ManualRun', 'StrategyWorkspace', 'DataPage', 'BrokerPage', 'PositionsPage', 'ResearchPage', 'PerformancePanel']) {
     assert.ok(render(name, props).length > 40, name);
   }
-  assert.match(render('SystemPage', { ...props, view: 'logs' }), /运行与日志/);
+  assert.match(render('SystemPage', { ...props, view: 'logs' }), /诊断日志[\s\S]*操作记录/);
   assert.match(render('SystemPage', { ...props, view: 'monitoring' }), /监控与通知/);
   assert.match(render('SystemPage', { ...props, view: 'server' }), /下载诊断/);
 });
 
 test('overview has no charts, module form, or trading execution button', () => {
   const html = render('OverviewPage', { ...common(state()), runtimeStatus: { label: '后台运行中' } });
-  assert.match(html, /创建策略实例/);
-  assert.match(html, /当前没有待处理事项/);
+  assert.match(html, /新建运行/);
+  assert.match(html, /一切正常/);
   assert.doesNotMatch(html, /<select|账户表现|一键测试并准备|提交模拟订单|自动建仓与调仓/);
 });
 
@@ -57,7 +57,7 @@ test('overview limits current blockers to three and links to the complete list',
   assert.match(html, /当前异常1/);
   assert.match(html, /当前异常3/);
   assert.doesNotMatch(html, /当前异常4/);
-  assert.match(html, /查看全部/);
+  assert.match(html, /全部 4 项/);
 });
 
 test('instance list reveals no operational actions or form until a specific detail is opened', () => {
@@ -65,7 +65,7 @@ test('instance list reveals no operational actions or form until a specific deta
   const item = { id: 'one', name: '月度策略', strategy: value.strategy, broker_id: 'paper', source_id: 'snapshot', budget: 0.5, status: 'waiting', enabled: true, schedule: {}, positions: [], events: [], message: '等待计划时间' };
   value.strategy_manager.instances = [item];
   const list = render('StrategyRuns', { ...common(value), route: { page: 'runs', view: 'instances' } });
-  assert.match(list, /查看详情/);
+  assert.match(list, /详情 →/);
   assert.doesNotMatch(list, /停止实例|执行一轮|创建策略实例|运行计划.*<select/);
   const detail = render('StrategyRuns', { ...common(value), busy: true, pending: false, route: { page: 'runs', view: 'instances', instance: 'one' } });
   assert.match(detail, /停止实例/);
@@ -125,4 +125,69 @@ test('dialog does not restore focus to a trigger removed by the confirmed action
   assert.equal(document.body.style.overflow, '');
   const html = render('Dialog', { labelledBy: 'confirm-heading', onDismiss: noop, children: React.createElement('h2', { id: 'confirm-heading' }, '确认操作') });
   assert.match(html, /^<dialog[^>]*aria-modal="true"[^>]*aria-labelledby="confirm-heading"/);
+});
+
+test('platform shell does not present one account environment as the whole product', () => {
+  const html = render('PortalShell', { route: { page: 'strategies' }, navigate: noop,
+    access: { enabled: false }, session: { state: state(), runtime: null, online: true }, runtimeStatus: {}, toggleRuntime: noop });
+  assert.doesNotMatch(html, /PAPER|仅模拟账户/);
+  // Every section opens with one line saying what it is for.
+  assert.match(html, /写和改策略的代码与说明/);
+});
+
+test('strategy workspace shows only related deployments and preserves their account environment', () => {
+  const value = state();
+  value.strategy_manager.instances = [
+    { id: 'a', name: 'Alpha deployment', strategy: { type: 'alpha' }, broker_id: 'paper', budget: .4, status: 'stopped' },
+    { id: 'b', name: 'Other deployment', strategy: { type: 'beta' }, broker_id: 'paper', budget: .4, status: 'stopped' },
+  ];
+  const html = render('StrategyWorkspace', { ...common(value), route: { page: 'strategies', strategy: 'alpha', tab: 'runs' } });
+  assert.match(html, /Alpha deployment/);
+  assert.match(html, /模拟账户/);
+  assert.doesNotMatch(html, /Other deployment/);
+  assert.match(html, /创建运行实例/);
+});
+
+test('deleted strategy links cannot quietly open the current global strategy', () => {
+  const html = render('StrategyWorkspace', { ...common(state()), route: { page: 'strategies', strategy: 'deleted', tab: 'research' } });
+  assert.match(html, /这个策略已不存在/);
+  assert.doesNotMatch(html, /创建回测实验/);
+  const create = render('StrategyRuns', { ...common(state()), route: { page: 'runs', view: 'instances', create: true, strategy: 'deleted' } });
+  assert.match(create, /所选策略已不可用/);
+  assert.doesNotMatch(create, /保存运行|保存实例/);
+});
+
+
+test('HK live module is inspectable and its UI does not claim US paper trading', () => {
+  const value=state();
+  Object.assign(value.broker, {mode:'live',mode_label:'实盘账户',execution_enabled:false,execution_reason:'账户待授权',execution_context:{market:'HK',asset_class:'equity',currency:'HKD',timezone:'Asia/Hong_Kong'}});
+  const html=render('BrokerPage', common(value));
+  assert.match(html, /HKD/); assert.match(html, /Asia\/Hong_Kong/); assert.match(html, /账户待授权/);
+  assert.doesNotMatch(html, /美股|美东|仅开放模拟/);
+  value.preview={created_at:'2026-10-08',orders:[{ticker:'00700',quantity:100,limit_price:500,notional:50000}],targets:[]};
+  assert.match(render('ManualRun', common(value)), /限价（HKD）/);
+});
+
+test('instance execution uses that account permission and never the global paper account', () => {
+  const value=state();
+  const other={id:'hk-live',enabled:true,mode:'live',mode_label:'实盘账户',execution_enabled:false,execution_reason:'账户待授权'};
+  value.brokers.push(other);
+  const item={id:'hk',name:'HK run',strategy:value.strategy,broker_id:other.id,source_id:'snapshot',budget:0.5,status:'stopped',enabled:false,schedule:{timezone:'Asia/Hong_Kong'},positions:[],events:[]};
+  value.strategy_manager.instances=[item];
+  const props={...common(value),route:{page:'runs',view:'instances',instance:'hk'}};
+  let html=render('StrategyRuns',props);
+  assert.match(html, /实盘账户/); assert.match(html, /账户待授权/);
+  assert.match(html, /<button[^>]*disabled[^>]*><span>启动实例/);
+  other.execution_enabled=true;
+  html=render('StrategyRuns',props);
+  assert.doesNotMatch(html, /<button[^>]*disabled[^>]*><span>启动实例/);
+});
+
+test('instance header reports its own market even when the selected global account differs', () => {
+  const value=state();
+  value.broker.execution_context={market:'US',timezone:'America/New_York'};
+  value.brokers.push({id:'crypto',execution_context:{market:'CRYPTO',timezone:'UTC'}});
+  value.strategy_manager.instances=[{id:'x',broker_id:'crypto'}];
+  const html=render('PortalShell',{route:{page:'runs',view:'instances',instance:'x'},navigate:noop,access:{enabled:false},session:{state:value,online:true},runtimeStatus:{},toggleRuntime:noop});
+  assert.match(html,/CRYPTO/); assert.doesNotMatch(html,/America\/New_York/); assert.match(html,/交易时段待确认/);
 });

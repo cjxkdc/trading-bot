@@ -8,7 +8,7 @@ from app.control_contracts import ControlError, project_path
 from app.operations import context_for
 
 
-STEPS = (('account', '检查模拟账户'), ('data', '检查数据配置与权限'),
+STEPS = (('account', '检查账户'), ('data', '检查数据配置与权限'),
          ('refresh', '更新所需数据'), ('preview', '生成选股预览'), ('prepare', '核对报价与准备订单'))
 READ_ONLY_ACTIONS = frozenset({'status', 'data-status', 'refresh', 'preview', 'prepare'})
 
@@ -153,19 +153,19 @@ class Preflight:
                     raise ControlError('订单准备文件不存在，请重新检查。')
                 self.service.preview_private = (path, result['preview_token'])
                 if safe.get('account_details'):
-                    self.service.account = dict(status='connected', message='准备时已核对绑定的模拟账户。',
+                    self.service.account = dict(status='connected', message='准备时已核对绑定的账户。',
                                                 details=safe['account_details'], checked_at=stamp())
 
     def pipeline(self):
-        self.update('account', 'running', '正在检查所选模拟账户连接…')
+        self.update('account', 'running', '正在检查所选账户连接…')
         broker = self.registry.descriptor('broker', self.broker)
-        if not broker['enabled'] or broker['mode'] not in {'paper', 'broker_paper'}:
-            raise ControlError('当前账户不可用于模拟检查，请选择可用的模拟券商。')
+        if not broker['enabled']:
+            raise ControlError('当前账户不可用于账户检查，请选择可用的券商。')
         if 'inspect' not in broker['capabilities']:
             raise ControlError('当前券商未提供账户检查功能。')
         result = self.invoke('status', account_only=True)
         if result.get('status') != 'connected' and not (broker['mode'] == 'paper' and result.get('status') == 'ready'):
-            raise ControlError(result['message'] or '尚未连接模拟账户，请先在券商客户端登录。')
+            raise ControlError(result['message'] or '尚未连接账户，请先在券商客户端登录。')
         with self.service.lock:
             self.current(account_only=True)
             self.service.account = dict(self.service._public(result), checked_at=stamp())
@@ -225,7 +225,7 @@ class Preflight:
                 raise ControlError((result.get('issues') or ['当前快照尚未满足本地回放条件。'])[0])
         else:
             if 'prepare' not in broker['capabilities']:
-                raise ControlError('当前模拟券商不提供订单准备功能，请更换支持此功能的模块。')
+                raise ControlError('当前券商不提供订单准备功能，请更换支持此功能的模块。')
             with self.service.lock:
                 self.service.broker_session.require(self.broker, self.binding)
             result = self.invoke('prepare')

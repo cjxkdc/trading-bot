@@ -23,6 +23,8 @@ def backtest_configuration(config):
         raise ValueError("This QC adapter supports fixed per-order fees only")
     from framework.scheduling import schedule_config
     cfg.setdefault('schedule', schedule_config({'initial_entry': 'scheduled'}))
+    if cfg['schedule']['timezone'] != 'America/New_York':
+        raise ValueError('This QC US-equity adapter requires its New York exchange schedule')
     cfg.setdefault('benchmark', 'QQQ')
     return {k: v for k, v in cfg.items() if k not in {"data", "broker"}}
 
@@ -35,9 +37,11 @@ def build(config=None):
     selected = strategy_catalog()[config['strategy']['type']]
     qc_profile = selected.get('backtest', {}).get('quantconnect', {})
     runner.engine.strategy.history_requirements  # Enforce the history request contract before export.
-    plugins = {k: v for k, v in strategy_catalog().items()
-               if v["kind"] == "portfolio" and v.get("input_schema") == runner.input_schema}
-    sources = ["framework/portfolio.py", "framework/decisions.py", "framework/collection.py", "framework/scheduling.py"]
+    # Freeze only the configured strategy. Bundling every plug-in that shares the
+    # input schema made the export (and its SHA) change whenever an unrelated or
+    # fixture strategy was registered, so the maintained file could never match.
+    plugins = {config['strategy']['type']: selected}
+    sources = ["framework/market.py", "framework/portfolio.py", "framework/decisions.py", "framework/collection.py", "framework/scheduling.py"]
     sources += sorted({v["entrypoint"].split(":")[0].replace(".", "/") + ".py" for v in plugins.values()})
     sources.append("backtests/quantconnect/adapter.py")
     parts = []
@@ -46,7 +50,7 @@ def build(config=None):
         source = (ROOT / name).read_text(encoding="utf-8")
         tree = ast.parse(source)
         remove = set()
-        for node in tree.body:
+        for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in {"framework", "strategies", "app"}:
                 if node.module not in available_modules or node.level:
                     raise ValueError(f"Unbundled local dependency in {name}: {node.module}")

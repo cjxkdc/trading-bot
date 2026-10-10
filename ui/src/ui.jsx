@@ -17,6 +17,13 @@ export function Icon({ name, size = 18 }) {
     power: <><path d="M12 2v10M6 5a9 9 0 1 0 12 0"/></>,
     server: <><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M13 6.5h4M13 17.5h4"/></>,
     close: <path d="m6 6 12 12M6 18 18 6"/>,
+    home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/></>,
+    code: <><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/></>,
+    play: <path d="M7 5v14l11-7z"/>,
+    plug: <><path d="M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0zM12 17v4"/></>,
+    settings: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></>,
+    plus: <path d="M12 5v14M5 12h14"/>,
+    back: <path d="M19 12H5m5 5-5-5 5-5"/>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.grid}</svg>;
 }
@@ -30,6 +37,6 @@ export function Tag({ children, tone = 'muted' }) { return <span className={'tag
 
 export function TargetTable({ preview }) {
   const rows = preview?.targets || [];
-  if (!rows.length) return <Empty title={preview ? '本次没有选中股票' : '尚未生成目标持仓'}>{preview ? '检查筛选条件与数据覆盖范围。' : '更新数据或使用已有快照，运行一次策略预览。'}</Empty>;
-  return <div className="table-wrap"><table><thead><tr><th>股票</th><th>行业</th><th className="right">策略得分</th><th className="right">目标权重</th></tr></thead><tbody>{rows.map(row => <tr key={row.asset_id}><td><strong>{row.ticker || row.asset_id}</strong></td><td className="muted">{row.industry || '—'}</td><td className="right mono">{Number(row.score ?? 0).toFixed(3)}</td><td className="right mono"><span className="weight-cell"><i style={{ width: `${Math.min(100, row.weight * 200)}%` }}/><span>{percent(row.weight)}</span></span></td></tr>)}</tbody></table></div>;
+  if (!rows.length) return <Empty title={preview ? '本次没有选中标的' : '尚未生成目标持仓'}>{preview ? '检查筛选条件与数据覆盖范围。' : '更新数据或使用已有快照，运行一次策略预览。'}</Empty>;
+  return <div className="table-wrap"><table><thead><tr><th>标的</th><th>行业</th><th className="right">策略得分</th><th className="right">目标权重</th></tr></thead><tbody>{rows.map(row => <tr key={row.asset_id}><td><strong>{row.ticker || row.asset_id}</strong></td><td className="muted">{row.industry || '—'}</td><td className="right mono">{Number(row.score ?? 0).toFixed(3)}</td><td className="right mono"><span className="weight-cell"><i style={{ width: `${Math.min(100, row.weight * 200)}%` }}/><span>{percent(row.weight)}</span></span></td></tr>)}</tbody></table></div>;
 }

@@ -11,7 +11,7 @@ from math import isfinite
 import sqlite3
 from zoneinfo import ZoneInfo
 
-from framework.contracts import OrderState, SubmissionRejected
+from framework.contracts import OrderState, SubmissionNotAttempted, SubmissionRejected
 from framework.journal import packed, unpack_order, unpack_state
 from framework.trading import Account, Fees, amount
 from platforms.opend import (ROOT, OpenDError, call, configuration_check,
@@ -22,6 +22,10 @@ TERMINAL = {'filled', 'cancelled', 'rejected'}
 
 class OpenDSubmissionRejected(SubmissionRejected, OpenDError):
     """New intent rejected before this adapter's durable transmission claim."""
+
+
+class OpenDSubmissionNotAttempted(SubmissionNotAttempted, OpenDError):
+    """Pre-submission account checks failed or found unresolved state; nothing recorded or sent."""
 
 
 class OpenDOrderIdentityError(OpenDError):
@@ -166,6 +170,13 @@ class OpenDConnector:
     def _settings(self):
         return settings(self.provider, self.config_dir, environment=self.environment)
 
+    def execution_account_reference(self):
+        cfg = self._settings()
+        if not cfg.account_id or not cfg.login_user_id:
+            raise OpenDError('Explicit account and login binding required')
+        return _identity(dict(provider=self.provider, environment=self.environment,
+                              user_id=str(cfg.login_user_id), account_id=str(cfg.account_id)))
+
     @contextmanager
     def _session(self, *, allow_orders=False, enable_live=False):
         with ExitStack() as stack:
@@ -214,10 +225,10 @@ class OpenDConnector:
             db.execute('INSERT INTO binding VALUES (?)', (binding,))
             db.commit()
 
-    def connect(self, state_dir, snapshot, fees, *, enable_live=False, read_only=False):
-        if read_only and (self.environment != 'SIMULATE' or enable_live):
-            raise OpenDError('Read-only recovery is restricted to simulation accounts')
-        if self.environment == 'REAL' and enable_live is not True:
+    def connect(self, state_dir, snapshot, fees, *, enable_live=False, read_only=False, expected_account_ref=None):
+        if read_only and enable_live:
+            raise OpenDError('Read-only reconciliation cannot enable live order transmission')
+        if self.environment == 'REAL' and not read_only and enable_live is not True:
             raise OpenDError('Live execution must be explicitly enabled before connecting')
         path = self._path(state_dir)
         offset = getattr(snapshot,'clock_offset_seconds',0.)
@@ -226,6 +237,8 @@ class OpenDConnector:
         manager = self._session(allow_orders=not read_only, enable_live=enable_live)
         sdk, client, profile, validate = manager.__enter__()
         try:
+            if expected_account_ref is not None and _identity(profile) != expected_account_ref:
+                raise OpenDError('Connected account differs from the server execution grant')
             symbols = None if snapshot is None else (snapshot.instruments or {s.asset_id: s.ticker for s in snapshot.stocks})
             return OpenDBroker(sdk, client, profile, path, fees, symbol_map=symbols,
                                     clock=lambda:datetime.now(timezone.utc)+timedelta(seconds=offset),
@@ -246,15 +259,15 @@ class OpenDBroker:
                 or str(getattr(client, '_verified_account', '')) != profile['account_id']
                 or getattr(client, '_trading_environment', None) != environment
                 or (not read_only and not getattr(client, '_allow_orders', False))
-                or (read_only and (environment != 'SIMULATE' or getattr(client, '_allow_orders', False)))):
+                or (read_only and getattr(client, '_allow_orders', False))):
             raise OpenDError('Verified account, matching environment and order permission required')
-        if environment == 'REAL' and (enable_live is not True or not callable(instrument_check)):
+        if environment == 'REAL' and ((not read_only and enable_live is not True) or not callable(instrument_check)):
             raise OpenDError('Live execution requires explicit activation and broker instrument validation')
         if _needs_instrument_validation(profile) and not callable(instrument_check):
             raise OpenDError('Combined paper accounts require broker instrument validation')
         self.live_enabled = environment == 'REAL' and enable_live is True
         self.read_only = read_only
-        self.mode = 'live' if self.live_enabled else 'broker_paper'
+        self.mode = 'live' if environment == 'REAL' else 'broker_paper'
         self.instrument_check = instrument_check
         self.sdk, self.client, self.profile = sdk, client, dict(profile)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
@@ -402,6 +415,10 @@ class OpenDBroker:
             return self.query(intent.client_id)
         try:
             ticker, code, body, qty, price = self._prepare_submission(intent)
+        except SubmissionNotAttempted:
+            # A failed account/open-order query is not a verdict on the order;
+            # the executor keeps the intent planned for reconciliation.
+            raise
         except OpenDError as exc:
             # No record for this intent and no transmission has been attempted.
             # Keep the original cause for safe allowlisted diagnostics only.
@@ -445,16 +462,59 @@ class OpenDBroker:
         if (not intent.client_id or intent.side not in {'BUY', 'SELL'} or qty != qty.to_integral_value()
                 or qty * price > 100000 or price != price.quantize(Decimal('0.001'))):
             raise OpenDError('Only whole-share US limit orders up to USD 100000 and three price decimals are supported')
-        if self.open_orders():
-            raise OpenDError('Account has unresolved orders')
-        if self.instrument_check is not None:
-            self.instrument_check((ticker,))
-        account, sellable = _account(self.sdk, self.client, self.profile, self.clock, self.instrument_check)
+        # Everything below depends on broker state or a network query. A failure
+        # here is "not attempted", never a permanent rejection of the intent.
+        try:
+            if self.open_orders():
+                raise OpenDSubmissionNotAttempted('Account has unresolved orders')
+            if self.instrument_check is not None:
+                self.instrument_check((ticker,))
+            account, sellable = _account(self.sdk, self.client, self.profile, self.clock, self.instrument_check)
+        except SubmissionNotAttempted:
+            raise
+        except OpenDError as exc:
+            raise OpenDSubmissionNotAttempted('Pre-submission account query failed') from exc
         if intent.side == 'BUY' and qty * price + self.fees.estimate(qty, price) > account.cash:
-            raise OpenDError('Insufficient USD cash including estimated fees')
+            raise OpenDSubmissionNotAttempted('Insufficient USD cash including estimated fees')
         if intent.side == 'SELL' and qty > sellable.get(ticker, Decimal(0)):
-            raise OpenDError('Cannot sell unowned or unavailable shares')
+            raise OpenDSubmissionNotAttempted('Cannot sell unowned or unavailable shares')
         return ticker, code, body, qty, price
+
+    def transmission_evidence(self, client_id):
+        """Read-only proof that an unknown intent never reached OpenD.
+
+        True evidence of transmission is a broker order id in this ledger or an
+        order carrying the intent's remark tag in the broker's lists for the
+        intent's creation day, the following day (queued DAY orders) and today.
+        The check is only meaningful on a later trading day.
+        """
+        record = self.db.execute('SELECT created_at,broker_id,state FROM orders WHERE client_id=?', (client_id,)).fetchone()
+        if record is None:
+            return {'transmitted': False, 'ledger_row': False, 'checked_days': []}
+        created, broker_id, state = record
+        if broker_id or (state and unpack_state(state).broker_id):
+            return {'transmitted': True, 'ledger_row': True, 'checked_days': []}
+        tag = self._tag(client_id)
+        start = datetime.fromisoformat(created).astimezone(ZoneInfo('America/New_York')).date()
+        today = self.clock().astimezone(ZoneInfo('America/New_York')).date()
+        if today <= start:
+            raise OpenDError('Untransmitted proof requires a later trading day')
+        days = sorted({start, start + timedelta(days=1), today})
+        for day in days:
+            if any(r.get('remark') == tag for r in _orders(self.sdk, self.client, self.profile, day=day.isoformat())):
+                return {'transmitted': True, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+        if any(r.get('remark') == tag for r in _orders(self.sdk, self.client, self.profile)):
+            return {'transmitted': True, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+        return {'transmitted': False, 'ledger_row': True, 'checked_days': [d.isoformat() for d in days]}
+
+    def retire_untransmitted(self, client_id):
+        """Mark a proven-untransmitted ledger row terminal so it stops blocking new orders."""
+        if self.transmission_evidence(client_id).get('transmitted') is not False:
+            raise OpenDError('Only a proven-untransmitted intent can be retired')
+        state = OrderState(client_id, None, 'rejected', Decimal(0))
+        with self.db:
+            self.db.execute('UPDATE orders SET state=? WHERE client_id=? AND broker_id IS NULL',
+                            (packed(asdict(state)), client_id))
 
     def cancel(self, broker_id):
         if self.read_only:

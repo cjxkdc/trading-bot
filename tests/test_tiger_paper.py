@@ -64,7 +64,7 @@ class PaperRegistrationTests(unittest.TestCase):
             path = Path(folder) / 'snapshot.json'
             path.write_text(json.dumps(demo_snapshot()))
             with patch('platforms.brokers.tiger_paper._connect_paper') as connect:
-                with self.assertRaisesRegex(ValueError, 'paper connections only'):
+                with self.assertRaisesRegex(ValueError, 'local replay account'):
                     run_paper(path, TIGER_PAPER_CONFIG, Path(folder) / 'state')
                 connect.assert_not_called()
 

@@ -61,11 +61,16 @@ class PluginReplayTests(unittest.TestCase):
     def test_exported_bundle_really_executes_both_plugins_without_local_imports(self):
         api = types.ModuleType('AlgorithmImports')
         api.QCAlgorithm = type('QCAlgorithm',(),{})
-        namespace = {'__name__':'bundled_test'}
-        with patch.dict(sys.modules,{'AlgorithmImports':api}):
-            exec(compile(build(),'qc_bundle','exec'),namespace)
+        # Each export freezes exactly one strategy: registering another plug-in
+        # must not change (or appear in) an unrelated strategy's cloud file.
         for strategy in ('tech_profit_momentum','equal_weight'):
-            namespace['STRATEGY_TYPE'] = strategy
+            run_config = assembly.default_portfolio_config()
+            if run_config['strategy']['type'] != strategy:
+                run_config['strategy'] = {'type': strategy}
+            namespace = {'__name__':'bundled_test'}
+            with patch.dict(sys.modules,{'AlgorithmImports':api}):
+                exec(compile(build(run_config),'qc_bundle','exec'),namespace)
+            self.assertEqual(set(namespace['_PLUGIN_CLASSES']), {strategy})
             config = namespace['strategy_configuration']()
             stocks = [stock('A'),stock('B')]
             engine = PortfolioEngine(build_portfolio_strategy(config))

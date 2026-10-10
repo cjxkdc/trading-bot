@@ -32,6 +32,8 @@ def validate_name(name):
         raise ValueError('Unsafe release path')
     if path.parts[0] not in DIRECTORIES and name not in ROOT_FILES:
         raise ValueError('Unapproved release path')
+    if name in {'configs/portal/cloud.json', 'configs/execution_policy.json'}:
+        raise ValueError('Private deployment settings cannot be shipped in a release')
     if len(path.parts) > 1 and (path.suffix not in SUFFIXES or path.name == 'connection.json' or any(p.startswith('.') for p in path.parts)):
         raise ValueError('Private or unsupported release file')
     return path
@@ -70,7 +72,7 @@ def validate_archive(archive, expected_sha256):
         if (manifest.get('format_version') != 2 or manifest.get('variant') != 'server'
                 or manifest.get('credentials_included') is not False
                 or manifest.get('runtime_state_included') is not False
-                or manifest.get('execution_policy') != 'simulation_only' or not isinstance(records, dict)):
+                or manifest.get('execution_policy') not in {'simulation_only', 'account_scoped'} or not isinstance(records, dict)):
             raise ValueError('Unsupported release manifest')
         if set(records) != set(contents) - {'release-manifest.json'}:
             raise ValueError('Manifest does not cover every release file')

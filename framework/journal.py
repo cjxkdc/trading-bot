@@ -172,6 +172,71 @@ class Journal:
             self.db.execute('UPDATE intents SET status=?,state=? WHERE id=?',
                             ('rejected', packed(asdict(state)), order.client_id))
 
+    def unclaim(self, order, token):
+        """Release a claim whose adapter proved nothing was recorded or sent.
+
+        Mirrors reject_unsubmitted: only the current in-process claim on this
+        exact, otherwise untouched intent can be released. The intent returns to
+        planned with an audit row; nothing is resent here.
+        """
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Releasing a claim requires the exclusive journal lock')
+        if token is None or self._submission_claims.get(order.client_id) is not token:
+            raise ValueError('Releasing a claim requires this process current submission claim')
+        with self.transaction():
+            row = self.db.execute('SELECT body,status,state FROM intents WHERE id=?',
+                                  (order.client_id,)).fetchone()
+            if row != (packed(asdict(order)), 'unknown', None):
+                raise ValueError('Releasing a claim requires the unchanged new claim')
+            self.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, action TEXT NOT NULL, body TEXT NOT NULL)''')
+            self.db.execute('INSERT INTO execution_audit(recorded_at,action,body) VALUES(?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), 'release_unattempted_claim',
+                             packed({'client_id': order.client_id, 'error_code': 'broker_submission_not_attempted',
+                                     'transmission_started': False})))
+            self.db.execute("UPDATE intents SET status='planned' WHERE id=? AND status='unknown'", (order.client_id,))
+
+    def close_untransmitted(self, account_id, client_ids, evidence):
+        """Retire unknown intents that provably never reached the broker.
+
+        The caller holds the exclusive lock, re-queried the broker through a
+        read-only session, supplies per-intent evidence and has confirmed the
+        check at the broker. Saved states stay; only the ledger status moves to
+        'closed', with an audit row holding the evidence.
+        """
+        if not getattr(self, '_exclusive_held', False):
+            raise RuntimeError('Closing untransmitted intents requires the exclusive journal lock')
+        wanted = set(client_ids)
+        if not wanted or wanted != set(evidence):
+            raise ValueError('Every closed intent needs broker evidence')
+        summaries = self.cycle_statuses()
+        if any(cycle.rsplit(':', 1)[0] != account_id for cycle in summaries):
+            raise ValueError('Journal belongs to another account')
+        rows = [row for row in self.db.execute(
+            "SELECT id,cycle,body,status,state FROM intents WHERE status='unknown' ORDER BY rowid").fetchall()
+            if row[0] in wanted]
+        if {row[0] for row in rows} != wanted:
+            raise ValueError('Untransmitted intents changed while closing')
+        for ident, cycle, body, status, state in rows:
+            saved = unpack_state(state) if state else None
+            if saved is not None and (saved.broker_id or saved.filled_quantity):
+                raise ValueError('Intent has broker evidence; it cannot be closed as untransmitted')
+        with self.transaction():
+            self.db.execute('''CREATE TABLE IF NOT EXISTS execution_audit (
+                id INTEGER PRIMARY KEY, recorded_at TEXT NOT NULL, action TEXT NOT NULL, body TEXT NOT NULL)''')
+            event = {'account_id': account_id, 'intents': [
+                {'client_id': ident, 'cycle': cycle, 'intent': json.loads(body),
+                 'state': json.loads(state) if state else None, 'evidence': evidence[ident]}
+                for ident, cycle, body, status, state in rows]}
+            self.db.execute('INSERT INTO execution_audit(recorded_at,action,body) VALUES(?,?,?)',
+                            (datetime.now(timezone.utc).isoformat(), 'close_untransmitted', packed(event)))
+            closed = 0
+            for ident, *_ in rows:
+                closed += self.db.execute("UPDATE intents SET status='closed' WHERE id=? AND status='unknown'", (ident,)).rowcount
+            if closed != len(rows):
+                raise ValueError('Intent state changed while closing untransmitted intents')
+        return closed
+
     def rejected_before_transmission(self, order):
         """Only the durable adapter rejection proof permits skipping a broker query."""
         expected = OrderState(order.client_id, None, 'rejected', Decimal(0))

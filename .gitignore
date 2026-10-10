@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-*/
 venv/
 .pytest_cache/
 .coverage
@@ -24,6 +25,7 @@ runs/
 !.env.example
 secrets/
 configs/portal/cloud.json
+configs/execution_policy.json
 /打开云端工作台.url
 credentials/
 tiger_openapi_config.properties

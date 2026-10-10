@@ -78,17 +78,22 @@ def strategy_data_requirements(config):
     return request
 
 
+def source_fingerprint_bytes(path):
+    """Source text with newlines normalized; a CRLF checkout is not an algorithm edit."""
+    return Path(path).read_text(encoding="utf-8-sig").encode("utf-8")
+
+
 def portfolio_spec(config):
     entry = strategy_catalog()[config["type"]]
     module, cls = entry["entrypoint"].split(":")
-    source = (ROOT / (module.replace(".", "/") + ".py")).read_bytes()
+    source = source_fingerprint_bytes(ROOT / (module.replace(".", "/") + ".py"))
     constructor = getattr(importlib.import_module(module), cls)
     parameters = inspect.signature(constructor).bind(
         **{k: v for k, v in config.items() if k not in {"type", "id"}})
     parameters.apply_defaults()
     return {"type": entry["type"], "version": entry["version"],
             "source_sha256": hashlib.sha256(source).hexdigest(),
-            "engine_sha256": hashlib.sha256(b"".join((ROOT / p).read_bytes() for p in
+            "engine_sha256": hashlib.sha256(b"".join(source_fingerprint_bytes(ROOT / p) for p in
                 ("framework/portfolio.py", "framework/decisions.py"))).hexdigest(),
             "parameters": dict(parameters.arguments)}
 
@@ -174,11 +179,35 @@ def build_portfolio_runner(cfg):
 
 
 @contextmanager
+def open_account_session(cfg, snapshot, state_dir, fees, *, expected_mode,
+                         enable_live=False, expected_account_ref=None):
+    """One account lifecycle; the registered adapter owns its environment/rules."""
+    connector = _build_platform(cfg['broker'], 'broker')
+    if connector.mode != expected_mode or expected_mode not in {'paper', 'broker_paper', 'live'}:
+        raise ValueError('Account environment differs from the registered adapter')
+    if expected_mode == 'live' and (enable_live is not True or not expected_account_ref):
+        raise ValueError('Live execution requires a grant for the bound account')
+    target = Path(state_dir).resolve()
+    if expected_mode != 'paper' and target != connector.state_dir:
+        raise ValueError('Use the configured account state directory')
+    options = ({'enable_live': True, 'expected_account_ref': expected_account_ref}
+               if expected_mode == 'live' else {})
+    with _open_execution_session(connector, cfg, snapshot, target, fees,
+                                 connect_options=options) as session:
+        yield session
+
+
+@contextmanager
 def open_paper_session(cfg, snapshot, state_dir, fees):
     connector = _build_platform(cfg["broker"], "broker")
     if connector.mode != "paper":
-        raise ValueError("This release supports paper connections only")
-    with _open_execution_session(connector, cfg, snapshot, state_dir, fees) as session:
+        raise ValueError("This command requires a local replay account")
+    # The replay broker uses the same quote freshness limit as the execution policy;
+    # other local connectors keep their own signature.
+    options = {}
+    if "max_quote_age_seconds" in inspect.signature(connector.connect).parameters:
+        options["max_quote_age_seconds"] = (cfg.get("limits") or {}).get("max_quote_age_seconds", 120)
+    with _open_execution_session(connector, cfg, snapshot, state_dir, fees, connect_options=options) as session:
         yield session
 
 
@@ -205,9 +234,35 @@ def open_live_session(cfg, snapshot, state_dir, fees, *, enable_live=False):
     state_dir = Path(state_dir).resolve() if state_dir else connector.state_dir
     if state_dir != connector.state_dir:
         raise ValueError('Use the configured live state directory')
-    with _open_execution_session(connector, cfg, snapshot, state_dir, fees,
-                                 connect_options={'enable_live': True}) as session:
+    # CLI and Portal share exactly the same registered account permission.
+    # --enable-live expresses invocation intent; it never grants a different account.
+    control = registered_live_control(cfg)
+    with control.session(cfg, snapshot, fees) as session:
         yield session
+
+
+def registered_live_control(cfg):
+    from app.module_registry import ModuleRegistry
+    from app.control_contracts import ControlError
+    registry = ModuleRegistry(ROOT)
+    matches = []
+    for ident in registry.profiles('broker'):
+        try:
+            profile, entry = registry.resolve('broker', ident)
+            if entry['control'].get('mode') != 'live' or profile.get('type') != cfg['broker'].get('type'):
+                continue
+            path_fields = entry['control'].get('path_fields', [])
+            requested = {key: str((ROOT / value).resolve()) if key in path_fields else value
+                         for key, value in cfg['broker'].items()}
+            control = registry.control('broker', ident)
+            if control.connector_config() == requested:
+                matches.append(control)
+        except (ControlError, KeyError, TypeError, ValueError):
+            continue
+    if len(matches) != 1:
+        raise ValueError('Live CLI execution requires exactly one matching registered broker profile')
+    matches[0].require_execution()
+    return matches[0]
 
 
 @contextmanager

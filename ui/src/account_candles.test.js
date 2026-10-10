@@ -38,10 +38,17 @@ test('pointer and keyboard selection work at boundaries and through time gaps',(
 });
 
 test('readout uses New York dates and distinguishes repeated daylight-saving hours',()=>{
-  const a=candleLabel({start:'2025-11-02T05:00:00Z'},'1h');
-  const b=candleLabel({start:'2025-11-02T06:00:00Z'},'1h');
+  const a=candleLabel({start:'2025-11-02T05:00:00Z'},'1h','America/New_York');
+  const b=candleLabel({start:'2025-11-02T06:00:00Z'},'1h','America/New_York');
   assert.notEqual(a,b);
-  assert.match(candleLabel({start:'2025-01-06T03:00:00Z'},'1d'),/2025.*01.*05/);
-  const week=candleLabel({start:'2025-01-06T05:00:00Z',end:'2025-01-13T05:00:00Z'},'1w');
+  assert.match(candleLabel({start:'2025-01-06T03:00:00Z'},'1d','America/New_York'),/2025.*01.*05/);
+  const week=candleLabel({start:'2025-01-06T05:00:00Z',end:'2025-01-13T05:00:00Z'},'1w','America/New_York');
   assert.match(week,/2025.*01.*06.*2025.*01.*12/);
+});
+
+
+test('HK and unknown reporting timezones do not inherit US dates', () => {
+  assert.match(candleLabel({start:'2025-01-06T03:00:00Z'}, '1d', 'Asia/Hong_Kong'), /2025.*01.*06/);
+  assert.equal(candleLabel({start:'2025-01-06T03:00:00Z'}, '1d'), '—');
+  assert.equal(candleLabel({start:'2025-01-06T03:00:00Z'}, '1d', 'bad/timezone'), '—');
 });

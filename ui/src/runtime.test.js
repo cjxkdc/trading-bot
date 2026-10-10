@@ -9,11 +9,15 @@ test('a lost heartbeat cannot display a green running state', () => {
   assert.equal(view.disabled, true);
 });
 
-test('off can start; a busy or unresponsive process cannot be stopped or duplicated', () => {
+test('off can start; a busy process cannot be stopped; an unresponsive one can only be asked to exit', () => {
   assert.equal(runtimeView({ status: 'stopped', alive: false }, true, false, null).disabled, false);
   assert.equal(runtimeView({ status: 'running', alive: true }, true, false, null).disabled, false);
   assert.equal(runtimeView({ status: 'running', alive: true }, true, false, { action: 'execute' }).disabled, true);
-  assert.equal(runtimeView({ status: 'unresponsive', alive: true }, true, false, null).disabled, true);
+  // The switch stays on (the process is alive) and acts as a stop request only.
+  const silent = runtimeView({ status: 'unresponsive', alive: true }, true, false, null);
+  assert.equal(silent.disabled, false);
+  assert.equal(silent.checked, true);
+  assert.equal(runtimeView({ status: 'unresponsive', alive: false }, true, false, null).disabled, true);
 });
 
 test('starting and stopping are transitions, never a completed off state', () => {

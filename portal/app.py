@@ -1,5 +1,6 @@
 """Loopback-only HTTP surface. Never exposes project files or arbitrary commands."""
 import json
+import logging
 from math import isfinite
 import secrets
 from contextlib import asynccontextmanager
@@ -11,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app.workbench import MAX_FILE, PortalError, PortalService
+from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
+from app.logs import incident_id, log_exception
 
 
 class LocalOnly:
@@ -105,6 +108,8 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     app.state.portal_token = token
     app.add_middleware(LocalOnly, port=port, token=token)
 
+    log = logging.getLogger('trading_bot.backend')
+
     @app.exception_handler(PortalError)
     async def portal_error(request, exc):
         return JSONResponse({'message': str(exc)}, status_code=409)
@@ -113,15 +118,25 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     @app.exception_handler(TypeError)
     @app.exception_handler(KeyError)
     async def invalid_input(request, exc):
-        return JSONResponse({'message': '数据或配置未通过检查，请核对格式、日期及参数。'}, status_code=422)
+        # Also raised by genuine defects; the incident id points at the traceback
+        # in runs/portal/logs/backend.log so they are no longer invisible.
+        ident = incident_id()
+        log_exception(log, f'422 {request.method} {request.url.path}', exc, ident)
+        return JSONResponse({'message': f'数据或配置未通过检查，请核对格式、日期及参数。（诊断编号 {ident}）',
+                             'incident_id': ident}, status_code=422)
 
     @app.exception_handler(Exception)
     async def unexpected(request, exc):
-        return JSONResponse({'message': '本地操作失败，原有账本和配置已保留。'}, status_code=500)
+        ident = incident_id()
+        log_exception(log, f'500 {request.method} {request.url.path}', exc, ident)
+        return JSONResponse({'message': f'本地操作失败，原有账本和配置已保留。（诊断编号 {ident}）',
+                             'incident_id': ident}, status_code=500)
 
     @app.get('/health')
     def health():
-        return {'application': 'trading-bot-portal', 'instance': instance, 'execution_policy': 'simulation_only'}
+        return {'application': 'trading-bot-portal', 'instance': instance,
+                'execution_policy': CURRENT_EXECUTION_POLICY.identifier,
+                'execution_scope': load_execution_policy(root).public()}
 
     @app.get('/api/session')
     def session():
@@ -137,7 +152,7 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
 
     @app.post('/api/strategy-instances/limits')
     async def strategy_limits(request: Request):
-        return service.strategy_instance_action('limits', await body(request))
+        return await run_in_threadpool(service.strategy_instance_action, 'limits', await body(request))
 
     @app.post('/api/strategy-instances/{ident}')
     async def update_instance(ident: str, request: Request):
@@ -146,6 +161,10 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     @app.get('/api/strategy-instances/{ident}/logs')
     def instance_logs(ident: str):
         return service._public({'items': service.strategy_instances.logs(ident)})
+
+    @app.get('/api/strategy-instances/{ident}/attribution')
+    async def instance_attribution(ident: str):
+        return await run_in_threadpool(service.instance_attribution, ident)
 
     @app.post('/api/strategy-instances/{ident}/export')
     async def instance_export(ident: str, request: Request):
@@ -157,16 +176,17 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         if action == 'resolve':
             if value != {'confirmation': ident}:
                 raise PortalError('请确认结束未提交余单；已成交持仓会保留。')
-            return service.strategy_instance_job(ident, 'strategy-resolve')
+            return await run_in_threadpool(service.strategy_instance_job, ident, 'strategy-resolve')
         if action == 'close-terminal':
             if value != {'confirmation': ident}:
                 raise PortalError('请确认已在券商端核对撤单或拒单，再关闭这些委托。')
-            return service.strategy_instance_job(ident, 'strategy-close-terminal')
+            return await run_in_threadpool(service.strategy_instance_job, ident, 'strategy-close-terminal')
         if action in {'check', 'preview', 'reconcile'}:
             if value:
                 raise PortalError('检查不接受订单参数。')
-            return service.strategy_instance_job(ident, {'check':'strategy-check', 'preview':'strategy-preview',
-                                                        'reconcile':'strategy-reconcile'}[action])
+            return await run_in_threadpool(service.strategy_instance_job, ident,
+                                           {'check':'strategy-check', 'preview':'strategy-preview',
+                                            'reconcile':'strategy-reconcile'}[action])
         return await run_in_threadpool(service.strategy_instance_action, action, value, ident)
 
     @app.post('/api/strategy-plugins/upload')
@@ -187,75 +207,91 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
                         headers={'Content-Disposition': 'attachment; filename="strategy.zip"'})
 
     @app.get('/api/orders')
-    def orders():
-        return service.orders()
+    def orders(broker: str | None = None):
+        return service.orders(broker)
 
     @app.get('/api/performance')
-    def performance():
-        return service.performance()
+    def performance(broker: str | None = None):
+        return service.performance(broker)
 
     @app.get('/api/performance/candles')
-    def performance_candles(interval: str = '1h', limit: int = 96, account_key: str | None = None):
-        return service.performance_candles(interval, limit, account_key)
+    def performance_candles(interval: str = '1h', limit: int = 96, account_key: str | None = None, broker: str | None = None):
+        return service.performance_candles(interval, limit, account_key, broker)
 
+    # Performance writes take the service lock and recompute reports; keep them
+    # off the event loop so status polling is never blocked behind them.
     @app.post('/api/performance/cash-event')
     async def cash_event(request: Request):
-        return service.performance_cash_event(await body(request))
+        return await run_in_threadpool(service.performance_cash_event, await body(request))
 
     @app.post('/api/performance/review')
     async def review_performance(request: Request):
-        return service.performance_review(await body(request))
+        return await run_in_threadpool(service.performance_review, await body(request))
 
     @app.post('/api/performance/cash-event/remove')
     async def remove_cash_event(request: Request):
-        return service.performance_remove_event(await body(request))
+        return await run_in_threadpool(service.performance_remove_event, await body(request))
 
     @app.get('/api/monitoring/events')
     def monitoring_events():
         return service.monitor.events.recent()
 
+    # Every call below takes the service lock (and may do file or network I/O);
+    # running them in the threadpool keeps the event loop, and therefore the
+    # 2.5-second status polling, responsive while another thread holds it.
     @app.post('/api/monitoring/config')
     async def monitoring_config(request: Request):
-        return service.monitoring_configure(await body(request))
+        return await run_in_threadpool(service.monitoring_configure, await body(request))
+
+    def _test_notification():
+        with service.lock:
+            return service.monitor.test_notification()
 
     @app.post('/api/monitoring/test')
     async def monitoring_test(request: Request):
         if await body(request):
             raise PortalError('测试通知不接受消息内容。')
-        with service.lock:
-            return service.monitor.test_notification()
+        return await run_in_threadpool(_test_notification)
 
     @app.post('/api/automation/config')
     async def automation_config(request: Request):
-        return service.automation_configure(await body(request))
+        return await run_in_threadpool(service.automation_configure, await body(request))
 
     @app.post('/api/automation/enable')
     async def automation_enable(request: Request):
         if await body(request):
-            raise PortalError('自动运行只能使用当前选定并已核验的模拟模块。')
-        return service.automation_enable()
+            raise PortalError('自动运行只能使用当前选定并已核验的模块。')
+        return await run_in_threadpool(service.automation_enable)
+
+    @app.post('/api/automation/migrate')
+    async def automation_migrate(request: Request):
+        return await run_in_threadpool(service.automation_migrate, await body(request))
 
     @app.post('/api/automation/disable')
     async def automation_disable(request: Request):
         if await body(request):
             raise PortalError('暂停不接受订单参数。')
-        return service.automation_disable()
+        return await run_in_threadpool(service.automation_disable)
 
     @app.post('/api/source')
     async def source(request: Request):
         value = await body(request)
-        return service.select_source(value.get('source'))
+        return await run_in_threadpool(service.select_source, value.get('source'))
 
     @app.post('/api/broker')
     async def broker(request: Request):
         value = await body(request)
-        return service.select_broker(value.get('broker'))
+        return await run_in_threadpool(service.select_broker, value.get('broker'))
+
+    @app.post('/api/broker/settings')
+    async def broker_settings(request: Request):
+        return await run_in_threadpool(service.configure_broker, await body(request))
 
     @app.post('/api/broker/disconnect')
     async def disconnect(request: Request):
         if await body(request):
             raise PortalError('断开账户不接受交易参数。')
-        return service.disconnect_broker()
+        return await run_in_threadpool(service.disconnect_broker)
 
     @app.post('/api/broker-auth/start')
     async def authorize(request: Request):
@@ -285,8 +321,8 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
     async def bind(request: Request):
         value = await body(request)
         if set(value) != {'account'}:
-            raise PortalError('请选择返回的模拟账户。')
-        return service.bind_authorization(value['account'])
+            raise PortalError('请选择返回的账户。')
+        return await run_in_threadpool(service.bind_authorization, value['account'])
 
     @app.post('/api/strategy')
     async def strategy(request: Request):
@@ -302,10 +338,12 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         if action == 'execute' and value.get('confirmation') != service.broker_id:
             raise PortalError('请先核对预览并确认当前账户模块。')
         if action == 'resolve-remainder' and value.get('confirmation') != service.broker_id:
-            raise PortalError('请明确确认当前模拟账户，并确认结束尚未提交的余单。')
+            raise PortalError('请明确确认当前账户，并确认结束尚未提交的余单。')
         if action == 'close-terminal' and value.get('confirmation') != service.broker_id:
-            raise PortalError('请明确确认当前模拟账户，并确认已在券商端核对撤单或拒单。')
-        return service.start(action)
+            raise PortalError('请明确确认当前账户，并确认已在券商端核对撤单或拒单。')
+        if action == 'close-untransmitted' and value.get('confirmation') != service.broker_id:
+            raise PortalError('请明确确认当前账户，并确认已在券商端核对这些委托从未送达。')
+        return await run_in_threadpool(service.start, action)
 
     @app.post('/api/data/settings')
     async def data_settings(request: Request):
@@ -332,7 +370,7 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
                     raise PortalError('结构化设置格式无效或超过长度限制。') from None
             elif not isinstance(item, str) or len(item) > field.get('max_length', 4096):
                 raise PortalError('文本设置格式无效。')
-        return service.start('configure-data', credentials=value)
+        return await run_in_threadpool(service.start, 'configure-data', credentials=value)
 
     @app.post('/api/cancel-download')
     def cancel():
@@ -352,7 +390,32 @@ def create_app(root, *, port=8765, service=None, instance='development', shutdow
         start, end, slip, note = (value.get(k) for k in ('start', 'end', 'slippage_bps', 'note'))
         if not isinstance(start, str) or not isinstance(end, str) or not isinstance(note or '', str) or len(note or '') > 2000:
             raise PortalError('回测日期或备注格式无效。')
-        return await run_in_threadpool(service.export, start, end, slip, note or '')
+        expected = ({'expected_strategy_type': value['expected_strategy_type']}
+                    if 'expected_strategy_type' in value else {})
+        return await run_in_threadpool(service.export, start, end, slip, note or '', **expected)
+
+    @app.get('/api/experiments/replay-series')
+    def replay_series():
+        source, items = service.replay_series()
+        return {'source': source, 'count': len(items), 'dates': [item['date'] for item in items]}
+
+    @app.post('/api/experiments/replay')
+    async def replay_backtest(request: Request):
+        value = await body(request)
+        return await run_in_threadpool(service.replay_backtest, value)
+
+    @app.post('/api/backfill/plan')
+    async def backfill_plan(request: Request):
+        return await run_in_threadpool(service.backfill_plan, await body(request))
+
+    @app.post('/api/backfill')
+    async def backfill_start(request: Request):
+        return await run_in_threadpool(service.backfill_start, await body(request))
+
+    @app.post('/api/backfill/{command}')
+    async def backfill_control(command: str, request: Request):
+        await body(request)
+        return await run_in_threadpool(service.backfill_control, command)
 
     @app.get('/api/experiments/{ident}/code')
     def code(ident: str):
