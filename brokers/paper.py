@@ -6,9 +6,13 @@ from pathlib import Path
 import json
 import sqlite3
 import uuid
-from framework.contracts import OrderState
+from framework.contracts import OrderState, SubmissionRejected
 from framework.journal import packed, unpack_state
 from framework.trading import Account, amount, fresh
+
+
+class PaperSubmissionRejected(SubmissionRejected, ValueError):
+    """Local pre-checks failed before anything was recorded; the journal records a rejection."""
 
 
 class PaperConnector:
@@ -19,9 +23,9 @@ class PaperConnector:
     def initialize(self, state_dir, initial_cash):
         PaperBroker.create(Path(state_dir) / self.state_files[0], initial_cash)
 
-    def connect(self, state_dir, snapshot, fees):
+    def connect(self, state_dir, snapshot, fees, max_quote_age_seconds=120):
         return PaperBroker(Path(state_dir) / self.state_files[0], snapshot.quotes,
-                           snapshot.execution_time, fees)
+                           snapshot.execution_time, fees, max_quote_age_seconds=max_quote_age_seconds)
 
 
 class PaperBroker:
@@ -43,13 +47,16 @@ class PaperBroker:
             db.execute("INSERT INTO account VALUES (?,?)", ("paper-" + uuid.uuid4().hex, str(amount(cash, True))))
             db.commit()
 
-    def __init__(self, path, quotes, now, fees):
+    def __init__(self, path, quotes, now, fees, max_quote_age_seconds=120):
         path = Path(path).resolve()
         if not path.is_file():
             raise ValueError("Paper account missing; explicit initialization required")
         self.db = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=10)
         self.db.execute("PRAGMA synchronous=FULL")
         self.quotes, self.now, self.fees = quotes, now, fees
+        # Shared with the execution policy so the replay never rejects a quote
+        # that the executor's own freshness check just accepted.
+        self.max_quote_age_seconds = max_quote_age_seconds
         self.account()  # Detect corrupt or uninitialized accounts immediately.
 
     def close(self):
@@ -80,19 +87,27 @@ class PaperBroker:
                     raise ValueError("Reused client ID with a different order")
                 self.db.commit()
                 return unpack_state(prior[1])
-            quote = self.quotes[order.symbol]
-            fresh(quote.as_of, self.now, 120)
-            if amount(quote.bid, True) > amount(quote.ask, True):
-                raise ValueError("Crossed quote")
-            amount(order.limit_price, True)
-            if order.quantity != amount(order.quantity, True).to_integral_value():
-                raise ValueError("Whole shares required")
-            if order.side not in {"BUY", "SELL"}:
-                raise ValueError("Unsupported side")
-            price = quote.ask if order.side == "BUY" else quote.bid
-            if (order.side == "BUY" and order.limit_price < price
-                    or order.side == "SELL" and order.limit_price > price):
-                raise ValueError("Non-marketable orders are outside the local replay model")
+            # Pre-checks happen before any row exists. They raise the explicit
+            # pre-submission rejection so the journal never leaves the intent
+            # stranded as 'unknown' for an order that was never "sent".
+            try:
+                quote = self.quotes[order.symbol]
+                fresh(quote.as_of, self.now, self.max_quote_age_seconds)
+                if amount(quote.bid, True) > amount(quote.ask, True):
+                    raise ValueError("Crossed quote")
+                amount(order.limit_price, True)
+                if order.quantity != amount(order.quantity, True).to_integral_value():
+                    raise ValueError("Whole shares required")
+                if order.side not in {"BUY", "SELL"}:
+                    raise ValueError("Unsupported side")
+                price = quote.ask if order.side == "BUY" else quote.bid
+                if (order.side == "BUY" and order.limit_price < price
+                        or order.side == "SELL" and order.limit_price > price):
+                    raise ValueError("Non-marketable orders are outside the local replay model")
+            except KeyError:
+                raise PaperSubmissionRejected("Missing replay quote for the order symbol") from None
+            except ValueError as exc:
+                raise PaperSubmissionRejected(str(exc)) from None
             account = self.account()
             positions = dict(account.positions)
             held = positions.get(order.symbol, Decimal(0))

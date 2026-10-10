@@ -24,6 +24,8 @@ class Monitoring:
         self.last_success = None
         self.notification_thread = None
         self.error = None
+        # The selected account is not bound yet (a setup step, not a failure).
+        self.unconfigured = None
 
     def scope(self, broker):
         if 'observe' not in self.registry.descriptor('broker', broker)['capabilities']:
@@ -64,13 +66,16 @@ class Monitoring:
 
     def public(self):
         return dict(settings=self.settings.public(), last_check=self.last_check,
-                    last_success=self.last_success, error=self.error, events=self.events.recent(12))
+                    last_success=self.last_success, error=self.error, unconfigured=self.unconfigured,
+                    events=self.events.recent(12))
 
     def configure(self, value):
         self.settings.save(value)
         # Never replay an old queue to a newly selected destination.
         self.events.cancel_pending()
         self.next_observation = self.next_heartbeat = 0
+        if not self.settings.config['enabled']:
+            self.error = None  # A disabled monitor has no current failure to report.
         return {'message':'监控设置已保存。'}
 
     def test_notification(self):

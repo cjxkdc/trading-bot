@@ -196,12 +196,16 @@ class OpenDControl(BrokerControl):
         return self.execution_account_reference()
 
     def financial_observation(self):
-        from brokers.opend_observation import financial_observation
+        from brokers.opend_observation import financial_observation, ObservationBlocked
         from platforms.opend import OpenDError
         connector = self.connector()
         self.validate_binding(connector)
         try:
             return financial_observation(connector)
+        except ObservationBlocked as exc:
+            # Unsupported holdings or currencies are explicit, static reasons;
+            # they must not be reported as a login or connection problem.
+            raise ControlError(str(exc)) from None
         except OpenDError:
             raise ControlError('账户估值读取失败；请检查 OpenD 登录与账户绑定，历史记录已保留。') from None
 

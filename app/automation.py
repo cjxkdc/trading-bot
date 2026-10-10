@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from app.atomic import replace_file
 from app.control_contracts import ControlError, project_path
 from app.diagnostics import diagnostic_fields, failure_details
 from framework.scheduling import DEFAULT_SCHEDULE, schedule_config, instant, period_window, next_window, period_key, initial_window, normalize_sessions, session_dates, schedule_defaults, session_close
@@ -25,7 +26,7 @@ def save(path, value):
             json.dump(value, file, ensure_ascii=False, allow_nan=False)
             file.flush()
             os.fsync(file.fileno())
-        temporary.replace(path)
+        replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -227,18 +228,23 @@ class Automation:
         self.persist()
         return {'message': self.data['message']}
 
-    def validate_binding(self, broker_id, source_id):
+    def validate_binding(self, broker_id=None, source_id=None):
+        """Pause only when the plan's own bound modules changed.
+
+        The plan runs on the account and data source it was enabled with. The
+        workbench's currently selected account is a separate, per-user choice
+        (viewing or operating another account) and must not stop a running plan.
+        """
         if not self.data['enabled']:
             return
         b = self.data['binding']
         try:
-            matches = (broker_id == b['broker_id'] and source_id == b['source_id']
-                       and self.registry.context(broker_id, source_id) == b['context']
+            matches = (self.registry.context(b['broker_id'], b['source_id']) == b['context']
                        and code_revision(self.root) == b['code_revision'])
         except Exception:
             matches = False
         if not matches:
-            self.pause('模块、账户、策略参数或代码已变化，原自动计划已暂停；核对后重新开启。')
+            self.pause('模块、策略参数或代码已变化，原自动计划已暂停；核对后重新开启。')
 
     def public(self, broker_id, source_id):
         issues = self.available(broker_id, source_id)

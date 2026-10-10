@@ -16,6 +16,19 @@ class SubmissionRejected(RuntimeError):
     error_code = 'broker_pre_submit_rejected'
 
 
+class SubmissionNotAttempted(RuntimeError):
+    """Adapter proves it stopped before any durable record or broker call.
+
+    Raised for conditions that are not a verdict on the order itself: a failed
+    account or open-order query, unresolved earlier orders, or a cash/position
+    check that disagrees with the executor's own. The executor releases the
+    intent back to planned so the batch can be reconciled and continued; a
+    permanent rejection would wrongly retire it. Never raise this after a send
+    might have happened.
+    """
+    error_code = 'broker_submission_not_attempted'
+
+
 class Strategy(Protocol):
     @property
     def warmup(self) -> int: ...

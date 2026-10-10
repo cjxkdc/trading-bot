@@ -40,9 +40,11 @@ def main():
             def shutdown():
                 server.should_exit = True
 
+            from app.logs import configure_logging
+            configure_logging(root, 'portal')
             app = create_controller(root, port=port, instance=instance, shutdown=shutdown, access=access)
             server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
-                                      access_log=False, log_level='critical'))
+                                      access_log=False, log_level='warning', log_config=None))
             state = root / 'runs/portal/server.json'
             atomic_json(state, {'port': port, 'pid': os.getpid(), 'instance': instance})
             try:

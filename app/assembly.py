@@ -78,17 +78,22 @@ def strategy_data_requirements(config):
     return request
 
 
+def source_fingerprint_bytes(path):
+    """Source text with newlines normalized; a CRLF checkout is not an algorithm edit."""
+    return Path(path).read_text(encoding="utf-8-sig").encode("utf-8")
+
+
 def portfolio_spec(config):
     entry = strategy_catalog()[config["type"]]
     module, cls = entry["entrypoint"].split(":")
-    source = (ROOT / (module.replace(".", "/") + ".py")).read_bytes()
+    source = source_fingerprint_bytes(ROOT / (module.replace(".", "/") + ".py"))
     constructor = getattr(importlib.import_module(module), cls)
     parameters = inspect.signature(constructor).bind(
         **{k: v for k, v in config.items() if k not in {"type", "id"}})
     parameters.apply_defaults()
     return {"type": entry["type"], "version": entry["version"],
             "source_sha256": hashlib.sha256(source).hexdigest(),
-            "engine_sha256": hashlib.sha256(b"".join((ROOT / p).read_bytes() for p in
+            "engine_sha256": hashlib.sha256(b"".join(source_fingerprint_bytes(ROOT / p) for p in
                 ("framework/portfolio.py", "framework/decisions.py"))).hexdigest(),
             "parameters": dict(parameters.arguments)}
 
@@ -197,7 +202,12 @@ def open_paper_session(cfg, snapshot, state_dir, fees):
     connector = _build_platform(cfg["broker"], "broker")
     if connector.mode != "paper":
         raise ValueError("This command requires a local replay account")
-    with _open_execution_session(connector, cfg, snapshot, state_dir, fees) as session:
+    # The replay broker uses the same quote freshness limit as the execution policy;
+    # other local connectors keep their own signature.
+    options = {}
+    if "max_quote_age_seconds" in inspect.signature(connector.connect).parameters:
+        options["max_quote_age_seconds"] = (cfg.get("limits") or {}).get("max_quote_age_seconds", 120)
+    with _open_execution_session(connector, cfg, snapshot, state_dir, fees, connect_options=options) as session:
         yield session
 
 

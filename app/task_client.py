@@ -33,18 +33,23 @@ def run_worker(root, action, snapshot=None, token=None, progress=None, *, source
                 process.stdin.write(payload)
                 process.stdin.close()
                 output = ''
-                for line in process.stdout:
-                    try:
-                        event = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(event, dict):
-                        continue
-                    if event.get('portal_progress') == 1 and progress:
-                        progress(event.get('message', ''))
-                    elif event.get('portal_protocol') == 1:
-                        output = line
-                process.wait()
+                try:
+                    for line in process.stdout:
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        if event.get('portal_progress') == 1 and progress:
+                            try:
+                                progress(event.get('message', ''))
+                            except Exception:
+                                pass  # A failed progress write must not stop reading the pipe.
+                        elif event.get('portal_protocol') == 1:
+                            output = line
+                finally:
+                    process.wait()  # The single-flight slot is released only after the child exits.
             else:
                 output, _ = process.communicate(payload, timeout=None if action in {'execute', 'recover'} else 60)
         except subprocess.TimeoutExpired:
@@ -82,16 +87,23 @@ def run_strategy_worker(root, action, *, instance=None, cycle_path=None, progres
         result = None
         # Do not kill a process that may have submitted orders. Selection processes
         # inside it have their own wall-time and server memory/CPU limits.
-        for line in process.stdout:
-            try:
-                value = json.loads(line)
-            except ValueError:
-                continue
-            if value.get('portal_progress') == 1 and progress:
-                progress(value.get('message', ''))
-            if value.get('portal_protocol') == 1:
-                result = value
-        process.wait()
+        try:
+            for line in process.stdout:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(value, dict):
+                    continue  # A stray numeric/array line from a library print is not a protocol message.
+                if value.get('portal_progress') == 1 and progress:
+                    try:
+                        progress(value.get('message', ''))
+                    except Exception:
+                        pass
+                if value.get('portal_protocol') == 1:
+                    result = value
+        finally:
+            process.wait()  # Never report "paused" while the strategy process is still running.
         if process.returncode or not isinstance(result, dict) or result.get('action') != action or result.get('status') not in {'complete', 'paused', 'blocked', 'ready'}:
             raise ValueError()
         return result

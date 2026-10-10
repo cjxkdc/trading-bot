@@ -37,8 +37,10 @@ def build(config=None):
     selected = strategy_catalog()[config['strategy']['type']]
     qc_profile = selected.get('backtest', {}).get('quantconnect', {})
     runner.engine.strategy.history_requirements  # Enforce the history request contract before export.
-    plugins = {k: v for k, v in strategy_catalog().items()
-               if v["kind"] == "portfolio" and v.get("input_schema") == runner.input_schema}
+    # Freeze only the configured strategy. Bundling every plug-in that shares the
+    # input schema made the export (and its SHA) change whenever an unrelated or
+    # fixture strategy was registered, so the maintained file could never match.
+    plugins = {config['strategy']['type']: selected}
     sources = ["framework/market.py", "framework/portfolio.py", "framework/decisions.py", "framework/collection.py", "framework/scheduling.py"]
     sources += sorted({v["entrypoint"].split(":")[0].replace(".", "/") + ".py" for v in plugins.values()})
     sources.append("backtests/quantconnect/adapter.py")

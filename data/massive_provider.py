@@ -4,7 +4,7 @@ import json
 from math import isfinite
 from pathlib import Path
 
-from data.common import DataIssue, collection_lock, finite, utcnow, write_json
+from data.common import DataIssue, collection_lock, describe_issue, finite, utcnow, write_json
 from data.massive import TICKER, TICKERS, MassiveClient, MassiveError, settings
 from data.massive_technology import EXCHANGES, income_rows, latest_income, reference_history
 from data.massive_batch import grouped_rows, market_histories, split_events
@@ -233,7 +233,8 @@ class MassiveData:
                 notify(f'采集完成：{len(sessions)} 天批量行情，资料 {details_checked}/{len(ordered)}，问题 {len(issues)}。')
                 return path
             except Exception as exc:
-                message=str(exc) if isinstance(exc,DataIssue) else '下载中断，缓存已保留。'
+                message=(describe_issue(str(exc)) if isinstance(exc,DataIssue)
+                         else str(exc) if isinstance(exc, MassiveError) else '下载中断，缓存已保留。')
                 write_json(out/'failure.json',{'status':'incomplete','message':message})
                 notify(message)
                 raise

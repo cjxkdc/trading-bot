@@ -433,7 +433,7 @@ class StrategyInstances:
         now = self.clock()
         due = [item for item in due if item['enabled']]
         if not due or now >= min(ends):
-            return {'status': 'complete', 'message': '策略检查完成，等待各自交易计划。'}
+            return {'status': 'complete', 'message': '策略检查完成，等待各自交易计划。', 'idle': True}
         book = deepcopy(self.data['books'].get(broker_id, {'owners': {}, 'unmanaged': {}, 'account_ref': None}))
         participating = [x for x in self.data['instances'] if x['broker_id'] == broker_id
                          and (x['enabled'] or book['owners'].get(x['id']))]

@@ -147,8 +147,23 @@ class ModuleRegistry:
                 result.append(self.descriptor(kind, ident))
             except ControlError as exc:
                 result.append(self.unavailable(ident, str(exc)))
+            except Exception:
+                # One malformed profile (a missing field, an adapter import error)
+                # must not take the whole workbench state down with a 422.
+                result.append(self.unavailable(ident, '该模块实例的配置或代码无法加载，请检查登记文件。'))
         result.extend(dict(i) for i in self.catalog(kind).issues)
         return result
+
+    def secret_fields(self):
+        """Names of module settings declared secret, taken from the manifests alone.
+
+        Redaction runs on every progress message. Reading the two catalogs is
+        cheap; building full descriptors (which instantiates adapters) is not,
+        and a manifest declares the same fields for every instance of a module.
+        """
+        return {field['name'] for kind in ('data', 'broker') for entry in self.catalog(kind).values()
+                for field in entry.get('control', {}).get('settings_fields', [])
+                if isinstance(field, dict) and field.get('secret')}
 
     @staticmethod
     def unavailable(ident, reason):

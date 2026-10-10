@@ -4,6 +4,7 @@ import json
 import os
 from uuid import uuid4
 
+from app.atomic import replace_file
 from app.control_contracts import ControlError, project_path
 from platforms.opend import OpenDError, PROFILES
 
@@ -72,7 +73,7 @@ def configure(control, values):
             json.dump(updated, stream, ensure_ascii=False, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        temporary.replace(path)
+        replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
     return {'message': '连接设置已保存，请重新检查账户连接。', 'changed': True}

@@ -52,6 +52,8 @@ def run_backend(root, channel, stop_channel):
     try:
         import uvicorn
         from portal.app import create_app
+        from app.logs import configure_logging
+        configure_logging(root, 'backend')
         with backend_lock(root), socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(('127.0.0.1', 0))
             port, instance = sock.getsockname()[1], uuid4().hex
@@ -59,7 +61,7 @@ def run_backend(root, channel, stop_channel):
             app = create_app(root, port=port, instance=instance,
                              shutdown=lambda: setattr(server, 'should_exit', True))
             server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
-                                                 access_log=False, log_level='critical', log_config=None))
+                                                 access_log=False, log_level='warning', log_config=None))
 
             def watch_owner():
                 parent = mp.parent_process()
@@ -110,6 +112,10 @@ class Reply:
     headers: dict
 
 
+STARTUP_TIMEOUT_SECONDS = 120
+CLOSE_TIMEOUT_SECONDS = 600
+
+
 class BackendRuntime:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -117,6 +123,7 @@ class BackendRuntime:
         self.lock = threading.RLock()
         self.process = self.stop_channel = self.info = None
         self.phase, self.started_at = 'stopped', None
+        self.failure = None
         self.reader = None
         self.closing = False
         self.context = mp.get_context('spawn')
@@ -137,6 +144,12 @@ class BackendRuntime:
 
     def _save(self, enabled):
         atomic_json(self.preferences, {'enabled': enabled})
+
+    def autostart_enabled(self):
+        try:
+            return json.loads(self.preferences.read_text(encoding='utf-8'))['enabled'] is True
+        except (OSError, ValueError, KeyError, TypeError):
+            return not self.preferences.is_file()
 
     def _alive(self):
         return self.process is not None and self.process.is_alive()
@@ -193,10 +206,18 @@ class BackendRuntime:
                         self.phase = 'unresponsive'
         with self.lock:
             self._reconcile()
-            return {'status': self.phase, 'alive': self._alive(), 'started_at': self.started_at,
-                    'checked_at': now(), 'pid': self.process.pid if self._alive() else None,
+            alive = self._alive()
+            message = None
+            if self.phase == 'unresponsive' and alive:
+                message = '后台进程仍在运行但没有响应；关闭开关可请求它在完成在途任务后自行退出，不会强制终止。'
+            elif self.phase == 'failed' and alive:
+                message = self.failure or '后台启动未完成但进程仍在运行；关闭开关可请求它自行退出。'
+            elif self.phase == 'failed':
+                message = self.failure or '后台进程已退出；未自动重启。'
+            return {'status': self.phase, 'alive': alive, 'started_at': self.started_at,
+                    'checked_at': now(), 'pid': self.process.pid if alive else None,
                     'uptime_seconds': max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(self.started_at)).total_seconds())) if self.started_at else None,
-                    'schedule': 'manual'}
+                    'schedule': 'manual', 'message': message}
 
     def start(self, persist=True):
         with self.lock:
@@ -206,12 +227,14 @@ class BackendRuntime:
             if self._alive():
                 if self.phase == 'stopping':
                     raise ControlError('请等待后台完全停止后再开启。')
+                if self.phase in {'unresponsive', 'failed'}:
+                    raise ControlError('后台进程仍在运行但未就绪；请先关闭开关请求它退出，等待停止后再开启。')
                 return self.status()
             receiving, sending = self.context.Pipe(duplex=False)
             stopping, self.stop_channel = self.context.Pipe(duplex=False)
             self.process = self.context.Process(target=run_backend,
                 args=(str(self.root), sending, stopping), name='trading-backend', daemon=False)
-            self.info, self.started_at, self.phase = None, None, 'starting'
+            self.info, self.started_at, self.phase, self.failure = None, None, 'starting', None
             try:
                 self.process.start()
             except Exception:
@@ -228,18 +251,28 @@ class BackendRuntime:
 
             def await_ready():
                 try:
-                    if not receiving.poll(15):
-                        raise ValueError('startup timeout')
+                    # Importing the trading stack can take well over 15 s on a cold
+                    # start (antivirus scans, slow disks). Keep waiting while the
+                    # child is alive; give up only when it died or after a long cap.
+                    waited = 0
+                    while not receiving.poll(1):
+                        waited += 1
+                        if not process.is_alive():
+                            raise ValueError('startup failed: backend exited')
+                        if waited >= STARTUP_TIMEOUT_SECONDS:
+                            raise ValueError('startup timeout')
                     info = receiving.recv()
                     if not isinstance(info, dict) or set(info) != {'port', 'instance', 'token'}:
                         raise ValueError('startup failed')
                     with self.lock:
                         if self.process is process:
                             self.info = info
-                except (OSError, EOFError, ValueError):
+                except (OSError, EOFError, ValueError) as exc:
                     with self.lock:
-                        if self.process is process:
+                        if self.process is process and self.info is None:
                             self.phase = 'failed'
+                            self.failure = ('交易后台启动超时（%d 秒内未就绪）。' % STARTUP_TIMEOUT_SECONDS
+                                            if 'timeout' in str(exc) else '交易后台启动失败，请查看 runs/portal/logs/backend.log。')
                             self._signal_stop(stop_channel)
                 finally:
                     receiving.close()
@@ -268,6 +301,15 @@ class BackendRuntime:
                 return {'status': 'stopped', 'message': '交易后台已停止，面板仍可使用。'}
             if self.phase == 'stopping':
                 return {'status': 'stopping', 'message': '正在等待交易后台退出。'}
+            if self.phase in {'unresponsive', 'failed'}:
+                # The HTTP shutdown route cannot be reached, but the child's owner
+                # watchdog still listens on the stop pipe: it waits for an in-flight
+                # worker to finish, then exits. Nothing is terminated or killed.
+                self._signal_stop(self.stop_channel)
+                self.phase = 'stopping'
+                if persist:
+                    self._save(False)
+                return {'status': 'stopping', 'message': '已请求失去响应的后台在完成在途任务后自行退出；不会强制终止。'}
             if self.phase != 'running':
                 raise ControlError('后台正在启动或状态待核对，暂不强制停止。')
             try:
@@ -287,7 +329,17 @@ class BackendRuntime:
             process = self.process
             self._signal_stop(self.stop_channel)
         if process:
-            process.join()  # An in-flight order worker must finish; never terminate/kill.
+            # An in-flight order worker must finish; never terminate/kill. A backend
+            # that never exits is recorded so the next launch can say so instead of
+            # keeping the whole portal process hanging forever.
+            process.join(CLOSE_TIMEOUT_SECONDS)
+            if process.is_alive():
+                try:
+                    atomic_json(self.root / 'runs/portal/backend-orphan.json',
+                                {'pid': process.pid, 'noticed_at': now(),
+                                 'message': '退出工作台时交易后台仍在运行，可能有在途任务；请在任务管理器确认后再处理。'})
+                except OSError:
+                    pass
         if self.reader:
             self.reader.join(timeout=1)
         if self.stop_channel:

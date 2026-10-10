@@ -62,6 +62,8 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
         if action == 'execute':
             if not preview:
                 block('preview_missing', '请先预览选股并准备订单。', 'preview')
+            elif preview.get('no_orders') is True:
+                block('no_orders', '本轮无需提交订单：持仓已匹配目标，或差额不足最小交易单位。', None)
             elif not preview.get('execution_ready') or not preview_authorized:
                 why = preview.get('blockers') or []
                 block('orders_not_ready', str(why[0]) if why else '请先准备订单，核对持仓、报价和买卖数量。', 'prepare')
@@ -77,6 +79,8 @@ def operation_states(*, broker, source, snapshot, preview, verified, account, pr
             block('remote_resolution_only', '只能结束联网账户中尚未提交的余单。')
         if action == 'close-terminal' and broker.get('mode') not in {'broker_paper','live'}:
             block('remote_resolution_only', '只能关闭联网账户中已撤单或拒单的委托。')
+        if action == 'close-untransmitted' and broker.get('mode') not in {'broker_paper','live'}:
+            block('remote_resolution_only', '只能关闭联网账户中从未送达券商的委托。')
         result[action] = {'enabled': not blockers, 'blockers': blockers,
                           'message': blockers[0]['message'] if blockers else '可以执行此操作。',
                           'next_action': blockers[0]['next_action'] if blockers else None}

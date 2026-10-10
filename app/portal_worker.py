@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.assembly import build_portfolio_runner
 from app.control_contracts import ControlError, project_path
-from data.common import DataIssue, write_json
+from data.common import DataIssue, describe_issue, write_json
 from framework.decisions import digest
 from framework.contracts import SubmissionRejected
 from framework.execution import ExecutionBlocked
@@ -19,7 +19,50 @@ from app.module_registry import ModuleRegistry
 from app.diagnostics import failure_details
 
 ROOT = Path(__file__).resolve().parents[1]
-from app.operations import ACTIONS, context_for
+from app.operations import ACTIONS, LEDGER_CLOSURES, context_for
+
+# The framework raises fixed English literals (never broker text). Map them to
+# an instruction the user can act on; unknown literals keep the generic notice.
+BLOCKED_REASONS = {
+    'Earlier cycle has unfinished orders': '上一个交易日的批次仍有未完成委托，请先核对订单，再执行新一轮。',
+    'Broker has unresolved orders': '券商账户仍有未完成委托，请先核对订单。',
+    'Broker still reports other unresolved orders': '券商账户仍有其他未完成委托，请先核对。',
+    'Account changed after order preview; prepare again': '账户在准备订单后发生了变化，请重新准备订单。',
+    'Cycle already frozen with different decision/configuration': '同一交易日已冻结另一批次，策略或配置不同；今天不能以不同配置再次执行。',
+    'Decision belongs to another execution session': '订单预览属于另一个交易日，请重新准备订单。',
+    'Decision was changed after signing': '订单预览在签名后被修改，请重新准备订单。',
+    'Trading session changed; no further orders submitted': '交易时段已变化，剩余委托未提交；下个交易日请先核对订单。',
+    'Inconsistent broker order state': '券商返回的订单状态与账本不一致，请人工核对后再处理。',
+    'Broker fill violates the limit price': '券商成交价越过了限价，请人工核对该委托。',
+    'Account differs from recorded fills; automatic continuation paused': '账户现金或持仓与已记录成交不符（手续费或其他操作可能影响现金），自动续行已暂停，请核对。',
+    'Intent already claimed by another execution': '另一个执行进程正在处理该委托，请稍后核对订单。',
+    'Unknown, pending or partial orders must be reconciled before closing': '仍有状态不明、等待成交或部分成交的委托，请先核对再关闭。',
+    'Unresolved broker orders prevent closing unsubmitted intents': '券商仍有未完成委托，不能结束未提交余单。',
+    'No cancelled or rejected order needs closing': '没有需要关闭的撤单或拒单。',
+    'No untransmitted unknown intent needs closing': '没有需要关闭的未送达委托。',
+    'Broker evidence does not prove the intent was never transmitted': '券商记录不能证明该委托从未送达，不能关闭；请继续核对。',
+    'This broker adapter cannot prove that an intent was never transmitted': '当前券商模块不支持「确认未发送」，请在券商端处理。',
+    'Frozen portfolio context differs from the account holdings': '账户持仓与冻结的策略上下文不一致，请重新预览并准备。',
+    'Recovery orders differ from the frozen batch': '待续行的订单与冻结批次不一致，请核对账本。',
+}
+TRADING_REASONS = {
+    'Execution requires a marketable limit': '报价已变化，限价不再可成交；请重新准备订单。',
+    'Stale or future account/quote': '账户或报价的时间戳已过期，请重新准备订单。',
+    'Insufficient cash including fees': '含手续费后现金不足，请重新准备订单。',
+    'Post-fee exposure exceeds limit': '下单后仓位将超过限制，请重新准备订单。',
+    'Targets exceed execution policy': '策略目标权重超过执行策略限制，请检查参数。',
+}
+
+
+def blocked_message(exc):
+    text = str(exc)
+    if text in BLOCKED_REASONS:
+        return BLOCKED_REASONS[text] + '不会自动重试。'
+    if text.startswith('Submission not attempted'):
+        return '发送前检查未通过或券商查询失败，该委托未发送、仍保留在计划中；核对账户后可继续执行。'
+    if text.startswith('Order ') and 'reconcile before continuing' in text:
+        return '有委托尚未完成（' + text.split(':')[0][len('Order '):] + '），请先核对订单；不会重发。'
+    return '执行暂停，请保留账本并核对订单；不会自动重试。'
 
 
 def research_preview(cfg, runner, loaded, path):
@@ -91,7 +134,7 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
     clock = clock or datetime.now(timezone.utc)
     progress = progress or (lambda message: None)
     before_submit = None
-    if action in {'execute', 'resolve-remainder', 'close-terminal'}:
+    if action in {'execute', 'resolve-remainder', 'close-terminal', 'close-untransmitted'}:
         from app.strategy_instances import require_unmanaged
         require_unmanaged(root, registry, broker_id)
         before_submit = lambda: require_unmanaged(root, registry, broker_id)
@@ -117,10 +160,10 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
         except Exception:
             observation.setdefault('limitations', []).append('基准数据暂不可用；账户记录仍已取得。')
         return dict(status='complete', message='账户表现已更新。', observation=observation)
-    if action in {'calendar', 'reconcile', 'resolve-remainder', 'close-terminal'}:
+    if action in {'calendar', 'reconcile'} | LEDGER_CLOSURES:
         control = registry.control('broker', broker_id)
         descriptor = registry.descriptor('broker', broker_id)
-        capability = 'reconcile' if action in {'resolve-remainder', 'close-terminal'} else action
+        capability = 'reconcile' if action in LEDGER_CLOSURES else action
         if capability not in descriptor['capabilities']:
             raise ControlError('当前账户模块不支持此操作。')
         if action == 'calendar':
@@ -128,13 +171,14 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
             today = clock.astimezone(ZoneInfo(descriptor['execution_context']['timezone'])).date()
             sessions = control.trading_sessions(today.replace(day=1) - timedelta(days=7), today + timedelta(days=100))
             return {'status':'ready','message':'交易日历已更新。','sessions':[day if isinstance(day, dict) else str(day) for day in sessions], 'execution_context':descriptor['execution_context']}
-        from app.paper_recovery import reconcile_orders, close_unsubmitted, close_terminal
+        from app.paper_recovery import reconcile_orders, close_unsubmitted, close_terminal, close_untransmitted
         runner = build_portfolio_runner(registry.configuration(broker_id))
-        if action in {'resolve-remainder', 'close-terminal'}:
+        if action in LEDGER_CLOSURES:
             automation_path = root / 'runs/automation/state.json'
             if automation_path.exists() and json.loads(automation_path.read_text(encoding='utf-8')).get('enabled') is not False:
                 raise ControlError('请先关闭自动运行，再处理未提交余单。')
-            closing = close_terminal if action == 'close-terminal' else close_unsubmitted
+            closing = {'close-terminal': close_terminal, 'resolve-remainder': close_unsubmitted,
+                       'close-untransmitted': close_untransmitted}[action]
             return closing(control=control, policy=runner.policy, fees=runner.fees)
         return reconcile_orders(control=control, policy=runner.policy, fees=runner.fees)
     if action in {'offline', 'status'}:
@@ -261,13 +305,18 @@ def perform(action, *, root=ROOT, broker_id, source_id, expected_context=None, s
 def dispatch(action, **kwargs):
     try:
         result = perform(action, **kwargs)
-    except (ControlError, DataIssue) as exc:
+    except DataIssue as exc:
+        result = dict(failure_details(exc, action), status='paused' if action == 'execute' else 'blocked',
+                      message=describe_issue(str(exc))[:1200])
+    except ControlError as exc:
         result = dict(failure_details(exc, action), status='paused' if action == 'execute' else 'blocked', message=str(exc)[:1200])
     except ExecutionBlocked as exc:
-        result = dict(failure_details(exc, action), status='paused', message='执行暂停，请保留账本并核对订单；不会自动重试。')
+        result = dict(failure_details(exc, action), status='paused', message=blocked_message(exc))
     except Exception as exc:
         # Third-party exceptions may contain credentials. Do not echo arbitrary SDK output.
         result = dict(failure_details(exc, action), status='paused' if action == 'execute' else 'blocked')
+        if isinstance(exc, ValueError) and str(exc) in TRADING_REASONS:
+            result['message'] = TRADING_REASONS[str(exc)]
         if isinstance(exc, SubmissionRejected):
             result['recovery_state'] = 'blocked'
     if action == 'recover' and result.get('status') in {'blocked', 'paused'} and 'recovery_state' not in result:

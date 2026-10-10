@@ -2,12 +2,16 @@ name: Checks
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   tests:
@@ -44,7 +48,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Run portal behavior tests
         working-directory: ui
-        run: node --test
+        run: npm test
       - name: Build local portal
         working-directory: ui
         run: npm run build

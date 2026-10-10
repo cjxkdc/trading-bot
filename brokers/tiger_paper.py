@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 
-from framework.contracts import OrderState
+from framework.contracts import OrderState, SubmissionNotAttempted, SubmissionRejected
 from framework.journal import packed, unpack_order, unpack_state
 from framework.trading import Account, Fees, amount
 from platforms.tiger import CONFIG_FILE, GATEWAYS, configuration_check, _masked
@@ -23,6 +23,14 @@ TERMINAL = {'filled', 'cancelled', 'rejected'}
 
 class TigerPaperError(RuntimeError):
     """Only fixed, sanitized messages may cross the adapter boundary."""
+
+
+class TigerSubmissionRejected(SubmissionRejected, TigerPaperError):
+    """Static order validation failed before any ledger row or network call."""
+
+
+class TigerSubmissionNotAttempted(SubmissionNotAttempted, TigerPaperError):
+    """Account/open-order checks failed or disagreed; nothing recorded or sent."""
 
 
 def _value(value):
@@ -345,15 +353,22 @@ class TigerPaperBroker:
                 or ticker.startswith('DEMO') or intent.side not in {'BUY', 'SELL'}
                 or amount(intent.quantity, True) != intent.quantity.to_integral_value()
                 or amount(intent.limit_price, True) * intent.quantity > 100000):
-            raise TigerPaperError('Only USD stock whole-share limit orders up to USD 100000 are supported')
-        if self.open_orders():
-            raise TigerPaperError('Tiger paper account has unresolved orders')
-        value = self.account()
+            raise TigerSubmissionRejected('Only USD stock whole-share limit orders up to USD 100000 are supported')
+        # State-dependent checks: a failure is "not attempted", so the executor
+        # keeps the intent planned instead of recording a permanent rejection.
+        try:
+            if self.open_orders():
+                raise TigerSubmissionNotAttempted('Tiger paper account has unresolved orders')
+            value = self.account()
+        except SubmissionNotAttempted:
+            raise
+        except TigerPaperError as exc:
+            raise TigerSubmissionNotAttempted('Pre-submission account query failed') from exc
         if intent.side == 'BUY' and intent.quantity * intent.limit_price + self.fees.estimate(
                 intent.quantity, intent.limit_price) > value.cash:
-            raise TigerPaperError('Insufficient USD paper cash including estimated fees')
+            raise TigerSubmissionNotAttempted('Insufficient USD paper cash including estimated fees')
         if intent.side == 'SELL' and intent.quantity > dict(value.positions).get(intent.symbol, Decimal(0)):
-            raise TigerPaperError('Cannot sell unowned paper shares')
+            raise TigerSubmissionNotAttempted('Cannot sell unowned paper shares')
         from tigeropen.common.util.contract_utils import stock_contract
         from tigeropen.common.util.order_utils import limit_order
         order = limit_order(self.account_id, stock_contract(ticker, 'USD'), intent.side,

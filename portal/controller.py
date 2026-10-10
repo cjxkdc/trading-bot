@@ -1,6 +1,7 @@
 """Always-available local Portal and explicit trading-backend power controls."""
 from pathlib import Path
 import json
+import logging
 import secrets
 
 from fastapi import FastAPI, Request
@@ -10,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.control_contracts import ControlError
 from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
+from app.logs import LOG_NAMES, incident_id, log_exception, read_log
 from portal.app import LocalOnly, body
 from portal.runtime import BackendRuntime
 from portal.access import COOKIE, OwnerSessions, RemoteOnly
@@ -32,13 +34,18 @@ def create_controller(root, *, port, instance, shutdown=None, runtime=None, acce
     else:
         app.add_middleware(RemoteOnly, access=owner, token=token)
 
+    log = logging.getLogger('trading_bot.portal')
+
     @app.exception_handler(ControlError)
     async def control_error(request, exc):
         return JSONResponse({'message': str(exc)}, status_code=409)
 
     @app.exception_handler(Exception)
     async def unexpected(request, exc):
-        return JSONResponse({'message': '后台控制操作失败，请检查状态后再操作。'}, status_code=500)
+        ident = incident_id()
+        log_exception(log, f'500 {request.method} {request.url.path}', exc, ident)
+        return JSONResponse({'message': f'后台控制操作失败，请检查状态后再操作。（诊断编号 {ident}）',
+                             'incident_id': ident}, status_code=500)
 
     @app.get('/health')
     async def health():
@@ -85,6 +92,15 @@ def create_controller(root, *, port, instance, shutdown=None, runtime=None, acce
     @app.get('/api/runtime')
     def status():
         return runtime.status()
+
+    @app.get('/api/runtime/logs')
+    async def diagnostic_logs(name: str = 'backend', limit: int = 200, query: str = ''):
+        # Served by the control plane so the files stay readable while the
+        # trading backend is stopped or unresponsive. The files hold exception
+        # types, code locations and request paths only; see app/logs.py.
+        if name not in LOG_NAMES:
+            raise ControlError('未知的日志文件。')
+        return await run_in_threadpool(read_log, root, name, limit=limit, query=query)
 
     @app.get('/api/server/status')
     async def server_health():

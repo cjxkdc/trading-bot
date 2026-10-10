@@ -1,6 +1,6 @@
 # Paste this ENTIRE file into a new QuantConnect Python project's main.py.
 # Generated file: edit the original modules, then rebuild.
-# Source SHA256: 5086bf9f4961e1428b703d6486491e8ce06699ab02a0629204dbaef970a81f50
+# Source SHA256: 33dec6ac1a07f03527ac97fc65cc8ec64611f2c725f2d07f03a0a0c2c77aa210
 
 # ===== framework/market.py =====
 """Portable execution metadata supplied by market/broker modules.
@@ -630,7 +630,7 @@ _RUN_CONFIG = {'schema_version': 1, 'strategy': {'type': 'tech_profit_momentum',
 _INPUT_SCHEMA = 'us_technology_daily_v1'
 _QC_PROFILE = {}
 _PLUGIN_CLASSES = {'tech_profit_momentum': TechProfitMomentum}
-_PLUGIN_SPECS = {'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '48c1d57552324bb427e51167c141de2a99a3c0544513fda61cb401256f36281c', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
+_PLUGIN_SPECS = {'tech_profit_momentum': {'type': 'tech_profit_momentum', 'version': '0.1', 'source_sha256': '530c3c3a0b388da1006ac8f54439aa71e3807578306599e581e8672cc097d956', 'engine_sha256': '4de4ddcae6f903199990444171db0a1b587633dfd831bf68aedb98048161585d', 'parameters': {'count': 5, 'weight': 0.19, 'lookback': 252, 'skip': 21, 'min_dollar_volume': 10000000, 'require_profit': True, 'industry_limit': 2}}}
 def build_portfolio_strategy(config):
     return _PLUGIN_CLASSES[config['type']](**{k:v for k,v in config.items() if k not in {'type','id'}})
 def portfolio_spec(config):

@@ -143,10 +143,18 @@ class RuntimeTests(unittest.TestCase):
         process = self.fake_process()
         with patch.object(self.runtime, '_request', side_effect=TimeoutError):
             self.assertEqual(self.runtime.status()['status'], 'unresponsive')
-            self.runtime.start()
-            self.assertIs(self.runtime.process, process)
+            self.assertIn('没有响应', self.runtime.status()['message'])
             with self.assertRaises(ControlError):
-                self.runtime.stop()
+                self.runtime.start()  # Never a second engine next to a live one.
+            self.assertIs(self.runtime.process, process)
+            # The user can ask the live-but-silent backend to exit on its own; the
+            # request goes through the owner pipe, never terminate()/kill().
+            with patch.object(self.runtime, '_signal_stop') as signal:
+                reply = self.runtime.stop()
+            signal.assert_called_once()
+            self.assertEqual(reply['status'], 'stopping')
+            self.assertEqual(self.runtime.phase, 'stopping')
+            self.assertFalse(self.runtime.autostart_enabled())
         process.terminate.assert_not_called()
         process.kill.assert_not_called()
 

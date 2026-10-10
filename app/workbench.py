@@ -3,6 +3,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import logging
+import os
 from pathlib import Path
 import re
 import threading
@@ -29,10 +31,13 @@ from app.monitoring import Monitoring
 from app.strategy_instances import StrategyInstances
 from app.strategy_files import StrategyFiles
 from app.execution_policy import CURRENT_EXECUTION_POLICY, load_execution_policy
+from app.logs import incident_id, log_exception
+from app.atomic import replace_file
 
 MAX_FILE = 32 * 1024 * 1024
 PortalError = ControlError
 _UNSPECIFIED_STRATEGY = object()
+log = logging.getLogger('trading_bot.workbench')
 
 
 def check_expected_strategy(expected, actual):
@@ -58,8 +63,11 @@ def atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name('.' + uuid4().hex + '.tmp')
     try:
-        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
-        temporary.replace(path)
+        with temporary.open('w', encoding='utf-8') as handle:
+            handle.write(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -151,9 +159,8 @@ class PortalService:
         return normalize_config(load_config(self.root / 'configs/portfolio_config.json')), self.registry.version()
 
     def _public(self, value, secret_values=()):
-        fields = {f['name'] for kind in ('data', 'broker') for entry in self.registry.descriptors(kind)
-                  for f in entry.get('fields', []) if f.get('secret')}
-        return public(value, fields, secret_values)
+        # Runs on every progress message: read the manifests, do not build descriptors.
+        return public(value, self.registry.secret_fields(), secret_values)
 
     def strategies(self):
         return self.registry.strategies()
@@ -312,17 +319,41 @@ class PortalService:
                         for broker_id in affected:
                             self.strategy_instances.pause_account(broker_id, result['message'])
             with self.lock:
-                safe = self._public(result)
-                job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())
-                self.jobs = [job, *self.jobs][:40]
-                self._save_job(job)
-                self.clear_preview()
-                self.account = None
-                self.broker_session.clear()
-                self.active = None
+                try:
+                    safe = self._public(result)
+                    if action == 'strategy-cycle' and safe.get('idle') is True:
+                        # Nothing was due: no job record, no event, and the manual
+                        # account verification stays intact. Polls happen every 30 s.
+                        return
+                    job.update(status=safe['status'], message=safe['message'], result=safe, finished_at=now())
+                    self.jobs = [job, *self.jobs][:40]
+                    self._save_job(job)
+                    self.clear_preview()
+                    self.account = None
+                    self.broker_session.clear()
+                except Exception as exc:
+                    self._finalization_failed(job, exc)
+                finally:
+                    # Whatever happens while recording the result, the single-flight
+                    # slot is released; a stuck 'active' would freeze every poll.
+                    if self.active is job:
+                        self.active = None
         self.thread = threading.Thread(target=work, name='managed-strategy-worker', daemon=False)
         self.thread.start()
         return {'job_id': job['id']}
+
+    def _finalization_failed(self, job, exc):
+        """Record (never raise) a failure while finishing a job; the caller releases the slot."""
+        ident = incident_id()
+        log_exception(log, f"job finalization {job.get('action')}", exc, ident)
+        job.update(status='interrupted', finished_at=now(),
+                   message=f'任务已结束，但记录结果时出现异常，请核对运行记录。（诊断编号 {ident}）')
+        try:
+            if job not in self.jobs:
+                self.jobs = [job, *self.jobs][:40]
+            self._save_job(job)
+        except Exception:
+            pass
 
     def strategy_instances_poll(self):
         with self.lock:
@@ -504,11 +535,23 @@ class PortalService:
         with self.lock:
             self.idle()
             self.switch_issues()
+            if any(item['enabled'] and item['broker_id'] == self.broker_id
+                   for item in self.strategy_instances.data.get('instances', [])):
+                raise PortalError('此账户仍有已开启的策略实例，请先停止实例再断开账户。')
+            notes = []
             if self.automation.data['enabled']:
                 self.automation.disable()
+                notes.append('单策略计划已关闭')
             self.disconnect_authorization()
-            self.monitor.configure({'enabled':False})
-            return {'message': '当前账户在本程序中已停用；官方客户端登录和券商端授权需分别退出或撤销。'}
+            if self.monitor.settings.config['enabled']:
+                # Pause observation of this account without discarding queued
+                # notifications (other accounts' alerts stay in the outbox).
+                self.monitor.settings.save({'enabled': False})
+                self.monitor.next_observation = 0
+                notes.append('账户定时监控已关闭')
+            self.monitor.error = self.monitor.unconfigured = None
+            tail = ('；' + '，'.join(notes)) if notes else ''
+            return {'message': f'当前账户在本程序中已停用{tail}；官方客户端登录和券商端授权需分别退出或撤销。'}
 
     def snapshot(self, sources=None):
         if self.selected_snapshot:
@@ -543,9 +586,23 @@ class PortalService:
             self.clear_preview()
             return meta
 
-    def orders(self):
+    def view_broker(self, broker_id=None):
+        """Resolve the account a read-only view refers to.
+
+        The account page may look at any registered account's ledger and
+        performance history without changing the operating account (which owns
+        previews, authorization and the single-strategy plan binding).
+        """
+        if broker_id in (None, '', self.broker_id):
+            return self.broker_id
+        if not isinstance(broker_id, str) or not any(item['id'] == broker_id for item in self.registry.descriptors('broker')):
+            raise PortalError('要查看的账户不存在。')
+        return broker_id
+
+    def orders(self, broker_id=None):
         with self.lock:
-            control = self.registry.control('broker', self.broker_id)
+            broker_id = self.broker_id if broker_id in (None, '') else self.view_broker(broker_id)
+            control = self.registry.control('broker', broker_id)
             path = control.journal_path
             # Connector construction supplies the canonical filename only; no
             # settings, account binding, broker inspection or session is opened.
@@ -557,74 +614,79 @@ class PortalService:
         except JournalReadError as exc:
             return {'items': [], 'message': str(exc)}
 
-    def performance(self):
+    def performance(self, broker_id=None):
         with self.lock:
+            viewed = broker_id if isinstance(broker_id, str) and broker_id else self.broker_id
             try:
-                scope = self.monitor.scope(self.broker_id)
+                viewed = self.view_broker(broker_id)
+                scope = self.monitor.scope(viewed)
                 report = self.monitor.performance.report(scope)
                 try:
-                    orders = self.orders()['items']
+                    orders = self.orders(viewed)['items']
                     for cycle in report['cycles']:
                         cycle['fills'] = [o for o in orders if o.get('cycle') == cycle['decision_id']]
                 except (ValueError, OSError):
                     pass
-                report['broker_id'] = self.broker_id
+                report['broker_id'] = viewed
                 report['account_key'] = sha256(scope.encode()).hexdigest()
-                report['view_token'] = self._performance_token(scope,report.get('latest'))
+                report['view_token'] = self._performance_token(scope, report.get('latest'), viewed)
                 return self._public(report)
             except ControlError as exc:
                 return dict(latest=None,curve=[],cycles=[],positions=[],cash_events=[],metrics={},
-                            message=str(exc), broker_id=self.broker_id)
+                            message=str(exc), broker_id=viewed)
 
-    def performance_candles(self, interval='1h', limit=96, account_key=None):
+    def performance_candles(self, interval='1h', limit=96, account_key=None, broker_id=None):
         from framework.account_candles import validate_period
         try:
             validate_period(interval, limit)
         except ValueError:
             raise PortalError('K 线周期或数量无效。') from None
         with self.lock:
+            viewed = self.view_broker(broker_id)
             try:
-                scope = self.monitor.scope(self.broker_id)
+                scope = self.monitor.scope(viewed)
             except ControlError as exc:
-                return dict(bars=[], interval=interval, broker_id=self.broker_id, message=str(exc))
+                return dict(bars=[], interval=interval, broker_id=viewed, message=str(exc))
             current_key = sha256(scope.encode()).hexdigest()
             if account_key is not None and account_key != current_key:
                 raise PortalError('账户绑定已变化，请刷新账户表现。')
             report = self.monitor.performance.candles(scope, interval, limit)
-            report.update(broker_id=self.broker_id, account_key=current_key,
+            report.update(broker_id=viewed, account_key=current_key,
                           interval_seconds=self.monitor.settings.config['interval_seconds'])
             return self._public(report)
 
     def performance_cash_event(self, value):
         with self.lock:
             value = dict(value)
-            scope = self._check_performance_token(value.pop('view_token',None))
+            viewed = value.pop('broker', None)
+            scope = self._check_performance_token(value.pop('view_token',None), viewed)
             self.monitor.performance.cash_event(scope,value)
             return {'message':'资金事件已记录，请重新核对统计区间。'}
 
     def performance_review(self, value):
-        if set(value) != {'through','view_token'}:
+        if not {'through','view_token'} <= set(value) or set(value) - {'through','view_token','broker'}:
             raise PortalError('请核对最新账户记录。')
         with self.lock:
-            scope = self._check_performance_token(value['view_token'])
+            scope = self._check_performance_token(value['view_token'], value.get('broker'))
             self.monitor.performance.review_cash(scope,value['through'])
             return {'message':'已记录本次资金流水核对。'}
 
-    def _performance_token(self, scope, latest):
-        return sha256((scope+self.broker_id+str((latest or {}).get('as_of'))).encode()).hexdigest()
+    def _performance_token(self, scope, latest, broker_id=None):
+        return sha256((scope+(broker_id or self.broker_id)+str((latest or {}).get('as_of'))).encode()).hexdigest()
 
-    def _check_performance_token(self, token):
-        scope = self.monitor.scope(self.broker_id)
+    def _check_performance_token(self, token, broker_id=None):
+        viewed = self.view_broker(broker_id)
+        scope = self.monitor.scope(viewed)
         latest = self.monitor.performance.report(scope).get('latest')
-        if not latest or token != self._performance_token(scope,latest):
+        if not latest or token != self._performance_token(scope, latest, viewed):
             raise PortalError('账户或观测记录已变化，请刷新后重新核对。')
         return scope
 
     def performance_remove_event(self,value):
-        if set(value) != {'id','view_token'}:
+        if not {'id','view_token'} <= set(value) or set(value) - {'id','view_token','broker'}:
             raise PortalError('资金记录参数无效。')
         with self.lock:
-            scope = self._check_performance_token(value['view_token'])
+            scope = self._check_performance_token(value['view_token'], value.get('broker'))
             self.monitor.performance.remove_cash_event(scope,value['id'])
             return {'message':'错误记录已移除，请重新核对统计区间。'}
 
@@ -634,6 +696,7 @@ class PortalService:
 
     def _record_observation(self, action, broker, result, scope=None):
         # Reporting failure must not change an already confirmed execution result.
+        notify = self.monitor.settings.config['channel'] != 'none'
         try:
             if action == 'observe':
                 self.monitor.observed(broker,result,scope)
@@ -642,9 +705,12 @@ class PortalService:
                 self.monitor.cycle(broker,result,self.config()[0]['strategy'])
             if action in {'execute','recover','reconcile'}:
                 self.monitor.next_observation = 0
+            self.monitor.events.transition('reporting:'+broker, True, '账户表现记录已恢复。', 'positions', notify=notify)
         except Exception:
             self.monitor.error = '账户表现记录未通过校验，已有交易结果与历史记录已保留。'
-            self.monitor.emit('reporting:'+broker+now(),self.monitor.error,'error','positions')
+            # One durable health flag per account: a persistent validation failure
+            # produces one event (and one notification), not one per observation.
+            self.monitor.events.transition('reporting:'+broker, False, self.monitor.error, 'positions', notify=notify)
 
     def monitoring_poll(self):
         with self.lock:
@@ -652,12 +718,24 @@ class PortalService:
                 return
             self.monitor.automation_events(list(self.automation.data['events']))
             self.monitor.pump()
-            if self.active or not self.monitor.settings.config['enabled'] or time.time() < self.monitor.next_observation:
+            if not self.monitor.settings.config['enabled']:
+                self.monitor.error = None
+                return
+            if self.active or time.time() < self.monitor.next_observation:
                 return
             self.monitor.next_observation = time.time()+self.monitor.settings.config['interval_seconds']
             try:
                 if 'observe' not in self.registry.descriptor('broker',self.broker_id)['capabilities']:
+                    self.monitor.unconfigured = '当前账户模块没有提供账户表现接口，定时监控不覆盖它。'
                     return
+                try:
+                    self.monitor.scope(self.broker_id)
+                except ControlError as exc:
+                    # Not bound yet is a setup step, not a monitoring failure: no
+                    # error, no health transition, no notification.
+                    self.monitor.unconfigured = f'账户尚未完成绑定，监控暂未开始：{exc}'
+                    return
+                self.monitor.unconfigured = None
                 self.start('observe')
             except Exception:
                 self.monitor.error = '尚未取得账户监控数据，请检查所选券商配置。'
@@ -711,11 +789,11 @@ class PortalService:
                 context_issue=context_issue, strategy_issue=strategy_issue, authorization=authorization)
             if self.automation.data['enabled']:
                 actions['execute'] = {'enabled': False, 'blockers': [], 'message': '自动运行已开启；手动下单前请先关闭自动运行。', 'next_action': None}
-                for action in ('resolve-remainder', 'close-terminal'):
+                for action in ('resolve-remainder', 'close-terminal', 'close-untransmitted'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '请先关闭自动运行，再处理未提交余单。', 'next_action': None}
             managed = self.managed_account(self.broker_id)
             if managed:
-                for action in ('execute', 'resolve-remainder', 'close-terminal'):
+                for action in ('execute', 'resolve-remainder', 'close-terminal', 'close-untransmitted'):
                     actions[action] = {'enabled': False, 'blockers': [], 'message': '此账户由策略实例管理，请在「策略运行」中操作。', 'next_action': None}
             return self._public({'started_at': self.started_at, 'mode': broker['mode'],
                 'execution_scope': load_execution_policy(self.root).public(),
@@ -808,7 +886,10 @@ class PortalService:
             job = {'id': datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-') + uuid4().hex[:8],
                    'action': action, 'source': source, 'source_name': source_spec['name'],
                    'broker': broker_id, 'broker_name': broker_spec['name'], 'status': 'running', 'started_at': now(),
-                   'message': '正在处理…', 'events': [], 'cancel_available': False}
+                   'message': '正在处理…', 'events': [], 'cancel_available': False,
+                   # Routine observations run without the user asking; the UI keeps
+                   # editors and forms usable while they run.
+                   'background': action == 'observe'}
             self.active = job
             self.jobs.insert(0, job)
             self.jobs = self.jobs[:40]
@@ -833,47 +914,69 @@ class PortalService:
                     if credentials is not None:
                         credentials.clear()
                 with self.lock:
-                    self._record_observation(action,broker_id,result,financial_scope)
-                    safe_result = self._public(result, secret_values)
-                    job.update(status=safe_result['status'], message=safe_result['message'], finished_at=now(),
-                               result=safe_result, cancel_available=False)
-                    if action == 'status':
-                        self.account = dict(safe_result, checked_at=now())
-                        self.broker_session.clear()
-                        try:
-                            unchanged = self.registry.connection_context(broker_id) == binding
-                        except (ValueError, OSError, KeyError, TypeError):
-                            unchanged = False
-                        if safe_result['status'] == 'connected' and unchanged:
-                            self.broker_session.verify(broker_id, binding)
-                        elif not unchanged:
-                            self.account = None
-                            job.update(status='blocked', message='检查期间账户配置改变，请重新检查连接。')
-                    if action in {'preview', 'prepare', 'refresh'} and result.get('status') == 'previewed':
-                        try:
-                            still_current = context_for(self.registry, action, broker_id, source) == context
-                        except (ValueError, OSError, KeyError):
-                            still_current = False
-                        if still_current:
-                            self.preview = dict(safe_result, created_at=now(), source=source, broker=broker_id)
-                            self.preview_context = context
-                            execution_path = result.get('snapshot_path') or snapshot_path
-                            if result.get('execution_ready') and result.get('preview_token') and execution_path:
-                                self.preview_private = (Path(execution_path), result['preview_token'])
-                                if action == 'prepare' and safe_result.get('account_details'):
-                                    self.account = {'status':'connected','message':'准备时已核对绑定的账户。',
-                                                    'details':safe_result['account_details'],
-                                                    'checked_at':now()}
-                    if action == 'execute':
-                        self.account = None  # Do not display pre-trade holdings as current.
-                    if action in {'reconcile', 'resolve-remainder', 'close-terminal'}:
-                        self.automation.reconciled(broker_id, result)
-                    self.active = None
-                    self._save_job(job)
+                    try:
+                        self._finish_job(job, action, result, broker_id, source, context, binding,
+                                         snapshot_path, financial_scope, secret_values)
+                    except Exception as exc:
+                        self._finalization_failed(job, exc)
+                    finally:
+                        if self.active is job:
+                            self.active = None
 
             self.thread = threading.Thread(target=work, name='portal-worker', daemon=False)
             self.thread.start()
             return {'job_id': job['id']}
+
+    def _finish_job(self, job, action, result, broker_id, source, context, binding, snapshot_path,
+                    financial_scope, secret_values):
+        """Record a worker result under the service lock (called once per job)."""
+        self._record_observation(action, broker_id, result, financial_scope)
+        safe_result = self._public(result, secret_values)
+        job.update(status=safe_result['status'], message=safe_result['message'], finished_at=now(),
+                   result=safe_result, cancel_available=False)
+        if action == 'status':
+            self.account = dict(safe_result, checked_at=now())
+            self.broker_session.clear()
+            try:
+                unchanged = self.registry.connection_context(broker_id) == binding
+            except (ValueError, OSError, KeyError, TypeError):
+                unchanged = False
+            if safe_result['status'] == 'connected' and unchanged:
+                self.broker_session.verify(broker_id, binding)
+            elif not unchanged:
+                self.account = None
+                job.update(status='blocked', message='检查期间账户配置改变，请重新检查连接。')
+        if action in {'preview', 'prepare', 'refresh'} and result.get('status') == 'previewed':
+            try:
+                still_current = context_for(self.registry, action, broker_id, source) == context
+            except (ValueError, OSError, KeyError):
+                still_current = False
+            if still_current:
+                self.preview = dict(safe_result, created_at=now(), source=source, broker=broker_id)
+                self.preview_context = context
+                execution_path = result.get('snapshot_path') or snapshot_path
+                if result.get('execution_ready') and result.get('preview_token') and execution_path:
+                    self.preview_private = (Path(execution_path), result['preview_token'])
+                    if action == 'prepare' and safe_result.get('account_details'):
+                        self.account = {'status': 'connected', 'message': '准备时已核对绑定的账户。',
+                                        'details': safe_result['account_details'],
+                                        'checked_at': now()}
+        if action == 'prepare' and result.get('status') == 'complete' and result.get('no_orders') is True:
+            # "Nothing to trade" is a result worth keeping on screen, exactly
+            # as the one-click check publishes it; it can never be submitted.
+            try:
+                still_current = context_for(self.registry, action, broker_id, source) == context
+            except (ValueError, OSError, KeyError):
+                still_current = False
+            if still_current:
+                self.preview = dict(safe_result, execution_ready=False, created_at=now(), source=source, broker=broker_id)
+                self.preview_context = context
+                self.preview_private = None
+        if action == 'execute':
+            self.account = None  # Do not display pre-trade holdings as current.
+        if action in {'reconcile', 'resolve-remainder', 'close-terminal', 'close-untransmitted'}:
+            self.automation.reconciled(broker_id, result)
+        self._save_job(job)
 
     def cancel_download(self):
         with self.lock:
@@ -968,32 +1071,45 @@ class PortalService:
                     result = self.automation.tick(observed_worker, progress)
                 except Exception as exc:
                     result = dict(failure_details(exc, 'automation', fallback='自动任务未完成，已停止新委托；请先核对订单。'), status='paused')
-                    if not self.automation.corrupt:
-                        self.automation.pause(result['message'])
+                    try:
+                        if not self.automation.corrupt:
+                            self.automation.pause(result['message'])
+                    except Exception as failure:
+                        log_exception(log, 'automation pause after failure', failure, incident_id())
                 finally:
                     with self.lock:
-                        if result is not None:
-                            safe_result = self._public(result)
-                            job.update(status=safe_result['status'], message=safe_result['message'],
-                                       result=safe_result, finished_at=now())
-                            self.jobs = [job, *self.jobs][:40]
-                            self._save_job(job)
-                            self.clear_preview()
-                            self.account = None
-                            self.broker_session.clear()
-                            if safe_result.get('startup_check') and self.registry.context(self.broker_id, self.source) == binding['context']:
-                                selection = safe_result.get('selection')
-                                if selection:
-                                    self.preview = dict(selection, execution_ready=False, created_at=now(),
-                                                        source=self.source, broker=self.broker_id)
-                                    self.preview_context = binding['context']
-                                account = safe_result.get('account_check')
-                                if account and account.get('status') == 'connected':
-                                    self.account = dict(account, checked_at=now())
-                                    self.broker_session.verify(self.broker_id, self.registry.connection_context(self.broker_id))
-                        self.active = None
+                        try:
+                            self._finish_automation(job, result, binding)
+                        except Exception as exc:
+                            self._finalization_failed(job, exc)
+                        finally:
+                            if self.active is job:
+                                self.active = None
             self.thread = threading.Thread(target=work, name='automatic-paper-worker', daemon=False)
             self.thread.start()
+
+    def _finish_automation(self, job, result, binding):
+        """Record one automation tick under the service lock."""
+        if result is None:
+            return
+        safe_result = self._public(result)
+        job.update(status=safe_result['status'], message=safe_result['message'],
+                   result=safe_result, finished_at=now())
+        self.jobs = [job, *self.jobs][:40]
+        self._save_job(job)
+        self.clear_preview()
+        self.account = None
+        self.broker_session.clear()
+        if safe_result.get('startup_check') and self.registry.context(self.broker_id, self.source) == binding['context']:
+            selection = safe_result.get('selection')
+            if selection:
+                self.preview = dict(selection, execution_ready=False, created_at=now(),
+                                    source=self.source, broker=self.broker_id)
+                self.preview_context = binding['context']
+            account = safe_result.get('account_check')
+            if account and account.get('status') == 'connected':
+                self.account = dict(account, checked_at=now())
+                self.broker_session.verify(self.broker_id, self.registry.connection_context(self.broker_id))
 
     def _experiment(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'exp-[0-9a-f]{16}', ident):

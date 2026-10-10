@@ -10,6 +10,7 @@ import sys
 from uuid import uuid4
 import zipfile
 
+from app.atomic import replace_file
 from app.control_contracts import ControlError, project_path
 
 MAX_CODE = 512 * 1024
@@ -64,7 +65,7 @@ class StrategyFiles:
             temporary.write_bytes(value['content'].encode('utf-8'))
             if sha256(path.read_bytes()).hexdigest() != value['revision']:
                 raise ControlError('保存前代码已变化，请重新加载。')
-            temporary.replace(path)
+            replace_file(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
         sys.modules.pop(module, None)

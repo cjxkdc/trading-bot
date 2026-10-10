@@ -288,13 +288,30 @@ class MassiveClient:
             raise MassiveError('bar_identity', 'Massive 日线代码、复权口径或完整性校验失败。')
         return saved
 
+    def cache_file(self, path, params=None):
+        url = canonical_url(path + ('?' + urlencode(params) if params else ''))
+        return self.cache_dir / self.partition / (sha256(url.encode()).hexdigest() + '.json')
+
+    def invalidate(self, path, params=None):
+        """Drop one cached response so a malformed payload is not served again."""
+        try:
+            self.cache_file(path, params).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    GROUPED_PARAMS = {'adjusted': 'false', 'include_otc': 'false'}
+
+    def invalidate_grouped(self, day):
+        self.invalidate(f'/v2/aggs/grouped/locale/us/market/stocks/{day}', self.GROUPED_PARAMS)
+
     def grouped_daily(self, day, *, cache_seconds=86400):
         """One completed day's raw US market; cache identity is the trading date."""
         path = f'/v2/aggs/grouped/locale/us/market/stocks/{day}'
-        saved = self.request(path, {'adjusted': 'false', 'include_otc': 'false'}, cache_seconds=cache_seconds)
+        saved = self.request(path, self.GROUPED_PARAMS, cache_seconds=cache_seconds)
         raw = saved['data']
         if (raw.get('adjusted') is not False or raw.get('next_url')
                 or not isinstance(raw.get('results'), list)
                 or type(raw.get('resultsCount')) is not int or raw['resultsCount'] != len(raw['results'])):
-            raise MassiveError('grouped_identity', 'Massive 批量日线的复权口径或完整性校验失败。')
+            self.invalidate(path, self.GROUPED_PARAMS)
+            raise MassiveError('grouped_identity', 'Massive 批量日线的复权口径或完整性校验失败；已清除该日缓存。')
         return saved
