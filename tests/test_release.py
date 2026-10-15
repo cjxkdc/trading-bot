@@ -16,7 +16,7 @@ class ReleaseTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / 'project'
         self.root.mkdir()
-        files = {'tests/fixtures/strategy_samples/strategies/hold.py': 'TEST-ONLY-STRATEGY', 'README.md': 'public', 'app/main.py': 'print("public")', 'configs/portfolio_config.json': '{}',
+        files = {'tests/fixtures/strategy_samples/strategies/hold.py': 'TEST-ONLY-STRATEGY', 'README.md': 'public', 'CHANGELOG.md': 'Release history', 'PRODUCT.md': 'Product scope', 'app/main.py': 'print("public")', 'configs/portfolio_config.json': '{}',
                  'ui/dist/index.html': '<html></html>', 'deploy/server/install.sh': '#!/bin/bash\n',
                  'deploy/desktop/install.ps1': '# 中文安装\n', 'secrets/tiger/private.pem': 'PRIVATE',
                  'secrets/portal/server.json': 'PASSWORD-HASH', 'runs/paper/journal.sqlite': 'LEDGER',
@@ -47,6 +47,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn('Trading-bot/deploy/server/install.sh', names)
             self.assertFalse(any(name.endswith('.exe') for name in names))
             self.assertIn('Trading-bot/START-HERE.txt', names)
+            self.assertIn('Trading-bot/CHANGELOG.md', names)
+            self.assertIn('Trading-bot/PRODUCT.md', names)
             self.assertIn('Trading-bot/deploy/desktop/install.ps1', names)
             self.assertEqual(bundle.getinfo('Trading-bot/deploy/server/install.sh').external_attr >> 16, 0o100755)
 

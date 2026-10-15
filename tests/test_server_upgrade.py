@@ -17,7 +17,7 @@ class UpgradeTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name).resolve()
         self.release, self.installed = self.folder / 'release', self.folder / 'installed'
-        for root, files in [(self.release, {'app/main.py': b'new', 'app/added.py': b'added', 'ui/dist/index.html': b'new UI', 'configs/account.json': b'defaults'}),
+        for root, files in [(self.release, {'CHANGELOG.md': b'Release history', 'PRODUCT.md': b'Product scope', 'app/main.py': b'new', 'app/added.py': b'added', 'ui/dist/index.html': b'new UI', 'configs/account.json': b'defaults'}),
                             (self.installed, {'app/main.py': b'old', 'configs/account.json': b'custom', 'secrets/key': b'PRIVATE',
                                               'runs/orders.json': b'LEDGER', '.venv/pyvenv.cfg': b'ENV', 'app/still-needed.py': b'keep'})]:
             for name, content in files.items():
@@ -39,7 +39,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertFalse((self.installed / 'runs/upgrades').exists())
         result = updater.upgrade(self.installed, self.archive, self.digest(), apply=True, stopped_check=lambda: None)
         self.assertEqual(result['status'], 'installed')
-        for name, content in {'app/main.py': b'new', 'app/added.py': b'added', 'configs/account.json': b'custom',
+        for name, content in {'CHANGELOG.md': b'Release history', 'PRODUCT.md': b'Product scope', 'app/main.py': b'new', 'app/added.py': b'added', 'configs/account.json': b'custom',
                               'secrets/key': b'PRIVATE', 'runs/orders.json': b'LEDGER', '.venv/pyvenv.cfg': b'ENV', 'app/still-needed.py': b'keep'}.items():
             self.assertEqual((self.installed / name).read_bytes(), content)
         backup = Path(result['backup'])
@@ -113,6 +113,8 @@ class UpgradeTests(unittest.TestCase):
     def test_manifest_covers_start_here_and_archive_has_external_checksum(self):
         validated = updater.validate_archive(self.archive, self.digest())
         self.assertIn('START-HERE.txt', validated)
+        self.assertEqual(validated['CHANGELOG.md'], b'Release history')
+        self.assertEqual(validated['PRODUCT.md'], b'Product scope')
         self.assertEqual(self.archive.with_suffix('.zip.sha256').read_text().split()[0], self.digest())
 
     def test_manual_rollback_restores_public_source_only(self):

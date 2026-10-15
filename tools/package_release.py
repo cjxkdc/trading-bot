@@ -14,7 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DIRECTORIES = {'app', 'backtests', 'brokers', 'configs', 'data', 'framework', 'strategies',
                'platforms', 'portal', 'tests', 'tools', 'ui', 'deploy', 'docs', 'requirements'}
-ROOT_FILES = {'README.md', 'bot.py', 'requirements.txt', '.gitignore'}
+ROOT_FILES = {'README.md', 'CHANGELOG.md', 'PRODUCT.md', 'bot.py', 'requirements.txt', '.gitignore'}
 SKIP = {'.git', '.venv', 'secrets', 'runs', '__pycache__', 'node_modules', 'build', '.pytest_cache'}
 SUFFIXES = {'.py', '.json', '.md', '.txt', '.js', '.jsx', '.css', '.html', '.svg', '.png',
             '.sh', '.ps1', '.cmd', '.example'}

@@ -1,12 +1,21 @@
 # Trading Bot
 
-产品目标覆盖研究、模拟运行与实盘运行；当前部署使用模拟账户。策略页把同一策略的代码、参数、回测实验和运行记录放在一起；券商与数据源在「连接」中配置。已有实盘接口的存在不代表 Portal 实盘链路已完成验收。完整产品主线与后续顺序见 [PRODUCT.md](PRODUCT.md)。
+可自行部署的模块化交易工作台。策略、数据源与券商分别接入，在同一个网页里完成研究、回测、运行管理、账户查看与诊断。Windows 桌面版和 Ubuntu 服务器版共用源码；产品方向见 [PRODUCT.md](PRODUCT.md)。
 
-**已安装环境的日常使用：双击本文件夹里的 `Trading Bot.exe`，在浏览器 Portal 中操作。**
+## 当前推荐版本：v0.12.0-pre.2 · 2026-10-15
 
-## 版本状态：v0.12 pre-release（2026-10-11）
+这是预发布版本。已提供七分区工作台、策略编辑与导入、多策略实例、本地回放、Massive 历史回填和账户表现。Futu/moomoo OpenD 模拟执行与 Tiger 只读核对的能力不同；实盘链路尚未验收，当前 Portal 执行限于模拟与本地回放。详细范围见 [更新记录](CHANGELOG.md)。
 
-这是一个功能基本完整、可以在模拟账户上日常使用的预发布版本：七个分区的工作台、运行实例与旧计划迁移、本地回放与 Massive 历史回填、实例级估值归因、Futu/moomoo 与 Tiger 模拟盘的只读订单核对，全量测试通过。尚未完成的事项见 [CHANGELOG.md](CHANGELOG.md) 的「已知限制」；实盘链路仍未在真实账户上验收，Portal 的执行权限保持模拟与本地回放。
+| 你要做什么 | 下载与说明 |
+| --- | --- |
+| 在 Windows 上使用 | [桌面安装包](https://github.com/cjxkdc/trading-bot/releases/download/v2026.10.15-pre-release/Trading-bot-desktop.zip) · 按下方「首次运行」安装 |
+| 在 Ubuntu / 云服务器上使用 | [服务器安装包](https://github.com/cjxkdc/trading-bot/releases/download/v2026.10.15-pre-release/Trading-bot-server.zip) · [服务器指南](docs/SERVER.md) |
+| 升级已有安装、核对版本与摘要 | [本次发布与校验文件](https://github.com/cjxkdc/trading-bot/releases/tag/v2026.10.15-pre-release) · [版本与升级说明](docs/RELEASES.md) |
+| 修改代码 | 克隆本仓库的 `main`；源码安装需要额外构建网页 |
+
+两个安装包都包含构建好的网页。本次桌面包使用 `deploy/desktop/Start Local Portal.cmd` 启动，**不附 exe、Python 或虚拟环境**。账户、密钥、数据缓存和交易记录不随包分发，首次使用须配置自己的连接。已有完整安装可继续使用原来的 exe。
+
+本次整理包含此前主分支的宽屏布局修复、Windows CI 路径修复，以及统一版本号与安装文档。保留预发布状态；没有增加新的交易能力。
 
 ## 首次运行（Windows）
 

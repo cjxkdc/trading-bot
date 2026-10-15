@@ -48,7 +48,7 @@ bash deploy/server/install.sh
 
 本地重新构建网页后运行 `python tools/package_release.py --output runs/releases`，会生成桌面包、服务器包，以及各自的 `.zip.sha256` 文件。服务器包中的清单覆盖每个公共文件。校验和用于检查完整性，不能证明发布者身份；只使用自己构建或已经核验来源的包与升级工具。
 
-把新的服务器 ZIP 和经过核验的 `deploy/server/upgrade.py` 上传到实例用户目录。初次使用升级工具时单独上传该工具，不能先把整包解压进运行目录。以下 `SHA256` 需替换为本次构建产生的完整摘要：
+把新的服务器 ZIP 和经过核验的 `deploy/server/upgrade.py` 上传到实例用户目录。`v2026.10.15-pre-release` 发布页单独提供新版 `upgrade.py` 与摘要；旧工具不认识新增的根目录文档，升级该版本时应先取得新工具。初次使用升级工具时单独上传该工具，不能先把整包解压进运行目录。以下 `SHA256` 需替换为本次构建产生的完整摘要：
 
 ```bash
 python3 ~/upgrade.py --project ~/trading-bot --archive ~/Trading-bot-server.zip --sha256 SHA256
